@@ -56,16 +56,26 @@ class CogneePublicClient:
         import cognee
 
         metadata = {"citadel_tags": list(tags)} if tags else None
-        kwargs: dict[str, Any] = {}
-        if metadata:
-            kwargs["external_metadata"] = metadata
 
-        return await cognee.remember(
-            data,
-            dataset_name=dataset_name,
-            session_id=session_id,
-            **kwargs,
-        )
+        if hasattr(cognee, "remember"):
+            kwargs: dict[str, Any] = {}
+            if metadata:
+                kwargs["external_metadata"] = metadata
+
+            return await cognee.remember(
+                data,
+                dataset_name=dataset_name,
+                session_id=session_id,
+                **kwargs,
+            )
+
+        kwargs = {"dataset_name": dataset_name}
+        if metadata:
+            kwargs["metadata"] = metadata
+
+        added = await cognee.add(data, **kwargs)
+        cognified = await cognee.cognify(datasets=[dataset_name])
+        return {"added": added, "cognified": cognified}
 
     async def recall(
         self,
@@ -77,10 +87,17 @@ class CogneePublicClient:
     ) -> list[Any]:
         import cognee
 
-        return await cognee.recall(
-            query,
+        if hasattr(cognee, "recall"):
+            return await cognee.recall(
+                query,
+                datasets=[dataset],
+                session_id=session_id,
+                top_k=top_k,
+            )
+
+        return await cognee.search(
+            query_text=query,
             datasets=[dataset],
-            session_id=session_id,
             top_k=top_k,
         )
 
