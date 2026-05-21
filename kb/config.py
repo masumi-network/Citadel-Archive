@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 import os
+from pathlib import Path
 from typing import Iterable
 
 try:
@@ -23,6 +24,26 @@ def _bool(value: str | None, *, default: bool = False) -> bool:
     return value.strip().lower() in {"1", "true", "yes", "on"}
 
 
+def _int(value: str | None, *, default: int) -> int:
+    if value is None:
+        return default
+    try:
+        return int(value)
+    except ValueError:
+        return default
+
+
+def _github_state_path(value: str | None) -> str:
+    if value:
+        return value
+    root = (
+        os.getenv("CITADEL_STATE_DIRECTORY")
+        or os.getenv("SYSTEM_ROOT_DIRECTORY")
+        or ("/data/.citadel" if Path("/data").exists() else ".citadel")
+    )
+    return str(Path(root) / "github_sync_state.json")
+
+
 @dataclass(frozen=True)
 class CitadelConfig:
     tenant_id: str = "personal"
@@ -40,6 +61,15 @@ class CitadelConfig:
     )
     auto_improve: bool = False
     build_global_context_index: bool = False
+    github_org: str = "masumi-network"
+    github_sync_dataset: str = "masumi-network"
+    github_sync_session: str = "masumi-github-daily"
+    github_sync_state_path: str = ".citadel/github_sync_state.json"
+    github_sync_max_repos: int = 100
+    github_sync_max_events: int = 50
+    github_sync_run_improve: bool = True
+    github_sync_ingest_unchanged: bool = True
+    github_token: str | None = None
 
     @classmethod
     def from_env(cls, *, env_file: str | None = ".env") -> "CitadelConfig":
@@ -60,19 +90,20 @@ class CitadelConfig:
             ),
             auto_improve=_bool(os.getenv("CITADEL_AUTO_IMPROVE")),
             build_global_context_index=_bool(os.getenv("CITADEL_BUILD_GLOBAL_CONTEXT_INDEX")),
+            github_org=os.getenv("CITADEL_GITHUB_ORG", "masumi-network"),
+            github_sync_dataset=os.getenv("CITADEL_GITHUB_SYNC_DATASET", "masumi-network"),
+            github_sync_session=os.getenv("CITADEL_GITHUB_SYNC_SESSION", "masumi-github-daily"),
+            github_sync_state_path=_github_state_path(os.getenv("CITADEL_GITHUB_SYNC_STATE_PATH")),
+            github_sync_max_repos=_int(os.getenv("CITADEL_GITHUB_SYNC_MAX_REPOS"), default=100),
+            github_sync_max_events=_int(os.getenv("CITADEL_GITHUB_SYNC_MAX_EVENTS"), default=50),
+            github_sync_run_improve=_bool(os.getenv("CITADEL_GITHUB_SYNC_RUN_IMPROVE"), default=True),
+            github_sync_ingest_unchanged=_bool(
+                os.getenv("CITADEL_GITHUB_SYNC_INGEST_UNCHANGED"),
+                default=True,
+            ),
+            github_token=os.getenv("CITADEL_GITHUB_TOKEN") or os.getenv("GITHUB_TOKEN") or None,
         )
 
     def with_tags(self, tags: Iterable[str]) -> "CitadelConfig":
         merged = tuple(dict.fromkeys([*self.default_tags, *tags]))
-        return CitadelConfig(
-            tenant_id=self.tenant_id,
-            user_id=self.user_id,
-            admin_key=self.admin_key,
-            default_dataset=self.default_dataset,
-            default_session=self.default_session,
-            default_tags=merged,
-            min_chars=self.min_chars,
-            exclude_patterns=self.exclude_patterns,
-            auto_improve=self.auto_improve,
-            build_global_context_index=self.build_global_context_index,
-        )
+        return replace(self, default_tags=merged)

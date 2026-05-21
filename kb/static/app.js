@@ -18,15 +18,26 @@ const indexList = document.getElementById("indexList");
 const eventList = document.getElementById("eventList");
 const eventCount = document.getElementById("eventCount");
 const upgradeStatus = document.getElementById("upgradeStatus");
+const meshAlert = document.getElementById("meshAlert");
+const meshAlertText = document.getElementById("meshAlertText");
+const canvasEmpty = document.getElementById("canvasEmpty");
+const githubSyncStatus = document.getElementById("githubSyncStatus");
+const syncLastChecked = document.getElementById("syncLastChecked");
+const syncTrackedRepos = document.getElementById("syncTrackedRepos");
+const githubSourceLink = document.getElementById("githubSourceLink");
+const syncRunSummary = document.getElementById("syncRunSummary");
+const syncResult = document.getElementById("syncResult");
 
 const colors = {
-  dataset: "#74e0bd",
-  document: "#d99b55",
-  tag: "#b6b0a4",
-  index: "#8ac7ff",
-  query: "#f1c46b",
-  feedback: "#ff9aa4",
+  dataset: "#5fd0b0",
+  document: "#d6a15f",
+  tag: "#b9b1a5",
+  index: "#78b9f2",
+  query: "#e9c46a",
+  feedback: "#f08a92",
   upgrade: "#62d58e",
+  source: "#8fd3ff",
+  repository: "#c4a7ff",
 };
 
 function api(path, options = {}) {
@@ -78,7 +89,7 @@ function mergeGraph(snapshot) {
       return;
     }
     const angle = (index / Math.max(snapshot.nodes.length, 1)) * Math.PI * 2;
-    const radius = 110 + (index % 4) * 34;
+    const radius = 110 + (index % 5) * 28;
     state.nodes.set(node.id, {
       ...node,
       x: centerX + Math.cos(angle) * radius,
@@ -99,49 +110,68 @@ function mergeGraph(snapshot) {
 }
 
 function renderSnapshot(snapshot) {
-  graphMeta.textContent = `${snapshot.default_dataset} - rev ${snapshot.revision} - ${snapshot.generated_at}`;
+  meshAlert.hidden = true;
+  canvasEmpty.hidden = snapshot.nodes.length > 4;
+  graphMeta.textContent = `${snapshot.default_dataset} - rev ${snapshot.revision} - ${formatDate(snapshot.generated_at)}`;
   document.getElementById("statNodes").textContent = snapshot.stats.nodes;
   document.getElementById("statEdges").textContent = snapshot.stats.edges;
   document.getElementById("statDocuments").textContent = snapshot.stats.documents;
+  document.getElementById("statSearches").textContent = snapshot.stats.searches;
   document.getElementById("statUpgrades").textContent = snapshot.stats.upgrades;
+  document.getElementById("statErrors").textContent = snapshot.stats.errors;
   eventCount.textContent = String(snapshot.events.length);
 
   indexList.innerHTML = "";
-  snapshot.indexes.forEach((index) => {
-    const item = document.createElement("div");
-    item.className = "index-item";
-    item.innerHTML = `
-      <div>
-        <div class="index-name">${escapeHtml(index.name)}</div>
-        <div class="index-meta">${index.records} records</div>
-      </div>
-      <span class="status-chip status-${escapeHtml(index.status)}">${escapeHtml(index.status)}</span>
-    `;
-    indexList.append(item);
-  });
+  if (!snapshot.indexes.length) {
+    indexList.append(emptyState("No indexes", "The runtime has not reported index status yet."));
+  } else {
+    snapshot.indexes.forEach((index) => {
+      const item = document.createElement("div");
+      item.className = "index-item";
+      item.innerHTML = `
+        <div>
+          <div class="index-name">${escapeHtml(index.name)}</div>
+          <div class="index-meta">${escapeHtml(index.records)} records</div>
+        </div>
+        <span class="status-chip status-${escapeHtml(index.status)}">${escapeHtml(index.status)}</span>
+      `;
+      indexList.append(item);
+    });
+  }
 
   eventList.innerHTML = "";
-  snapshot.events.slice(0, 24).forEach((event) => {
+  snapshot.events.slice(0, 28).forEach((event) => {
     const item = document.createElement("li");
     item.className = "event-item";
     item.innerHTML = `
+      <div class="event-row">
+        <span class="event-type">${escapeHtml(event.type)}</span>
+        <time class="event-time">${escapeHtml(formatDate(event.created_at))}</time>
+      </div>
       <div class="event-message">${escapeHtml(event.message)}</div>
       <div class="event-details">${escapeHtml(formatDetails(event.details))}</div>
-      <time class="event-time">${escapeHtml(event.created_at)}</time>
     `;
     eventList.append(item);
   });
 
   if (!snapshot.events.length) {
     const empty = document.createElement("li");
-    empty.className = "event-item";
-    empty.textContent = "No events yet.";
+    empty.className = "event-item empty-event";
+    empty.innerHTML = "<strong>No events yet</strong><p>Run a sync or ingest a memory.</p>";
     eventList.append(empty);
   }
 }
 
+function emptyState(title, body) {
+  const item = document.createElement("div");
+  item.className = "empty-state";
+  item.innerHTML = `<strong>${escapeHtml(title)}</strong><p>${escapeHtml(body)}</p>`;
+  return item;
+}
+
 function formatDetails(details = {}) {
   return Object.entries(details)
+    .filter(([, value]) => value !== null && value !== undefined && value !== "")
     .map(([key, value]) => `${key}: ${Array.isArray(value) ? value.join(", ") : value}`)
     .join(" | ");
 }
@@ -153,6 +183,18 @@ function escapeHtml(value) {
     .replaceAll(">", "&gt;")
     .replaceAll('"', "&quot;")
     .replaceAll("'", "&#039;");
+}
+
+function formatDate(value) {
+  if (!value) return "Never";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return String(value);
+  return new Intl.DateTimeFormat(undefined, {
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(date);
 }
 
 function simulate() {
@@ -169,7 +211,7 @@ function simulate() {
         const dx = a.x - b.x;
         const dy = a.y - b.y;
         const distance = Math.max(Math.hypot(dx, dy), 1);
-        const force = 900 / (distance * distance);
+        const force = 820 / (distance * distance);
         const fx = (dx / distance) * force;
         const fy = (dy / distance) * force;
         a.vx += fx;
@@ -186,7 +228,7 @@ function simulate() {
       const dx = target.x - source.x;
       const dy = target.y - source.y;
       const distance = Math.max(Math.hypot(dx, dy), 1);
-      const desired = source.type === "dataset" || target.type === "dataset" ? 150 : 112;
+      const desired = source.type === "dataset" || target.type === "dataset" ? 156 : 118;
       const force = (distance - desired) * 0.004;
       const fx = (dx / distance) * force;
       const fy = (dy / distance) * force;
@@ -202,8 +244,8 @@ function simulate() {
       node.vy += (centerY - node.y) * 0.0009;
       node.vx *= 0.88;
       node.vy *= 0.88;
-      node.x = clamp(node.x + node.vx, 32, rect.width - 32);
-      node.y = clamp(node.y + node.vy, 32, rect.height - 32);
+      node.x = clamp(node.x + node.vx, 34, rect.width - 34);
+      node.y = clamp(node.y + node.vy, 34, rect.height - 34);
     });
   }
 
@@ -221,7 +263,7 @@ function draw() {
     const source = state.nodes.get(edge.source);
     const target = state.nodes.get(edge.target);
     if (!source || !target) return;
-    ctx.strokeStyle = "rgba(244, 240, 232, 0.16)";
+    ctx.strokeStyle = "rgba(229, 224, 214, 0.16)";
     ctx.beginPath();
     ctx.moveTo(source.x, source.y);
     ctx.lineTo(target.x, target.y);
@@ -229,23 +271,23 @@ function draw() {
   });
 
   for (const node of state.nodes.values()) {
-    const radius = Math.max(8, Math.min(node.size || 22, 56) / 2);
-    const color = colors[node.type] || "#b6b0a4";
+    const radius = Math.max(8, Math.min(node.size || 22, 58) / 2);
+    const color = colors[node.type] || "#b9b1a5";
     ctx.beginPath();
     ctx.fillStyle = color;
-    ctx.globalAlpha = node.id === state.selectedId ? 1 : 0.88;
+    ctx.globalAlpha = node.id === state.selectedId ? 1 : 0.9;
     ctx.arc(node.x, node.y, radius, 0, Math.PI * 2);
     ctx.fill();
     ctx.globalAlpha = 1;
 
     if (node.id === state.selectedId) {
-      ctx.strokeStyle = "#f1c46b";
+      ctx.strokeStyle = "#e9c46a";
       ctx.lineWidth = 2;
       ctx.stroke();
       ctx.lineWidth = 1;
     }
 
-    ctx.fillStyle = "#f4f0e8";
+    ctx.fillStyle = "#f1ede5";
     ctx.textAlign = "center";
     ctx.fillText(truncate(node.label, 20), node.x, node.y + radius + 16);
   }
@@ -281,7 +323,13 @@ function selectNode(node) {
     selectedNode.textContent = "Select a node to inspect it.";
     return;
   }
-  selectedNode.textContent = `${node.label} - ${node.type} - ${node.status}`;
+  selectedNode.innerHTML = `
+    <div>
+      <strong>${escapeHtml(node.label)}</strong>
+      <span>${escapeHtml(node.type)} - ${escapeHtml(node.status)}</span>
+    </div>
+    <p>${escapeHtml(formatDetails(node.metadata || {}))}</p>
+  `;
 }
 
 async function loadMesh(showConnection = true) {
@@ -293,7 +341,26 @@ async function loadMesh(showConnection = true) {
     }
   } catch (error) {
     connectionLabel.textContent = "Offline";
+    meshAlert.hidden = false;
+    meshAlertText.textContent = error.message || "Try refreshing the dashboard.";
     console.error(error);
+  }
+}
+
+async function loadGithubSync() {
+  try {
+    const status = await api("/api/github-sync");
+    githubSyncStatus.textContent = status.last_checked_at ? "Tracked" : "Ready";
+    githubSyncStatus.className = `status-chip ${status.last_checked_at ? "status-enabled" : "status-standby"}`;
+    syncLastChecked.textContent = formatDate(status.last_checked_at);
+    syncTrackedRepos.textContent = status.tracked_repositories;
+    githubSourceLink.href = status.source_url;
+    githubSourceLink.textContent = status.source_url.replace("https://", "");
+  } catch (error) {
+    githubSyncStatus.textContent = "Error";
+    githubSyncStatus.className = "status-chip status-error";
+    syncResult.innerHTML = "";
+    syncResult.append(emptyState("Could not load sync status", error.message));
   }
 }
 
@@ -318,7 +385,11 @@ function connectEvents() {
   });
 }
 
-document.getElementById("refreshButton").addEventListener("click", () => loadMesh());
+document.getElementById("refreshButton").addEventListener("click", () => {
+  loadMesh();
+  loadGithubSync();
+});
+document.getElementById("meshRetryButton").addEventListener("click", () => loadMesh());
 document.getElementById("fitButton").addEventListener("click", () => {
   state.nodes.clear();
   if (state.snapshot) mergeGraph(state.snapshot);
@@ -353,6 +424,40 @@ canvas.addEventListener("pointerup", (event) => {
   canvas.releasePointerCapture(event.pointerId);
 });
 
+document.getElementById("githubSyncButton").addEventListener("click", async (event) => {
+  const button = event.currentTarget;
+  const error = document.getElementById("syncError");
+  const force = document.getElementById("syncForce").checked;
+  error.textContent = "";
+  syncResult.innerHTML = "";
+  syncRunSummary.textContent = "Running";
+  syncRunSummary.className = "status-chip status-standby";
+  setBusy(button, true, { idle: "Run GitHub sync", loading: "Syncing" });
+  try {
+    const result = await api("/api/github-sync/run", {
+      method: "POST",
+      body: JSON.stringify({ force }),
+    });
+    syncRunSummary.textContent = result.ingested ? "Updated" : "Checked";
+    syncRunSummary.className = "status-chip status-enabled";
+    syncResult.innerHTML = `
+      <dl class="result-grid">
+        <div><dt>Repos scanned</dt><dd>${escapeHtml(result.repos_scanned)}</dd></div>
+        <div><dt>Changed</dt><dd>${escapeHtml(result.changed_count)}</dd></div>
+        <div><dt>Events</dt><dd>${escapeHtml(result.event_count)}</dd></div>
+        <div><dt>Improved</dt><dd>${result.improved ? "Yes" : "No"}</dd></div>
+      </dl>
+    `;
+    await Promise.all([loadMesh(false), loadGithubSync()]);
+  } catch (err) {
+    error.textContent = err.message;
+    syncRunSummary.textContent = "Failed";
+    syncRunSummary.className = "status-chip status-error";
+  } finally {
+    setBusy(button, false, { idle: "Run GitHub sync", loading: "Syncing" });
+  }
+});
+
 document.getElementById("ingestForm").addEventListener("submit", async (event) => {
   event.preventDefault();
   const form = event.currentTarget;
@@ -365,6 +470,13 @@ document.getElementById("ingestForm").addEventListener("submit", async (event) =
     .map((tag) => tag.trim())
     .filter(Boolean);
   error.textContent = "";
+  form.querySelector("[name='data']").setAttribute("aria-invalid", "false");
+  if (!data) {
+    error.textContent = "Add memory text before ingesting.";
+    form.querySelector("[name='data']").setAttribute("aria-invalid", "true");
+    form.querySelector("[name='data']").focus();
+    return;
+  }
   setBusy(button, true, { idle: "Ingest memory", loading: "Indexing" });
   try {
     await api("/ingest", {
@@ -391,14 +503,21 @@ document.getElementById("searchForm").addEventListener("submit", async (event) =
   const button = document.getElementById("searchSubmit");
   const error = document.getElementById("searchError");
   const results = document.getElementById("searchResults");
+  const query = String(formData.get("query") || "").trim();
   error.textContent = "";
   results.innerHTML = "";
+  if (!query) {
+    error.textContent = "Enter a search query.";
+    form.querySelector("[name='query']").focus();
+    return;
+  }
   setBusy(button, true, { idle: "Search mesh", loading: "Searching" });
+  results.append(emptyState("Searching", "Checking graph and vector memory."));
   try {
     const response = await api("/search", {
       method: "POST",
       body: JSON.stringify({
-        query: String(formData.get("query") || "").trim(),
+        query,
         dataset: String(formData.get("dataset") || "").trim() || null,
         top_k: Number.parseInt(String(formData.get("topK") || "10"), 10) || 10,
       }),
@@ -406,6 +525,7 @@ document.getElementById("searchForm").addEventListener("submit", async (event) =
     renderSearchResults(response.results || []);
     await loadMesh(false);
   } catch (err) {
+    results.innerHTML = "";
     error.textContent = err.message;
   } finally {
     setBusy(button, false, { idle: "Search mesh", loading: "Searching" });
@@ -430,7 +550,7 @@ document.getElementById("upgradeButton").addEventListener("click", async (event)
   } catch (err) {
     error.textContent = err.message;
     upgradeStatus.textContent = "Failed";
-    upgradeStatus.className = "status-chip";
+    upgradeStatus.className = "status-chip status-error";
   } finally {
     setBusy(button, false, { idle: "Run improvement", loading: "Improving" });
   }
@@ -440,18 +560,15 @@ function renderSearchResults(results) {
   const container = document.getElementById("searchResults");
   container.innerHTML = "";
   if (!results.length) {
-    const empty = document.createElement("div");
-    empty.className = "result-item";
-    empty.textContent = "No results.";
-    container.append(empty);
+    container.append(emptyState("No results", "Try a broader query or ingest more source material."));
     return;
   }
-  results.slice(0, 5).forEach((result, index) => {
+  results.slice(0, 6).forEach((result, index) => {
     const item = document.createElement("div");
     item.className = "result-item";
     item.innerHTML = `
       <div class="result-meta">Result ${index + 1}</div>
-      <div class="result-body">${escapeHtml(JSON.stringify(result, null, 2))}</div>
+      <pre class="result-body">${escapeHtml(JSON.stringify(result, null, 2))}</pre>
     `;
     container.append(item);
   });
@@ -464,5 +581,6 @@ window.addEventListener("resize", () => {
 
 resizeCanvas();
 loadMesh();
+loadGithubSync();
 connectEvents();
 simulate();

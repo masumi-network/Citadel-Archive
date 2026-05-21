@@ -31,25 +31,42 @@
   - data path -> `/data/.data_storage`
 - Runtime deps made explicit via `requirements.txt`.
 - Tests passing locally: `14 passed`.
+- GitHub organization sync added:
+  - fetches `masumi-network` repos and public org events
+  - creates a daily digest
+  - ingests digest into Citadel
+  - runs improvement for `masumi-github-daily`
+  - persists scan state at `/data/.citadel/github_sync_state.json`
+  - admin API added: `/api/github-sync`, `/api/github-sync/run`
+- UI pass added:
+  - GitHub sync status/manual run panel
+  - richer runtime stats
+  - better loading/empty/error states
+  - improved mobile layout and focus/interaction states
+- Railway cron service created:
+  - service: `Citadel-GitHub-Sync`
+  - schedule: `0 3 * * *`
+  - volume: `/data`
 
 ## Current Railway State
 
-- Latest deploy was triggered after `requirements.txt`.
-- Build installed deps correctly.
-- Last observed status: deploying, not yet verified live.
-- Health URL still needs final check:
+- Web service is live:
   - `https://citadel-archive-production.up.railway.app/healthz`
-- UI URL still needs final check:
   - `https://citadel-archive-production.up.railway.app/`
+- Cron service is deployed with the latest local code.
+- OpenRouter is configured through `OPENROUTER_API_KEY` and
+  `LLM_MODEL=openrouter/free` on both Railway services.
 
 ## Needed From User
 
-- OpenRouter API key.
-  - Set as `LLM_API_KEY`.
-  - Current model config:
-    - `LLM_PROVIDER=custom`
-    - `LLM_ENDPOINT=https://openrouter.ai/api/v1`
-    - `LLM_MODEL=openrouter/google/gemini-2.0-flash-lite-preview-02-05:free`
+- OpenRouter model/key config is done:
+  - `OPENROUTER_API_KEY` is set on `Citadel-Archive`.
+  - `Citadel-GitHub-Sync` references the same key.
+  - Citadel maps `OPENROUTER_API_KEY` to Cognee's expected `LLM_API_KEY`
+    at runtime.
+  - `LLM_PROVIDER=custom`
+  - `LLM_ENDPOINT=https://openrouter.ai/api/v1`
+  - `LLM_MODEL=openrouter/free`
 - Enable pgvector in Railway Postgres.
   - Run in DB console/psql:
 
@@ -61,12 +78,10 @@ CREATE EXTENSION IF NOT EXISTS vector;
 
 ## Next
 
-- Check Railway deploy status/logs.
-- Verify `/healthz`.
-- Verify `/login` redirects from `/`.
+- Verify cron service next run/status.
 - Verify admin key unlocks UI.
-- Set OpenRouter key.
-- Redeploy/restart app.
+- Verify `/api/github-sync` in the hosted UI.
+- Run GitHub sync once manually.
 - Test real ingest -> Cognee -> Postgres/pgvector/Kuzu.
 - Test search.
 - Test feedback.

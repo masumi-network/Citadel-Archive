@@ -197,6 +197,51 @@ class MeshState:
                 {"dataset": dataset, "sessions": session_ids or []},
             )
 
+    async def record_github_sync(self, config: CitadelConfig, result: dict[str, Any]) -> None:
+        async with self._lock:
+            self._ensure_base_graph(config)
+            dataset_id = self._dataset_node(result.get("org") or config.github_sync_dataset)
+            source_id = stable_id("source", result.get("source_url") or config.github_org)
+            self.nodes[source_id] = {
+                "id": source_id,
+                "label": f"GitHub / {result.get('org') or config.github_org}",
+                "type": "source",
+                "status": "synced",
+                "size": 46,
+                "metadata": {
+                    "url": result.get("source_url"),
+                    "checked_at": result.get("checked_at"),
+                    "repos_scanned": result.get("repos_scanned"),
+                },
+            }
+            self._edge(source_id, dataset_id, "updates")
+
+            for repo in result.get("changed_repositories", [])[:12]:
+                repo_id = stable_id("repository", repo.get("full_name") or repo.get("name") or "")
+                self.nodes[repo_id] = {
+                    "id": repo_id,
+                    "label": repo.get("name") or repo.get("full_name") or "Repository",
+                    "type": "repository",
+                    "status": "changed",
+                    "size": 26,
+                    "metadata": repo,
+                }
+                self._edge(source_id, repo_id, "observed")
+                self._edge(repo_id, dataset_id, "summarized")
+
+            await self._record_event(
+                "github_sync",
+                "GitHub sync completed",
+                {
+                    "org": result.get("org"),
+                    "repos": result.get("repos_scanned"),
+                    "changed": result.get("changed_count"),
+                    "events": result.get("event_count"),
+                    "ingested": result.get("ingested"),
+                    "improved": result.get("improved"),
+                },
+            )
+
     async def record_error(self, config: CitadelConfig, *, operation: str, error: str) -> None:
         async with self._lock:
             self._ensure_base_graph(config)

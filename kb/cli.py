@@ -5,6 +5,7 @@ import asyncio
 import json
 from typing import Any
 
+from kb.github_sync import GitHubOrgSyncer
 from kb.models import FeedbackRequest
 from kb.service import Citadel
 
@@ -55,6 +56,20 @@ async def _improve(args: argparse.Namespace) -> None:
     _print_json(result)
 
 
+async def _sync_github(args: argparse.Namespace) -> None:
+    syncer = GitHubOrgSyncer(
+        Citadel.from_env(),
+        org=args.org,
+        state_path=args.state_path,
+        max_repos=args.max_repos,
+        max_events=args.max_events,
+        ingest_unchanged=not args.skip_unchanged,
+        run_improve=not args.skip_improve,
+    )
+    result = await syncer.run(force=args.force, dry_run=args.dry_run)
+    _print_json(result)
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="citadel")
     subcommands = parser.add_subparsers(dest="command", required=True)
@@ -85,6 +100,20 @@ def build_parser() -> argparse.ArgumentParser:
     improve.add_argument("--dataset")
     improve.add_argument("--session-id", action="append")
     improve.set_defaults(handler=_improve)
+
+    sync_github = subcommands.add_parser(
+        "sync-github",
+        help="Fetch GitHub organization activity and ingest a daily digest",
+    )
+    sync_github.add_argument("--org")
+    sync_github.add_argument("--state-path")
+    sync_github.add_argument("--max-repos", type=int)
+    sync_github.add_argument("--max-events", type=int)
+    sync_github.add_argument("--force", action="store_true")
+    sync_github.add_argument("--dry-run", action="store_true")
+    sync_github.add_argument("--skip-improve", action="store_true")
+    sync_github.add_argument("--skip-unchanged", action="store_true")
+    sync_github.set_defaults(handler=_sync_github)
 
     return parser
 

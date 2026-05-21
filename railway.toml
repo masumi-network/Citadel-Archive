@@ -2,7 +2,7 @@
 builder = "RAILPACK"
 
 [deploy]
-startCommand = "sh -c 'python -m uvicorn kb.server:app --host 0.0.0.0 --port ${PORT:-8000}'"
+startCommand = "sh -c 'if [ \"${CITADEL_RUN_MODE:-web}\" = \"github-sync\" ]; then python -m kb.github_sync --org ${CITADEL_GITHUB_ORG:-masumi-network}; else python -m uvicorn kb.server:app --host 0.0.0.0 --port ${PORT:-8000}; fi'"
 healthcheckPath = "/healthz"
 healthcheckTimeout = 30
 restartPolicyType = "ON_FAILURE"

@@ -14,6 +14,7 @@ from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, Stre
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
+from kb.github_sync import GitHubOrgSyncer
 from kb.mesh import MeshState
 from kb.models import FeedbackRequest
 from kb.service import Citadel
@@ -129,6 +130,10 @@ class AdminSessionBody(BaseModel):
     admin_key: str = Field(min_length=1)
 
 
+class GitHubSyncBody(BaseModel):
+    force: bool = False
+
+
 def get_citadel() -> Citadel:
     if not hasattr(app.state, "citadel"):
         app.state.citadel = Citadel.from_env()
@@ -139,6 +144,12 @@ def get_mesh() -> MeshState:
     if not hasattr(app.state, "mesh"):
         app.state.mesh = MeshState()
     return app.state.mesh
+
+
+def get_github_syncer() -> GitHubOrgSyncer:
+    if hasattr(app.state, "github_syncer"):
+        return app.state.github_syncer
+    return GitHubOrgSyncer(get_citadel())
 
 
 def sse(event: str, data: dict[str, Any]) -> str:
@@ -233,6 +244,26 @@ async def indexes(request: Request) -> Any:
     citadel = get_citadel()
     snapshot = await get_mesh().snapshot(citadel.config)
     return jsonable_encoder({"indexes": snapshot["indexes"], "stats": snapshot["stats"]})
+
+
+@app.get("/api/github-sync")
+async def github_sync_status(request: Request) -> Any:
+    require_admin(request)
+    return jsonable_encoder(await get_github_syncer().status())
+
+
+@app.post("/api/github-sync/run")
+async def run_github_sync(body: GitHubSyncBody, request: Request) -> Any:
+    require_admin(request)
+    citadel = get_citadel()
+    mesh_state = get_mesh()
+    try:
+        result = await get_github_syncer().run(force=body.force)
+    except Exception as exc:  # pragma: no cover - depends on GitHub and runtime Cognee config.
+        await mesh_state.record_error(citadel.config, operation="github_sync", error=str(exc))
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    await mesh_state.record_github_sync(citadel.config, result)
+    return jsonable_encoder(result)
 
 
 @app.get("/events")

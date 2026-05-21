@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from typing import Any, Protocol
 
 
@@ -45,6 +46,10 @@ class CogneeGateway(Protocol):
 
 
 class CogneePublicClient:
+    def _ensure_llm_api_key(self) -> None:
+        if not os.getenv("LLM_API_KEY") and os.getenv("OPENROUTER_API_KEY"):
+            os.environ["LLM_API_KEY"] = os.environ["OPENROUTER_API_KEY"]
+
     async def remember(
         self,
         data: Any,
@@ -53,6 +58,7 @@ class CogneePublicClient:
         session_id: str | None = None,
         tags: tuple[str, ...] = (),
     ) -> Any:
+        self._ensure_llm_api_key()
         import cognee
 
         metadata = {"citadel_tags": list(tags)} if tags else None
@@ -85,6 +91,7 @@ class CogneePublicClient:
         session_id: str | None = None,
         top_k: int = 10,
     ) -> list[Any]:
+        self._ensure_llm_api_key()
         import cognee
 
         if hasattr(cognee, "recall"):
@@ -109,6 +116,7 @@ class CogneePublicClient:
         score: int | None,
         text: str | None,
     ) -> bool:
+        self._ensure_llm_api_key()
         import cognee
 
         return await cognee.session.add_feedback(
@@ -125,6 +133,7 @@ class CogneePublicClient:
         session_ids: list[str] | None = None,
         build_global_context_index: bool = False,
     ) -> Any:
+        self._ensure_llm_api_key()
         import cognee
 
         return await cognee.improve(

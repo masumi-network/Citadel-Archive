@@ -8,7 +8,7 @@
   </head>
   <body>
     <div class="shell">
-      <aside class="sidebar" aria-label="Archive indexes">
+      <aside class="sidebar" aria-label="Archive overview">
         <div class="brand">
           <div class="brand-mark" aria-hidden="true">CA</div>
           <div>
@@ -19,26 +19,65 @@
 
         <section class="panel">
           <div class="panel-heading">
-            <h2>Indexes</h2>
-            <button id="refreshButton" class="icon-button" type="button" aria-label="Refresh mesh">
-              R
+            <div>
+              <h2>Runtime</h2>
+              <p class="panel-kicker">Live wrapper state</p>
+            </div>
+            <button id="refreshButton" class="secondary-button compact-button" type="button">
+              Refresh
             </button>
           </div>
-          <div id="indexList" class="index-list" aria-live="polite">
-            <div class="skeleton"></div>
-            <div class="skeleton"></div>
-            <div class="skeleton"></div>
-          </div>
-        </section>
-
-        <section class="panel">
-          <h2>Runtime</h2>
           <dl class="stats">
             <div><dt>Nodes</dt><dd id="statNodes">0</dd></div>
             <div><dt>Edges</dt><dd id="statEdges">0</dd></div>
             <div><dt>Memory</dt><dd id="statDocuments">0</dd></div>
+            <div><dt>Searches</dt><dd id="statSearches">0</dd></div>
             <div><dt>Upgrades</dt><dd id="statUpgrades">0</dd></div>
+            <div><dt>Errors</dt><dd id="statErrors">0</dd></div>
           </dl>
+        </section>
+
+        <section class="panel">
+          <div class="panel-heading">
+            <div>
+              <h2>Indexes</h2>
+              <p class="panel-kicker">Graph, vector, feedback</p>
+            </div>
+          </div>
+          <div id="indexList" class="index-list" aria-live="polite">
+            <div class="skeleton index-skeleton"></div>
+            <div class="skeleton index-skeleton"></div>
+            <div class="skeleton index-skeleton"></div>
+          </div>
+        </section>
+
+        <section class="panel source-panel">
+          <div class="panel-heading">
+            <div>
+              <h2>GitHub Source</h2>
+              <p class="panel-kicker">Daily Masumi scan</p>
+            </div>
+            <span id="githubSyncStatus" class="status-chip">Loading</span>
+          </div>
+          <dl class="source-meta">
+            <div>
+              <dt>Last check</dt>
+              <dd id="syncLastChecked">Waiting</dd>
+            </div>
+            <div>
+              <dt>Repos tracked</dt>
+              <dd id="syncTrackedRepos">0</dd>
+            </div>
+          </dl>
+          <a
+            id="githubSourceLink"
+            class="source-link"
+            href="https://github.com/orgs/masumi-network/repositories"
+            rel="noreferrer"
+            target="_blank"
+          >
+            github.com/orgs/masumi-network/repositories
+          </a>
         </section>
       </aside>
 
@@ -46,6 +85,7 @@
         <section class="graph-panel" aria-labelledby="graphTitle">
           <div class="graph-toolbar">
             <div>
+              <p class="eyebrow">Knowledge operations</p>
               <h2 id="graphTitle">Knowledge Mesh</h2>
               <p id="graphMeta">Waiting for snapshot</p>
             </div>
@@ -53,6 +93,15 @@
               <button id="fitButton" class="secondary-button" type="button">Fit</button>
               <button id="pauseButton" class="secondary-button" type="button">Pause</button>
             </div>
+          </div>
+          <div id="meshAlert" class="inline-alert" hidden>
+            <div>
+              <strong>Could not load the mesh</strong>
+              <p id="meshAlertText">Try refreshing the dashboard.</p>
+            </div>
+            <button id="meshRetryButton" class="secondary-button compact-button" type="button">
+              Retry
+            </button>
           </div>
           <div class="canvas-wrap">
             <canvas
@@ -62,6 +111,10 @@
               tabindex="0"
               aria-label="Live knowledge graph visualization"
             ></canvas>
+            <div id="canvasEmpty" class="canvas-empty" hidden>
+              <h3>No mesh activity yet</h3>
+              <p>Ingest a memory or run the GitHub sync to create the first nodes.</p>
+            </div>
           </div>
           <div id="selectedNode" class="selection" aria-live="polite">
             Select a node to inspect it.
@@ -70,6 +123,28 @@
       </main>
 
       <aside class="inspector" aria-label="Archive actions">
+        <section class="panel action-panel">
+          <div class="panel-heading">
+            <div>
+              <h2>GitHub Sync</h2>
+              <p class="panel-kicker">Fetch, ingest, improve</p>
+            </div>
+            <span id="syncRunSummary" class="status-chip">Standby</span>
+          </div>
+          <p class="hint">
+            Checks the Masumi Network repositories and writes a compact daily digest into Citadel.
+          </p>
+          <label class="check-row" for="syncForce">
+            <input id="syncForce" type="checkbox" />
+            <span>Force full digest</span>
+          </label>
+          <p id="syncError" class="form-error" role="alert"></p>
+          <button id="githubSyncButton" class="primary-button" type="button">
+            Run GitHub sync
+          </button>
+          <div id="syncResult" class="sync-result" aria-live="polite"></div>
+        </section>
+
         <section class="panel action-panel">
           <h2>Ingest</h2>
           <form id="ingestForm" class="form">
@@ -81,8 +156,9 @@
                 rows="5"
                 required
                 placeholder="Decision: we will run Citadel on Railway."
+                aria-describedby="ingestHint ingestError"
               ></textarea>
-              <p class="hint">Text is filtered, tagged, and sent through Cognee.</p>
+              <p id="ingestHint" class="hint">Filtered, tagged, and sent through Cognee.</p>
             </div>
             <div class="field-grid">
               <div class="field">
@@ -117,6 +193,7 @@
                 required
                 autocomplete="off"
                 placeholder="What changed in the archive?"
+                aria-describedby="searchError"
               />
             </div>
             <div class="field-grid compact">
@@ -139,12 +216,20 @@
             <p id="searchError" class="form-error" role="alert"></p>
             <button id="searchSubmit" class="primary-button" type="submit">Search mesh</button>
           </form>
-          <div id="searchResults" class="results" aria-live="polite"></div>
+          <div id="searchResults" class="results" aria-live="polite">
+            <div class="empty-state compact-empty">
+              <strong>No search yet</strong>
+              <p>Ask a question after you ingest data.</p>
+            </div>
+          </div>
         </section>
 
         <section class="panel action-panel">
           <div class="panel-heading">
-            <h2>Self Upgrade</h2>
+            <div>
+              <h2>Self Upgrade</h2>
+              <p class="panel-kicker">Refresh global context</p>
+            </div>
             <span id="upgradeStatus" class="status-chip">Standby</span>
           </div>
           <button id="upgradeButton" class="primary-button" type="button">Run improvement</button>
@@ -153,7 +238,10 @@
 
         <section class="panel">
           <div class="panel-heading">
-            <h2>Live Events</h2>
+            <div>
+              <h2>Live Events</h2>
+              <p class="panel-kicker">Latest archive changes</p>
+            </div>
             <span id="eventCount" class="status-chip">0</span>
           </div>
           <ol id="eventList" class="event-list" aria-live="polite"></ol>

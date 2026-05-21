@@ -32,7 +32,7 @@ For OpenRouter, Cognee expects the custom provider form:
 ```bash
 LLM_PROVIDER=custom
 LLM_ENDPOINT=https://openrouter.ai/api/v1
-LLM_MODEL=openrouter/google/gemini-2.0-flash-lite-preview-02-05:free
+LLM_MODEL=openrouter/free
 LLM_API_KEY=sk-or-...
 ```
 
@@ -55,12 +55,14 @@ Core API endpoints:
 
 - `GET /api/mesh`
 - `GET /api/indexes`
+- `GET /api/github-sync`
 - `GET /events`
 - `POST /ingest`
 - `POST /search`
 - `POST /feedback`
 - `POST /improve`
 - `POST /api/self-upgrade`
+- `POST /api/github-sync/run`
 
 ## Citadel UI
 
@@ -71,6 +73,8 @@ The hosted UI is served by the same FastAPI process. It includes:
   self-upgrade updates.
 - Index status panels for graph, vector, feedback, and global context stores.
 - Ingest, search, and self-upgrade controls that call the wrapper API.
+- GitHub organization sync status and a manual run control for the Masumi
+  Network repository digest.
 
 The first version visualizes Citadel's wrapper-level mesh activity. Deeper
 Cognee graph introspection can be added behind the same `/api/mesh` contract
@@ -84,7 +88,48 @@ uv run citadel ingest ./notes.md --dataset personal
 uv run citadel search "What did I learn about Railway?"
 uv run citadel feedback <qa-id> --score 1 --text "Useful answer"
 uv run citadel improve
+uv run citadel sync-github --org masumi-network
+uv run python -m kb.github_sync --org masumi-network --dry-run
 ```
+
+## GitHub Organization Sync
+
+Citadel can fetch public repository activity from a GitHub organization, format
+it as a daily digest, ingest that digest into Cognee, and run improvement for
+the configured sync session.
+
+Default sync target:
+
+```bash
+CITADEL_GITHUB_ORG=masumi-network
+CITADEL_GITHUB_SYNC_DATASET=masumi-network
+CITADEL_GITHUB_SYNC_SESSION=masumi-github-daily
+CITADEL_GITHUB_SYNC_STATE_PATH=/data/.citadel/github_sync_state.json
+```
+
+Use `GITHUB_TOKEN` or `CITADEL_GITHUB_TOKEN` for higher GitHub API limits or
+private repository access. The public Masumi repository scan works without a
+token.
+
+For OpenRouter, set either `LLM_API_KEY` or `OPENROUTER_API_KEY` and use
+`LLM_MODEL=openrouter/free`. Citadel maps `OPENROUTER_API_KEY` to Cognee's
+expected `LLM_API_KEY` at runtime when needed.
+
+For Railway, create a second service from this repo with:
+
+```bash
+CITADEL_RUN_MODE=github-sync
+```
+
+and set its cron schedule to:
+
+```cron
+0 3 * * *
+```
+
+That runs once every 24 hours at 03:00 UTC. The included `railway.toml` keeps
+the web service as the default mode and switches to the sync command only when
+`CITADEL_RUN_MODE=github-sync`.
 
 ## Python API
 
@@ -128,6 +173,7 @@ uvicorn kb.server:app --host 0.0.0.0 --port $PORT
 Recommended first deployment shape:
 
 - One Railway web service for this repository.
+- One Railway cron service for daily GitHub syncs.
 - One Railway Postgres service dedicated to Citadel.
 - `pgvector` enabled in that Postgres database for the vector index.
 - One Railway volume mounted at `/data` for Cognee's local Kuzu graph files.
@@ -146,6 +192,9 @@ GRAPH_DATABASE_PROVIDER=kuzu
 SYSTEM_ROOT_DIRECTORY=/data/.cognee_system
 DATA_ROOT_DIRECTORY=/data/.data_storage
 ```
+
+The GitHub sync cron service should also have a Railway volume mounted at
+`/data` so `/data/.citadel/github_sync_state.json` persists between daily runs.
 
 For later team use, move the graph store to Neo4j or Memgraph without changing
 Citadel's wrapper code.
