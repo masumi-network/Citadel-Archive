@@ -46,9 +46,20 @@ class CogneeGateway(Protocol):
 
 
 class CogneePublicClient:
+    def __init__(self) -> None:
+        self._startup_migrations_done = False
+
     def _ensure_llm_api_key(self) -> None:
         if not os.getenv("LLM_API_KEY") and os.getenv("OPENROUTER_API_KEY"):
             os.environ["LLM_API_KEY"] = os.environ["OPENROUTER_API_KEY"]
+
+    async def _ensure_cognee_ready(self, cognee: Any) -> None:
+        if self._startup_migrations_done:
+            return
+        run_startup_migrations = getattr(cognee, "run_startup_migrations", None)
+        if run_startup_migrations is not None:
+            await run_startup_migrations()
+        self._startup_migrations_done = True
 
     async def remember(
         self,
@@ -61,6 +72,7 @@ class CogneePublicClient:
         self._ensure_llm_api_key()
         import cognee
 
+        await self._ensure_cognee_ready(cognee)
         metadata = {"citadel_tags": list(tags)} if tags else None
 
         if hasattr(cognee, "remember"):
@@ -94,6 +106,7 @@ class CogneePublicClient:
         self._ensure_llm_api_key()
         import cognee
 
+        await self._ensure_cognee_ready(cognee)
         if hasattr(cognee, "recall"):
             return await cognee.recall(
                 query,
@@ -119,6 +132,7 @@ class CogneePublicClient:
         self._ensure_llm_api_key()
         import cognee
 
+        await self._ensure_cognee_ready(cognee)
         return await cognee.session.add_feedback(
             session_id=session_id,
             qa_id=qa_id,
@@ -136,6 +150,7 @@ class CogneePublicClient:
         self._ensure_llm_api_key()
         import cognee
 
+        await self._ensure_cognee_ready(cognee)
         return await cognee.improve(
             dataset=dataset,
             session_ids=session_ids,
