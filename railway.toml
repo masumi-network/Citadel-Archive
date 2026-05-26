@@ -2,7 +2,7 @@
 builder = "RAILPACK"
 
 [deploy]
-startCommand = "sh -c 'if [ \"${CITADEL_RUN_MODE:-web}\" = \"github-sync\" ] || [ \"${CITADEL_RUN_MODE:-web}\" = \"learning-agent\" ]; then python -m kb.learning_agent; else python -m uvicorn kb.server:app --host 0.0.0.0 --port ${PORT:-8000}; fi'"
+startCommand = "sh -c 'if [ \"${CITADEL_RUN_MODE:-web}\" = \"github-sync\" ] || [ \"${CITADEL_RUN_MODE:-web}\" = \"learning-agent\" ]; then python scripts/run_github_sync.py; else python -m uvicorn kb.server:app --host 0.0.0.0 --port ${PORT:-8000}; fi'"
 healthcheckPath = "/healthz"
 healthcheckTimeout = 30
 restartPolicyType = "ON_FAILURE"
