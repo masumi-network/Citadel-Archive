@@ -163,8 +163,20 @@ CITADEL_GITHUB_SYNC_INCLUDE_COMMITS=true
 ```
 
 Use `GITHUB_TOKEN` or `CITADEL_GITHUB_TOKEN` for higher GitHub API limits or
-private repository access. The public Masumi repository scan works without a
-token.
+private repository access. Prefer `CITADEL_GITHUB_TOKEN` on both the web
+service and the learning-agent/cron service. The token only needs read access to
+the repositories Citadel should learn from; a fine-grained GitHub token scoped
+to the Masumi organization repositories is enough. The public Masumi repository
+scan works without a token.
+
+For Railway, set the token on both services:
+
+```bash
+CITADEL_GITHUB_TOKEN=github_pat_...
+```
+
+Citadel requests GitHub organization repositories with `type=all`, so private
+repositories visible to the token are included alongside public repositories.
 
 For OpenRouter, set either `LLM_API_KEY` or `OPENROUTER_API_KEY` and use
 `LLM_MODEL=openrouter/free`. Citadel maps `OPENROUTER_API_KEY` to Cognee's

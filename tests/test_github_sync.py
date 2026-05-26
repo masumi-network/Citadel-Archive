@@ -5,7 +5,7 @@ from typing import Any
 import pytest
 
 from kb.config import CitadelConfig
-from kb.github_sync import GitHubCommit, GitHubEvent, GitHubOrgSyncer, GitHubRepo
+from kb.github_sync import GitHubCommit, GitHubEvent, GitHubOrgClient, GitHubOrgSyncer, GitHubRepo
 from kb.models import IngestResult
 
 
@@ -70,6 +70,33 @@ class FakeGitHubClient:
                 author_login="sarthib7",
             )
         ][:max_commits]
+
+
+class RecordingGitHubOrgClient(GitHubOrgClient):
+    def __init__(self) -> None:
+        super().__init__()
+        self.requests: list[tuple[str, dict[str, Any]]] = []
+
+    def _get_json(self, path: str, params: dict[str, Any]) -> list[dict[str, Any]]:
+        self.requests.append((path, params))
+        return []
+
+
+def test_github_org_client_requests_all_org_repositories() -> None:
+    client = RecordingGitHubOrgClient()
+
+    client.fetch_repos("masumi-network", max_repos=100)
+
+    assert client.requests[0] == (
+        "/orgs/masumi-network/repos",
+        {
+            "type": "all",
+            "sort": "pushed",
+            "direction": "desc",
+            "per_page": 100,
+            "page": 1,
+        },
+    )
 
 
 @pytest.mark.asyncio

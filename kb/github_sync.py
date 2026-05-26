@@ -193,6 +193,7 @@ class GitHubOrgClient:
             data = self._get_json(
                 f"/orgs/{org}/repos",
                 {
+                    "type": "all",
                     "sort": "pushed",
                     "direction": "desc",
                     "per_page": per_page,
