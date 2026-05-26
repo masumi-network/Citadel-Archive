@@ -1,17 +1,16 @@
+import * as THREE from "./vendor/three.module.min.js";
+
 const state = {
   snapshot: null,
   nodes: new Map(),
   edges: [],
   selectedId: null,
   paused: false,
-  draggingId: null,
   eventSource: null,
-  animationFrame: null,
   role: null,
 };
 
 const canvas = document.getElementById("graphCanvas");
-const ctx = canvas.getContext("2d");
 const systemStatus = document.querySelector(".system-status");
 const connectionLabel = document.getElementById("connectionLabel");
 const runtimeStatus = document.getElementById("runtimeStatus");
@@ -43,6 +42,37 @@ const newAccessToken = document.getElementById("newAccessToken");
 const pageButtons = Array.from(document.querySelectorAll("[data-page-target]"));
 const pages = Array.from(document.querySelectorAll("[data-page]"));
 const roleOrder = { reader: 1, writer: 2, admin: 3 };
+const reducedMotionQuery = window.matchMedia("(prefers-reduced-motion: reduce)");
+
+const graph = {
+  scene: null,
+  camera: null,
+  renderer: null,
+  root: null,
+  nodeGroup: null,
+  edgeGroup: null,
+  labelGroup: null,
+  raycaster: new THREE.Raycaster(),
+  pointer: new THREE.Vector2(),
+  nodeMeshes: new Map(),
+  nodeLabelSprites: new Map(),
+  width: 1,
+  height: 1,
+  yaw: -0.42,
+  pitch: -0.24,
+  distance: 820,
+  targetYaw: -0.42,
+  targetPitch: -0.24,
+  targetDistance: 820,
+  pointerDown: false,
+  pointerMoved: false,
+  lastPointerX: 0,
+  lastPointerY: 0,
+  pendingNode: null,
+  reducedMotion: reducedMotionQuery.matches,
+  viewInitialized: false,
+  animationFrame: null,
+};
 
 const colors = {
   dataset: "#58c7a9",
@@ -170,34 +200,33 @@ function initializeNavigation() {
 
 function resizeCanvas() {
   const rect = canvas.getBoundingClientRect();
-  const dpr = window.devicePixelRatio || 1;
-  canvas.width = Math.max(1, Math.floor(rect.width * dpr));
-  canvas.height = Math.max(1, Math.floor(rect.height * dpr));
-  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  graph.width = Math.max(1, rect.width);
+  graph.height = Math.max(1, rect.height);
+  if (!graph.renderer || !graph.camera) return;
+  graph.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+  graph.renderer.setSize(graph.width, graph.height, false);
+  graph.camera.aspect = graph.width / graph.height;
+  graph.camera.updateProjectionMatrix();
+  fitGraphDistance();
+  renderGraphScene();
 }
 
 function mergeGraph(snapshot) {
   state.snapshot = snapshot;
-  const rect = canvas.getBoundingClientRect();
-  const centerX = Math.max(rect.width / 2, 320);
-  const centerY = Math.max(rect.height / 2, 240);
+  const layout = layoutNodes(snapshot.nodes);
   const nextIds = new Set();
 
-  snapshot.nodes.forEach((node, index) => {
+  snapshot.nodes.forEach((node) => {
     nextIds.add(node.id);
     const existing = state.nodes.get(node.id);
+    const position = layout.get(node.id) || { x: 0, y: 0, z: 0 };
     if (existing) {
-      Object.assign(existing, node);
+      Object.assign(existing, node, position);
       return;
     }
-    const angle = (index / Math.max(snapshot.nodes.length, 1)) * Math.PI * 2;
-    const radius = 110 + (index % 5) * 28;
     state.nodes.set(node.id, {
       ...node,
-      x: centerX + Math.cos(angle) * radius,
-      y: centerY + Math.sin(angle) * radius,
-      vx: 0,
-      vy: 0,
+      ...position,
     });
   });
 
@@ -208,7 +237,13 @@ function mergeGraph(snapshot) {
   }
 
   state.edges = snapshot.edges;
+  buildGraphScene();
+  if (!graph.viewInitialized) {
+    resetGraphView();
+    graph.viewInitialized = true;
+  }
   renderSnapshot(snapshot);
+  selectNode(state.nodes.get(state.selectedId) || null);
 }
 
 function renderSnapshot(snapshot) {
@@ -333,100 +368,338 @@ function formatDate(value) {
   }).format(date);
 }
 
-function simulate() {
-  if (!state.paused) {
-    const nodes = Array.from(state.nodes.values());
-    const rect = canvas.getBoundingClientRect();
-    const centerX = rect.width / 2;
-    const centerY = rect.height / 2;
+function initializeGraph() {
+  graph.scene = new THREE.Scene();
+  graph.scene.background = new THREE.Color(0x10141a);
 
-    for (let i = 0; i < nodes.length; i += 1) {
-      const a = nodes[i];
-      for (let j = i + 1; j < nodes.length; j += 1) {
-        const b = nodes[j];
-        const dx = a.x - b.x;
-        const dy = a.y - b.y;
-        const distance = Math.max(Math.hypot(dx, dy), 1);
-        const force = 820 / (distance * distance);
-        const fx = (dx / distance) * force;
-        const fy = (dy / distance) * force;
-        a.vx += fx;
-        a.vy += fy;
-        b.vx -= fx;
-        b.vy -= fy;
-      }
-    }
+  graph.camera = new THREE.PerspectiveCamera(42, 1, 1, 2600);
+  graph.camera.position.set(0, 0, graph.distance);
 
-    state.edges.forEach((edge) => {
-      const source = state.nodes.get(edge.source);
-      const target = state.nodes.get(edge.target);
-      if (!source || !target) return;
-      const dx = target.x - source.x;
-      const dy = target.y - source.y;
-      const distance = Math.max(Math.hypot(dx, dy), 1);
-      const desired = source.type === "dataset" || target.type === "dataset" ? 156 : 118;
-      const force = (distance - desired) * 0.004;
-      const fx = (dx / distance) * force;
-      const fy = (dy / distance) * force;
-      source.vx += fx;
-      source.vy += fy;
-      target.vx -= fx;
-      target.vy -= fy;
-    });
+  graph.renderer = new THREE.WebGLRenderer({
+    canvas,
+    antialias: true,
+    alpha: false,
+    preserveDrawingBuffer: true,
+    powerPreference: "high-performance",
+  });
+  graph.renderer.outputColorSpace = THREE.SRGBColorSpace;
+  graph.renderer.setClearColor(0x10141a, 1);
 
-    nodes.forEach((node) => {
-      if (node.id === state.draggingId) return;
-      node.vx += (centerX - node.x) * 0.0009;
-      node.vy += (centerY - node.y) * 0.0009;
-      node.vx *= 0.88;
-      node.vy *= 0.88;
-      node.x = clamp(node.x + node.vx, 34, rect.width - 34);
-      node.y = clamp(node.y + node.vy, 34, rect.height - 34);
-    });
+  graph.root = new THREE.Group();
+  graph.root.rotation.order = "YXZ";
+  graph.scene.add(graph.root);
+
+  graph.scene.add(new THREE.AmbientLight(0xffffff, 0.62));
+  const keyLight = new THREE.DirectionalLight(0xddefff, 1.7);
+  keyLight.position.set(360, 420, 520);
+  graph.scene.add(keyLight);
+  const fillLight = new THREE.PointLight(0x58c7a9, 1.15, 1200);
+  fillLight.position.set(-360, -180, 360);
+  graph.scene.add(fillLight);
+
+  const grid = new THREE.GridHelper(960, 18, 0x58c7a9, 0x46505e);
+  grid.position.y = -230;
+  grid.position.z = -20;
+  for (const material of Array.isArray(grid.material) ? grid.material : [grid.material]) {
+    material.transparent = true;
+    material.opacity = 0.18;
+    material.depthWrite = false;
   }
+  graph.root.add(grid);
 
-  draw();
-  state.animationFrame = window.requestAnimationFrame(simulate);
+  graph.edgeGroup = new THREE.Group();
+  graph.nodeGroup = new THREE.Group();
+  graph.labelGroup = new THREE.Group();
+  graph.root.add(graph.edgeGroup, graph.nodeGroup, graph.labelGroup);
 }
 
-function draw() {
-  const rect = canvas.getBoundingClientRect();
-  ctx.clearRect(0, 0, rect.width, rect.height);
-  ctx.lineWidth = 1;
-  ctx.font = "12px Inter, system-ui, sans-serif";
+function layoutNodes(nodes) {
+  const groups = new Map();
+  for (const node of nodes) {
+    const type = node.type || "other";
+    groups.set(type, [...(groups.get(type) || []), node]);
+  }
 
-  state.edges.forEach((edge) => {
-    const source = state.nodes.get(edge.source);
-    const target = state.nodes.get(edge.target);
-    if (!source || !target) return;
-    ctx.strokeStyle = "rgba(229, 224, 214, 0.16)";
-    ctx.beginPath();
-    ctx.moveTo(source.x, source.y);
-    ctx.lineTo(target.x, target.y);
-    ctx.stroke();
-  });
+  const positions = new Map();
+  const density = clamp(Math.sqrt(Math.max(nodes.length, 8) / 18), 0.92, 1.55);
+  const layouts = {
+    dataset: { radius: 0, y: 0, z: 0, zScale: 0, start: 0 },
+    index: { radius: 175, y: -24, z: 0, zScale: 58, start: -Math.PI / 2 },
+    source: { radius: 265, y: -120, z: 10, zScale: 86, start: -0.2 },
+    repository: { radius: 355, y: -156, z: 18, zScale: 126, start: 0.1 },
+    document: { radius: 340, y: 104, z: -10, zScale: 118, start: Math.PI * 0.62 },
+    tag: { radius: 450, y: 148, z: -22, zScale: 142, start: Math.PI * 0.86 },
+    query: { radius: 382, y: 14, z: 0, zScale: 126, start: -0.05 },
+    feedback: { radius: 398, y: 124, z: 14, zScale: 104, start: Math.PI * 0.16 },
+    upgrade: { radius: 288, y: 68, z: 16, zScale: 78, start: -Math.PI * 0.45 },
+    other: { radius: 430, y: 0, z: 0, zScale: 130, start: Math.PI * 0.35 },
+  };
 
-  for (const node of state.nodes.values()) {
-    const radius = Math.max(8, Math.min(node.size || 22, 58) / 2);
-    const color = colors[node.type] || "#b9b1a5";
-    ctx.beginPath();
-    ctx.fillStyle = color;
-    ctx.globalAlpha = node.id === state.selectedId ? 1 : 0.9;
-    ctx.arc(node.x, node.y, radius, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.globalAlpha = 1;
+  for (const [type, group] of groups.entries()) {
+    const layout = layouts[type] || layouts.other;
+    const sorted = [...group].sort(compareNodes);
 
-    if (node.id === state.selectedId) {
-      ctx.strokeStyle = "#e9c46a";
-      ctx.lineWidth = 2;
-      ctx.stroke();
-      ctx.lineWidth = 1;
+    if (type === "dataset") {
+      const offset = (sorted.length - 1) / 2;
+      sorted.forEach((node, index) => {
+        positions.set(node.id, {
+          x: (index - offset) * 96,
+          y: layout.y,
+          z: layout.z,
+        });
+      });
+      continue;
     }
 
-    ctx.fillStyle = "#f1ede5";
-    ctx.textAlign = "center";
-    ctx.fillText(truncate(node.label, 20), node.x, node.y + radius + 16);
+    const radius = layout.radius * density;
+    const step = (Math.PI * 2) / Math.max(sorted.length, 1);
+    sorted.forEach((node, index) => {
+      const seed = hashUnit(node.id);
+      const angle = layout.start + step * index + (seed - 0.5) * 0.22;
+      const lane = ((index % 3) - 1) * 14;
+      positions.set(node.id, {
+        x: Math.cos(angle) * (radius + lane),
+        y: layout.y + Math.sin(angle) * radius * 0.38,
+        z: layout.z + Math.sin(angle * 1.7 + seed * Math.PI) * layout.zScale,
+      });
+    });
   }
+
+  return positions;
+}
+
+function buildGraphScene() {
+  if (!graph.nodeGroup || !graph.edgeGroup || !graph.labelGroup) return;
+
+  clearGroup(graph.edgeGroup);
+  clearGroup(graph.nodeGroup);
+  clearGroup(graph.labelGroup);
+  graph.nodeMeshes.clear();
+  graph.nodeLabelSprites.clear();
+
+  const edgePositions = [];
+  for (const edge of state.edges) {
+    const source = state.nodes.get(edge.source);
+    const target = state.nodes.get(edge.target);
+    if (!source || !target) continue;
+    edgePositions.push(source.x, source.y, source.z, target.x, target.y, target.z);
+  }
+
+  if (edgePositions.length) {
+    const edgeGeometry = new THREE.BufferGeometry();
+    edgeGeometry.setAttribute("position", new THREE.Float32BufferAttribute(edgePositions, 3));
+    const edgeMaterial = new THREE.LineBasicMaterial({
+      color: 0x9aa5b5,
+      transparent: true,
+      opacity: 0.34,
+      depthWrite: false,
+    });
+    graph.edgeGroup.add(new THREE.LineSegments(edgeGeometry, edgeMaterial));
+  }
+
+  const nodes = Array.from(state.nodes.values()).sort(compareNodes);
+  nodes.forEach((node) => {
+    const radius = nodeRadius(node);
+    const color = new THREE.Color(colors[node.type] || "#b5bdc9");
+    const geometry = nodeGeometry(node, radius);
+    const material = new THREE.MeshStandardMaterial({
+      color,
+      emissive: color,
+      emissiveIntensity: 0.08,
+      roughness: 0.56,
+      metalness: node.type === "index" ? 0.28 : 0.14,
+    });
+    const mesh = new THREE.Mesh(geometry, material);
+    mesh.position.set(node.x, node.y, node.z);
+    mesh.userData.nodeId = node.id;
+    graph.nodeMeshes.set(node.id, mesh);
+    graph.nodeGroup.add(mesh);
+
+    const label = createLabelSprite(node, radius);
+    label.position.set(node.x, node.y + radius + 22, node.z + 4);
+    graph.nodeLabelSprites.set(node.id, label);
+    graph.labelGroup.add(label);
+  });
+
+  updateNodeSelection();
+  renderGraphScene();
+}
+
+function clearGroup(group) {
+  group.traverse((object) => {
+    if (object === group) return;
+    if (object.geometry) object.geometry.dispose();
+    const materials = Array.isArray(object.material) ? object.material : [object.material];
+    for (const material of materials.filter(Boolean)) {
+      if (material.map) material.map.dispose();
+      material.dispose();
+    }
+  });
+  group.clear();
+}
+
+function nodeGeometry(node, radius) {
+  if (node.type === "index") {
+    return new THREE.BoxGeometry(radius * 1.45, radius * 1.45, radius * 1.45);
+  }
+  if (node.type === "source" || node.type === "repository") {
+    return new THREE.IcosahedronGeometry(radius, 1);
+  }
+  return new THREE.SphereGeometry(radius, 28, 18);
+}
+
+function nodeRadius(node) {
+  const base = Number(node.size || 24);
+  if (node.type === "dataset") return clamp(base * 0.48, 18, 30);
+  if (node.type === "index") return clamp(base * 0.42, 13, 22);
+  return clamp(base * 0.46, 9, 26);
+}
+
+function createLabelSprite(node, radius) {
+  const label = truncate(String(node.label || node.id), node.type === "repository" ? 18 : 24);
+  const labelCanvas = document.createElement("canvas");
+  const context = labelCanvas.getContext("2d");
+  const scale = 2;
+  context.font = "600 26px Inter, system-ui, sans-serif";
+  const textWidth = Math.min(context.measureText(label).width, 340);
+  const width = Math.ceil(textWidth + 54);
+  const height = 58;
+  labelCanvas.width = width * scale;
+  labelCanvas.height = height * scale;
+  context.scale(scale, scale);
+  context.font = "600 26px Inter, system-ui, sans-serif";
+  context.textBaseline = "middle";
+
+  roundedRect(context, 0.5, 0.5, width - 1, height - 1, 8);
+  context.fillStyle = "rgba(13, 16, 21, 0.82)";
+  context.fill();
+  context.strokeStyle = "rgba(181, 189, 201, 0.24)";
+  context.stroke();
+
+  context.fillStyle = colors[node.type] || "#b5bdc9";
+  context.fillRect(14, 17, 6, 24);
+  context.fillStyle = "#f2f4f7";
+  context.fillText(label, 30, height / 2, width - 42);
+
+  const texture = new THREE.CanvasTexture(labelCanvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  texture.minFilter = THREE.LinearFilter;
+  texture.magFilter = THREE.LinearFilter;
+  const material = new THREE.SpriteMaterial({
+    map: texture,
+    transparent: true,
+    opacity: 0.84,
+    depthWrite: false,
+  });
+  const sprite = new THREE.Sprite(material);
+  const labelScale = clamp(radius * 2.8, 38, 58);
+  sprite.scale.set((width / height) * labelScale, labelScale, 1);
+  return sprite;
+}
+
+function roundedRect(context, x, y, width, height, radius) {
+  context.beginPath();
+  context.moveTo(x + radius, y);
+  context.arcTo(x + width, y, x + width, y + height, radius);
+  context.arcTo(x + width, y + height, x, y + height, radius);
+  context.arcTo(x, y + height, x, y, radius);
+  context.arcTo(x, y, x + width, y, radius);
+  context.closePath();
+}
+
+function updateNodeSelection() {
+  for (const [id, mesh] of graph.nodeMeshes.entries()) {
+    const selected = id === state.selectedId;
+    mesh.scale.setScalar(selected ? 1.18 : 1);
+    mesh.material.emissiveIntensity = selected ? 0.34 : 0.08;
+  }
+  for (const [id, sprite] of graph.nodeLabelSprites.entries()) {
+    sprite.material.opacity = id === state.selectedId ? 1 : 0.82;
+  }
+  renderGraphScene();
+}
+
+function renderGraphScene() {
+  if (!graph.renderer || !graph.camera || !graph.root) return;
+  const damping = graph.reducedMotion ? 1 : 0.14;
+  graph.yaw += (graph.targetYaw - graph.yaw) * damping;
+  graph.pitch += (graph.targetPitch - graph.pitch) * damping;
+  graph.distance += (graph.targetDistance - graph.distance) * damping;
+  graph.root.rotation.set(graph.pitch, graph.yaw, 0);
+  graph.camera.position.set(0, 0, graph.distance);
+  graph.camera.lookAt(0, 0, 0);
+  graph.renderer.render(graph.scene, graph.camera);
+}
+
+function animateGraph() {
+  renderGraphScene();
+  graph.animationFrame = window.requestAnimationFrame(animateGraph);
+}
+
+function resetGraphView() {
+  graph.targetYaw = -0.42;
+  graph.targetPitch = graph.width < 560 ? -0.16 : -0.24;
+  graph.targetDistance = defaultGraphDistance();
+  graph.yaw = graph.targetYaw;
+  graph.pitch = graph.targetPitch;
+  graph.distance = graph.targetDistance;
+  renderGraphScene();
+}
+
+function fitGraphDistance() {
+  const min = graph.width < 560 ? 640 : 560;
+  const max = graph.width < 560 ? 1420 : 1260;
+  graph.targetDistance = clamp(graph.targetDistance, min, max);
+  graph.distance = clamp(graph.distance, min, max);
+}
+
+function defaultGraphDistance() {
+  const nodeCount = Math.max(state.nodes.size, 5);
+  const density = clamp(Math.sqrt(nodeCount / 16), 1, 1.42);
+  const mobile = graph.width < 560 ? 1.18 : 1;
+  return clamp(760 * density * mobile, 680, graph.width < 560 ? 1360 : 1180);
+}
+
+function compareNodes(a, b) {
+  const order = {
+    dataset: 0,
+    index: 1,
+    source: 2,
+    repository: 3,
+    document: 4,
+    tag: 5,
+    query: 6,
+    feedback: 7,
+    upgrade: 8,
+  };
+  const typeDelta = (order[a.type] ?? 99) - (order[b.type] ?? 99);
+  if (typeDelta) return typeDelta;
+  return String(a.label || a.id).localeCompare(String(b.label || b.id));
+}
+
+function hashUnit(value) {
+  let hash = 2166136261;
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= value.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0) / 4294967295;
+}
+
+function setRaycasterPointer(event) {
+  const rect = canvas.getBoundingClientRect();
+  graph.pointer.x = ((event.clientX - rect.left) / Math.max(rect.width, 1)) * 2 - 1;
+  graph.pointer.y = -(((event.clientY - rect.top) / Math.max(rect.height, 1)) * 2 - 1);
+}
+
+function nearestNode(event) {
+  if (!graph.camera || !graph.root) return null;
+  setRaycasterPointer(event);
+  graph.root.updateMatrixWorld(true);
+  graph.raycaster.setFromCamera(graph.pointer, graph.camera);
+  const intersections = graph.raycaster.intersectObjects(Array.from(graph.nodeMeshes.values()), false);
+  const hit = intersections[0]?.object;
+  return hit ? state.nodes.get(hit.userData.nodeId) || null : null;
 }
 
 function clamp(value, min, max) {
@@ -437,26 +710,11 @@ function truncate(value, length) {
   return value.length > length ? `${value.slice(0, length - 1)}.` : value;
 }
 
-function nearestNode(event) {
-  const rect = canvas.getBoundingClientRect();
-  const x = event.clientX - rect.left;
-  const y = event.clientY - rect.top;
-  let nearest = null;
-  let best = Infinity;
-  for (const node of state.nodes.values()) {
-    const distance = Math.hypot(node.x - x, node.y - y);
-    if (distance < best && distance < 42) {
-      nearest = node;
-      best = distance;
-    }
-  }
-  return nearest;
-}
-
 function selectNode(node) {
   state.selectedId = node?.id || null;
   if (!node) {
     selectedNode.textContent = "Select a node to inspect it.";
+    updateNodeSelection();
     return;
   }
   selectedNode.innerHTML = `
@@ -466,6 +724,7 @@ function selectNode(node) {
     </div>
     <p>${escapeHtml(formatDetails(node.metadata || {}))}</p>
   `;
+  updateNodeSelection();
 }
 
 async function loadMesh(showConnection = true) {
@@ -633,37 +892,87 @@ document.getElementById("refreshButton").addEventListener("click", () => {
 });
 document.getElementById("meshRetryButton").addEventListener("click", () => loadMesh());
 document.getElementById("fitButton").addEventListener("click", () => {
-  state.nodes.clear();
-  if (state.snapshot) mergeGraph(state.snapshot);
+  resetGraphView();
 });
 document.getElementById("pauseButton").addEventListener("click", (event) => {
   state.paused = !state.paused;
   event.currentTarget.textContent = state.paused ? "Resume" : "Pause";
+  canvas.classList.toggle("is-paused", state.paused);
 });
 
 canvas.addEventListener("pointerdown", (event) => {
-  const node = nearestNode(event);
-  selectNode(node);
-  if (!node) return;
-  state.draggingId = node.id;
+  graph.pointerDown = true;
+  graph.pointerMoved = false;
+  graph.pendingNode = nearestNode(event);
+  graph.lastPointerX = event.clientX;
+  graph.lastPointerY = event.clientY;
   canvas.classList.add("dragging");
   canvas.setPointerCapture(event.pointerId);
 });
 
 canvas.addEventListener("pointermove", (event) => {
-  if (!state.draggingId) return;
-  const node = state.nodes.get(state.draggingId);
-  const rect = canvas.getBoundingClientRect();
-  node.x = event.clientX - rect.left;
-  node.y = event.clientY - rect.top;
-  node.vx = 0;
-  node.vy = 0;
+  if (!graph.pointerDown || state.paused) return;
+  const dx = event.clientX - graph.lastPointerX;
+  const dy = event.clientY - graph.lastPointerY;
+  if (Math.abs(dx) + Math.abs(dy) > 3) graph.pointerMoved = true;
+  graph.targetYaw += dx * 0.0032;
+  graph.targetPitch = clamp(graph.targetPitch + dy * 0.0024, -0.78, 0.52);
+  graph.lastPointerX = event.clientX;
+  graph.lastPointerY = event.clientY;
 });
 
 canvas.addEventListener("pointerup", (event) => {
-  state.draggingId = null;
+  if (!graph.pointerMoved) {
+    selectNode(graph.pendingNode || nearestNode(event));
+  }
+  graph.pointerDown = false;
+  graph.pendingNode = null;
   canvas.classList.remove("dragging");
-  canvas.releasePointerCapture(event.pointerId);
+  if (canvas.hasPointerCapture(event.pointerId)) {
+    canvas.releasePointerCapture(event.pointerId);
+  }
+});
+
+canvas.addEventListener("pointercancel", (event) => {
+  graph.pointerDown = false;
+  graph.pendingNode = null;
+  canvas.classList.remove("dragging");
+  if (canvas.hasPointerCapture(event.pointerId)) {
+    canvas.releasePointerCapture(event.pointerId);
+  }
+});
+
+canvas.addEventListener(
+  "wheel",
+  (event) => {
+    if (state.paused) return;
+    event.preventDefault();
+    const maxDistance = graph.width < 560 ? 1420 : 1260;
+    graph.targetDistance = clamp(graph.targetDistance + event.deltaY * 0.42, 560, maxDistance);
+  },
+  { passive: false },
+);
+
+canvas.addEventListener("keydown", (event) => {
+  const step = event.shiftKey ? 0.16 : 0.08;
+  if (event.key === "ArrowLeft") {
+    graph.targetYaw -= step;
+  } else if (event.key === "ArrowRight") {
+    graph.targetYaw += step;
+  } else if (event.key === "ArrowUp") {
+    graph.targetPitch = clamp(graph.targetPitch - step, -0.78, 0.52);
+  } else if (event.key === "ArrowDown") {
+    graph.targetPitch = clamp(graph.targetPitch + step, -0.78, 0.52);
+  } else if (event.key === "+" || event.key === "=") {
+    graph.targetDistance = clamp(graph.targetDistance - 80, 560, 1260);
+  } else if (event.key === "-" || event.key === "_") {
+    graph.targetDistance = clamp(graph.targetDistance + 80, 560, 1260);
+  } else if (event.key === "Home") {
+    resetGraphView();
+  } else {
+    return;
+  }
+  event.preventDefault();
 });
 
 document.getElementById("githubSyncButton").addEventListener("click", async (event) => {
@@ -925,6 +1234,11 @@ window.addEventListener("resize", () => {
   if (state.snapshot) mergeGraph(state.snapshot);
 });
 
+reducedMotionQuery.addEventListener("change", (event) => {
+  graph.reducedMotion = event.matches;
+});
+
+initializeGraph();
 resizeCanvas();
 initializeNavigation();
 loadSession().then(() => {
@@ -932,5 +1246,5 @@ loadSession().then(() => {
   loadMesh();
   loadGithubSync();
   connectEvents();
-  simulate();
+  animateGraph();
 });
