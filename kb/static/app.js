@@ -39,6 +39,17 @@ const accessPrincipalList = document.getElementById("accessPrincipalList");
 const accessTokenList = document.getElementById("accessTokenList");
 const accessAuditList = document.getElementById("accessAuditList");
 const newAccessToken = document.getElementById("newAccessToken");
+const dashboardCronStatus = document.getElementById("dashboardCronStatus");
+const dashboardCronMeta = document.getElementById("dashboardCronMeta");
+const dashboardIngestStatus = document.getElementById("dashboardIngestStatus");
+const dashboardIngestionList = document.getElementById("dashboardIngestionList");
+const dashboardMcpClients = document.getElementById("dashboardMcpClients");
+const dashboardMcpMeta = document.getElementById("dashboardMcpMeta");
+const dashboardMcpStatus = document.getElementById("dashboardMcpStatus");
+const dashboardMcpList = document.getElementById("dashboardMcpList");
+const dashboardRecentLearning = document.getElementById("dashboardRecentLearning");
+const dashboardIndexSummary = document.getElementById("dashboardIndexSummary");
+const dashboardOpenIssue = document.getElementById("dashboardOpenIssue");
 const pageButtons = Array.from(document.querySelectorAll("[data-page-target]"));
 const pages = Array.from(document.querySelectorAll("[data-page]"));
 const roleOrder = { reader: 1, writer: 2, admin: 3 };
@@ -55,15 +66,16 @@ const graph = {
   raycaster: new THREE.Raycaster(),
   pointer: new THREE.Vector2(),
   nodeMeshes: new Map(),
+  nodeObjects: new Map(),
   nodeLabelSprites: new Map(),
   width: 1,
   height: 1,
-  yaw: -0.42,
-  pitch: -0.24,
-  distance: 820,
-  targetYaw: -0.42,
-  targetPitch: -0.24,
-  targetDistance: 820,
+  yaw: -0.34,
+  pitch: -0.12,
+  distance: 720,
+  targetYaw: -0.34,
+  targetPitch: -0.12,
+  targetDistance: 720,
   pointerDown: false,
   pointerMoved: false,
   lastPointerX: 0,
@@ -150,6 +162,28 @@ function applyAccessControls() {
       element.disabled = !allowed;
     }
   });
+
+  renderDashboardMcpSession();
+}
+
+function renderDashboardMcpSession() {
+  if (!dashboardMcpStatus || !dashboardMcpList) return;
+  const label = state.role ? roleLabel(state.role) : "Locked";
+  dashboardMcpStatus.textContent = state.role ? "Authorized" : "Locked";
+  dashboardMcpStatus.className = `status-chip ${state.role ? "status-enabled" : "status-error"}`;
+  if (dashboardMcpClients && !canUse("admin")) {
+    dashboardMcpClients.textContent = state.role ? label : "Locked";
+    dashboardMcpMeta.textContent = state.role ? "current session" : "login required";
+  }
+  dashboardMcpList.innerHTML = `
+    <div class="entity-item">
+      <div>
+        <strong>Current session</strong>
+        <p>${escapeHtml(label)} access${state.role ? " through cookie or bearer token" : ""}</p>
+      </div>
+      <span class="status-chip ${state.role ? "status-enabled" : "status-error"}">${escapeHtml(state.role || "none")}</span>
+    </div>
+  `;
 }
 
 async function loadSession() {
@@ -258,6 +292,9 @@ function renderSnapshot(snapshot) {
   document.getElementById("statUpgrades").textContent = snapshot.stats.upgrades;
   document.getElementById("statErrors").textContent = snapshot.stats.errors;
   eventCount.textContent = String(snapshot.events.length);
+  renderDashboardIndexes(snapshot.indexes);
+  renderDashboardRecentEvent(snapshot.events);
+  renderDashboardOpenIssue(snapshot);
 
   indexList.innerHTML = "";
   if (!snapshot.indexes.length) {
@@ -298,6 +335,73 @@ function renderSnapshot(snapshot) {
     empty.innerHTML = "<strong>No events yet</strong><p>Run a sync or ingest a memory.</p>";
     eventList.append(empty);
   }
+}
+
+function renderDashboardIndexes(indexes = []) {
+  if (!dashboardIndexSummary) return;
+  dashboardIndexSummary.innerHTML = "";
+  if (!indexes.length) {
+    dashboardIndexSummary.append(emptyState("No indexes", "Index status has not reported yet."));
+    return;
+  }
+  indexes.slice(0, 4).forEach((index) => {
+    const item = document.createElement("div");
+    item.className = "entity-item";
+    item.innerHTML = `
+      <div>
+        <strong>${escapeHtml(index.name)}</strong>
+        <p>${escapeHtml(index.records)} records</p>
+      </div>
+      <span class="status-chip status-${escapeHtml(index.status)}">${escapeHtml(index.status)}</span>
+    `;
+    dashboardIndexSummary.append(item);
+  });
+}
+
+function renderDashboardRecentEvent(events = []) {
+  if (!dashboardRecentLearning) return;
+  const latest = events[0];
+  if (!latest) {
+    dashboardRecentLearning.className = "empty-state compact-empty";
+    dashboardRecentLearning.innerHTML = `
+      <strong>No events yet</strong>
+      <p>Run sync, ingest, or search to teach the graph.</p>
+    `;
+    return;
+  }
+  dashboardRecentLearning.className = "dashboard-event-card";
+  dashboardRecentLearning.innerHTML = `
+    <strong>${escapeHtml(latest.message)}</strong>
+    <p>${escapeHtml(latest.type)} - ${escapeHtml(formatDate(latest.created_at))}</p>
+    <p>${escapeHtml(formatDetails(latest.details || {}))}</p>
+  `;
+}
+
+function renderDashboardOpenIssue(snapshot) {
+  if (!dashboardOpenIssue) return;
+  const errorCount = Number(snapshot.stats.errors || 0);
+  const hasEvents = Boolean(snapshot.events.length);
+  if (errorCount > 0) {
+    dashboardOpenIssue.className = "dashboard-event-card issue-card";
+    dashboardOpenIssue.innerHTML = `
+      <strong>${escapeHtml(errorCount)} runtime error${errorCount === 1 ? "" : "s"}</strong>
+      <p>Open the events page to inspect failed operations.</p>
+    `;
+    return;
+  }
+  if (!hasEvents) {
+    dashboardOpenIssue.className = "empty-state compact-empty";
+    dashboardOpenIssue.innerHTML = `
+      <strong>No activity yet</strong>
+      <p>Run a source sync to start building the shared graph.</p>
+    `;
+    return;
+  }
+  dashboardOpenIssue.className = "dashboard-event-card";
+  dashboardOpenIssue.innerHTML = `
+    <strong>No blocking issues</strong>
+    <p>Graph updates are flowing. Keep an eye on weak source links and token scope holds.</p>
+  `;
 }
 
 function emptyState(title, body) {
@@ -370,9 +474,10 @@ function formatDate(value) {
 
 function initializeGraph() {
   graph.scene = new THREE.Scene();
-  graph.scene.background = new THREE.Color(0x10141a);
+  graph.scene.background = new THREE.Color(0x0d1117);
+  graph.scene.fog = new THREE.Fog(0x0d1117, 780, 1900);
 
-  graph.camera = new THREE.PerspectiveCamera(42, 1, 1, 2600);
+  graph.camera = new THREE.PerspectiveCamera(38, 1, 1, 2800);
   graph.camera.position.set(0, 0, graph.distance);
 
   graph.renderer = new THREE.WebGLRenderer({
@@ -383,34 +488,67 @@ function initializeGraph() {
     powerPreference: "high-performance",
   });
   graph.renderer.outputColorSpace = THREE.SRGBColorSpace;
-  graph.renderer.setClearColor(0x10141a, 1);
+  graph.renderer.toneMapping = THREE.ACESFilmicToneMapping;
+  graph.renderer.toneMappingExposure = 1.05;
+  graph.renderer.setClearColor(0x0d1117, 1);
 
   graph.root = new THREE.Group();
   graph.root.rotation.order = "YXZ";
   graph.scene.add(graph.root);
 
-  graph.scene.add(new THREE.AmbientLight(0xffffff, 0.62));
-  const keyLight = new THREE.DirectionalLight(0xddefff, 1.7);
-  keyLight.position.set(360, 420, 520);
+  graph.scene.add(new THREE.AmbientLight(0xffffff, 0.34));
+  const hemisphereLight = new THREE.HemisphereLight(0xb9d8ff, 0x111820, 0.92);
+  graph.scene.add(hemisphereLight);
+  const keyLight = new THREE.DirectionalLight(0xf4fbff, 1.85);
+  keyLight.position.set(320, 460, 540);
   graph.scene.add(keyLight);
-  const fillLight = new THREE.PointLight(0x58c7a9, 1.15, 1200);
-  fillLight.position.set(-360, -180, 360);
+  const fillLight = new THREE.PointLight(0x58c7a9, 0.95, 1100);
+  fillLight.position.set(-420, -120, 420);
   graph.scene.add(fillLight);
+  const rimLight = new THREE.DirectionalLight(0x8bc7ff, 0.72);
+  rimLight.position.set(-520, 260, -320);
+  graph.scene.add(rimLight);
 
-  const grid = new THREE.GridHelper(960, 18, 0x58c7a9, 0x46505e);
-  grid.position.y = -230;
-  grid.position.z = -20;
-  for (const material of Array.isArray(grid.material) ? grid.material : [grid.material]) {
-    material.transparent = true;
-    material.opacity = 0.18;
-    material.depthWrite = false;
-  }
-  graph.root.add(grid);
+  graph.root.add(createSceneBase());
 
   graph.edgeGroup = new THREE.Group();
   graph.nodeGroup = new THREE.Group();
   graph.labelGroup = new THREE.Group();
   graph.root.add(graph.edgeGroup, graph.nodeGroup, graph.labelGroup);
+}
+
+function createSceneBase() {
+  const base = new THREE.Group();
+  base.position.y = -194;
+  base.position.z = -16;
+
+  const grid = new THREE.GridHelper(980, 18, 0x58c7a9, 0x34404d);
+  for (const material of Array.isArray(grid.material) ? grid.material : [grid.material]) {
+    material.transparent = true;
+    material.opacity = 0.105;
+    material.depthWrite = false;
+  }
+  base.add(grid);
+
+  const rings = [
+    { radius: 185, opacity: 0.26, color: 0x58c7a9 },
+    { radius: 300, opacity: 0.16, color: 0x8bc7ff },
+    { radius: 425, opacity: 0.1, color: 0xb59cff },
+  ];
+  rings.forEach((ring) => {
+    const geometry = new THREE.TorusGeometry(ring.radius, 0.9, 6, 128);
+    const material = new THREE.MeshBasicMaterial({
+      color: ring.color,
+      transparent: true,
+      opacity: ring.opacity,
+      depthWrite: false,
+    });
+    const mesh = new THREE.Mesh(geometry, material);
+    mesh.rotation.x = Math.PI / 2;
+    base.add(mesh);
+  });
+
+  return base;
 }
 
 function layoutNodes(nodes) {
@@ -421,18 +559,18 @@ function layoutNodes(nodes) {
   }
 
   const positions = new Map();
-  const density = clamp(Math.sqrt(Math.max(nodes.length, 8) / 18), 0.92, 1.55);
+  const density = clamp(Math.sqrt(Math.max(nodes.length, 10) / 18), 0.95, 1.48);
   const layouts = {
-    dataset: { radius: 0, y: 0, z: 0, zScale: 0, start: 0 },
-    index: { radius: 175, y: -24, z: 0, zScale: 58, start: -Math.PI / 2 },
-    source: { radius: 265, y: -120, z: 10, zScale: 86, start: -0.2 },
-    repository: { radius: 355, y: -156, z: 18, zScale: 126, start: 0.1 },
-    document: { radius: 340, y: 104, z: -10, zScale: 118, start: Math.PI * 0.62 },
-    tag: { radius: 450, y: 148, z: -22, zScale: 142, start: Math.PI * 0.86 },
-    query: { radius: 382, y: 14, z: 0, zScale: 126, start: -0.05 },
-    feedback: { radius: 398, y: 124, z: 14, zScale: 104, start: Math.PI * 0.16 },
-    upgrade: { radius: 288, y: 68, z: 16, zScale: 78, start: -Math.PI * 0.45 },
-    other: { radius: 430, y: 0, z: 0, zScale: 130, start: Math.PI * 0.35 },
+    dataset: { radius: 0, y: 0, yScale: 0, z: 0, zScale: 0, start: 0 },
+    index: { radius: 248, y: -4, yScale: 0.44, z: 0, zScale: 60, start: -Math.PI / 4 },
+    source: { radius: 360, y: -118, yScale: 0.42, z: 10, zScale: 92, start: -0.16 },
+    repository: { radius: 438, y: -148, yScale: 0.4, z: 18, zScale: 132, start: 0.1 },
+    document: { radius: 386, y: 118, yScale: 0.46, z: -10, zScale: 118, start: Math.PI * 0.62 },
+    tag: { radius: 486, y: 160, yScale: 0.38, z: -22, zScale: 146, start: Math.PI * 0.86 },
+    query: { radius: 430, y: 16, yScale: 0.44, z: 0, zScale: 126, start: -0.05 },
+    feedback: { radius: 436, y: 132, yScale: 0.42, z: 14, zScale: 112, start: Math.PI * 0.16 },
+    upgrade: { radius: 334, y: 76, yScale: 0.46, z: 16, zScale: 82, start: -Math.PI * 0.45 },
+    other: { radius: 460, y: 0, yScale: 0.42, z: 0, zScale: 132, start: Math.PI * 0.35 },
   };
 
   for (const [type, group] of groups.entries()) {
@@ -451,16 +589,17 @@ function layoutNodes(nodes) {
       continue;
     }
 
-    const radius = layout.radius * density;
+    const scale = graphLayoutScale();
+    const radius = layout.radius * density * scale;
     const step = (Math.PI * 2) / Math.max(sorted.length, 1);
     sorted.forEach((node, index) => {
       const seed = hashUnit(node.id);
       const angle = layout.start + step * index + (seed - 0.5) * 0.22;
-      const lane = ((index % 3) - 1) * 14;
+      const lane = ((index % 3) - 1) * 14 * scale;
       positions.set(node.id, {
         x: Math.cos(angle) * (radius + lane),
-        y: layout.y + Math.sin(angle) * radius * 0.38,
-        z: layout.z + Math.sin(angle * 1.7 + seed * Math.PI) * layout.zScale,
+        y: layout.y + Math.sin(angle) * radius * layout.yScale,
+        z: layout.z + Math.sin(angle * 1.7 + seed * Math.PI) * layout.zScale * scale,
       });
     });
   }
@@ -475,6 +614,7 @@ function buildGraphScene() {
   clearGroup(graph.nodeGroup);
   clearGroup(graph.labelGroup);
   graph.nodeMeshes.clear();
+  graph.nodeObjects.clear();
   graph.nodeLabelSprites.clear();
 
   const edgePositions = [];
@@ -501,24 +641,18 @@ function buildGraphScene() {
   nodes.forEach((node) => {
     const radius = nodeRadius(node);
     const color = new THREE.Color(colors[node.type] || "#b5bdc9");
-    const geometry = nodeGeometry(node, radius);
-    const material = new THREE.MeshStandardMaterial({
-      color,
-      emissive: color,
-      emissiveIntensity: 0.08,
-      roughness: 0.56,
-      metalness: node.type === "index" ? 0.28 : 0.14,
-    });
-    const mesh = new THREE.Mesh(geometry, material);
-    mesh.position.set(node.x, node.y, node.z);
-    mesh.userData.nodeId = node.id;
+    const { object, mesh } = createNodeObject(node, radius, color);
+    object.position.set(node.x, node.y, node.z);
+    graph.nodeObjects.set(node.id, object);
     graph.nodeMeshes.set(node.id, mesh);
-    graph.nodeGroup.add(mesh);
+    graph.nodeGroup.add(object);
 
-    const label = createLabelSprite(node, radius);
-    label.position.set(node.x, node.y + radius + 22, node.z + 4);
-    graph.nodeLabelSprites.set(node.id, label);
-    graph.labelGroup.add(label);
+    if (shouldShowNodeLabel(node)) {
+      const label = createLabelSprite(node, radius);
+      label.position.copy(labelPosition(node, radius));
+      graph.nodeLabelSprites.set(node.id, label);
+      graph.labelGroup.add(label);
+    }
   });
 
   updateNodeSelection();
@@ -538,9 +672,77 @@ function clearGroup(group) {
   group.clear();
 }
 
+function createNodeObject(node, radius, color) {
+  const object = new THREE.Group();
+  const geometry = nodeGeometry(node, radius);
+  const material = new THREE.MeshStandardMaterial({
+    color,
+    emissive: color,
+    emissiveIntensity: node.type === "dataset" ? 0.18 : 0.1,
+    roughness: node.type === "dataset" ? 0.38 : 0.5,
+    metalness: node.type === "index" ? 0.24 : 0.12,
+  });
+  const mesh = new THREE.Mesh(geometry, material);
+  mesh.userData.nodeId = node.id;
+  object.add(mesh);
+
+  const outline = new THREE.LineSegments(
+    new THREE.EdgesGeometry(geometry, 24),
+    new THREE.LineBasicMaterial({
+      color: 0xf2f4f7,
+      transparent: true,
+      opacity: node.type === "dataset" ? 0.24 : 0.16,
+      depthWrite: false,
+    }),
+  );
+  outline.scale.setScalar(1.045);
+  object.add(outline);
+
+  addNodeHalo(object, node, radius, color);
+  return { object, mesh };
+}
+
+function addNodeHalo(object, node, radius, color) {
+  const ringMaterial = new THREE.MeshBasicMaterial({
+    color,
+    transparent: true,
+    opacity: node.type === "dataset" ? 0.34 : 0.18,
+    depthWrite: false,
+  });
+  const ring = new THREE.Mesh(
+    new THREE.TorusGeometry(radius * (node.type === "dataset" ? 1.84 : 1.54), 0.9, 6, 72),
+    ringMaterial,
+  );
+  ring.rotation.x = Math.PI / 2;
+  ring.userData.selectionAccent = true;
+  object.add(ring);
+
+  if (node.type === "dataset") {
+    const tiltedRing = new THREE.Mesh(
+      new THREE.TorusGeometry(radius * 1.42, 0.75, 6, 72),
+      ringMaterial.clone(),
+    );
+    tiltedRing.rotation.set(Math.PI / 2.8, Math.PI / 5.8, 0);
+    tiltedRing.userData.selectionAccent = true;
+    object.add(tiltedRing);
+
+    const shell = new THREE.Mesh(
+      new THREE.SphereGeometry(radius * 1.45, 32, 20),
+      new THREE.MeshBasicMaterial({
+        color,
+        transparent: true,
+        opacity: 0.11,
+        wireframe: true,
+        depthWrite: false,
+      }),
+    );
+    object.add(shell);
+  }
+}
+
 function nodeGeometry(node, radius) {
   if (node.type === "index") {
-    return new THREE.BoxGeometry(radius * 1.45, radius * 1.45, radius * 1.45);
+    return new THREE.DodecahedronGeometry(radius, 0);
   }
   if (node.type === "source" || node.type === "repository") {
     return new THREE.IcosahedronGeometry(radius, 1);
@@ -550,36 +752,51 @@ function nodeGeometry(node, radius) {
 
 function nodeRadius(node) {
   const base = Number(node.size || 24);
-  if (node.type === "dataset") return clamp(base * 0.48, 18, 30);
-  if (node.type === "index") return clamp(base * 0.42, 13, 22);
-  return clamp(base * 0.46, 9, 26);
+  if (node.type === "dataset") return clamp(base * 0.44, 18, 26);
+  if (node.type === "index") return clamp(base * 0.36, 12, 18);
+  return clamp(base * 0.42, 9, 24);
+}
+
+function graphLayoutScale() {
+  if (graph.width < 560) return 0.82;
+  if (graph.width < 900) return 0.88;
+  return 1;
+}
+
+function shouldShowNodeLabel(node) {
+  return graph.width >= 560 || node.type === "dataset";
 }
 
 function createLabelSprite(node, radius) {
-  const label = truncate(String(node.label || node.id), node.type === "repository" ? 18 : 24);
+  const labelLength = graph.width < 560 ? 16 : node.type === "repository" ? 18 : 22;
+  const label = truncate(String(node.label || node.id), labelLength);
   const labelCanvas = document.createElement("canvas");
   const context = labelCanvas.getContext("2d");
   const scale = 2;
-  context.font = "600 26px Inter, system-ui, sans-serif";
-  const textWidth = Math.min(context.measureText(label).width, 340);
-  const width = Math.ceil(textWidth + 54);
-  const height = 58;
+  const fontSize = graph.width < 560 ? 15 : 17;
+  const labelHeight = graph.width < 560 ? 34 : 38;
+  context.font = `650 ${fontSize}px Inter, system-ui, sans-serif`;
+  const textWidth = Math.min(context.measureText(label).width, graph.width < 560 ? 160 : 240);
+  const width = Math.ceil(textWidth + 40);
+  const height = labelHeight;
   labelCanvas.width = width * scale;
   labelCanvas.height = height * scale;
   context.scale(scale, scale);
-  context.font = "600 26px Inter, system-ui, sans-serif";
+  context.font = `650 ${fontSize}px Inter, system-ui, sans-serif`;
   context.textBaseline = "middle";
 
   roundedRect(context, 0.5, 0.5, width - 1, height - 1, 8);
-  context.fillStyle = "rgba(13, 16, 21, 0.82)";
+  context.fillStyle = "rgba(12, 15, 20, 0.76)";
   context.fill();
-  context.strokeStyle = "rgba(181, 189, 201, 0.24)";
+  context.strokeStyle = "rgba(181, 189, 201, 0.2)";
   context.stroke();
 
+  context.beginPath();
+  context.arc(16, height / 2, 3.5, 0, Math.PI * 2);
   context.fillStyle = colors[node.type] || "#b5bdc9";
-  context.fillRect(14, 17, 6, 24);
+  context.fill();
   context.fillStyle = "#f2f4f7";
-  context.fillText(label, 30, height / 2, width - 42);
+  context.fillText(label, 27, height / 2, width - 36);
 
   const texture = new THREE.CanvasTexture(labelCanvas);
   texture.colorSpace = THREE.SRGBColorSpace;
@@ -588,13 +805,28 @@ function createLabelSprite(node, radius) {
   const material = new THREE.SpriteMaterial({
     map: texture,
     transparent: true,
-    opacity: 0.84,
+    opacity: 0.78,
+    depthTest: false,
     depthWrite: false,
   });
   const sprite = new THREE.Sprite(material);
-  const labelScale = clamp(radius * 2.8, 38, 58);
+  const labelScale = clamp(radius * 1.7, 24, 34);
   sprite.scale.set((width / height) * labelScale, labelScale, 1);
   return sprite;
+}
+
+function labelPosition(node, radius) {
+  const position = new THREE.Vector3(node.x, node.y, node.z);
+  if (node.type === "dataset") {
+    return position.add(new THREE.Vector3(0, radius + 44, 12));
+  }
+
+  const outward = new THREE.Vector3(node.x, node.y * 1.45, node.z * 0.45);
+  if (outward.lengthSq() < 1) {
+    outward.set(0, 1, 0);
+  }
+  outward.normalize();
+  return position.add(outward.multiplyScalar(radius + 44));
 }
 
 function roundedRect(context, x, y, width, height, radius) {
@@ -610,25 +842,43 @@ function roundedRect(context, x, y, width, height, radius) {
 function updateNodeSelection() {
   for (const [id, mesh] of graph.nodeMeshes.entries()) {
     const selected = id === state.selectedId;
-    mesh.scale.setScalar(selected ? 1.18 : 1);
-    mesh.material.emissiveIntensity = selected ? 0.34 : 0.08;
+    const object = graph.nodeObjects.get(id);
+    if (object) object.scale.setScalar(selected ? 1.16 : 1);
+    mesh.material.emissiveIntensity = selected ? 0.36 : 0.1;
+    mesh.parent?.traverse((child) => {
+      if (child.userData.selectionAccent && child.material) {
+        child.material.opacity = selected ? 0.48 : id.startsWith("dataset:") ? 0.34 : 0.18;
+      }
+    });
   }
   for (const [id, sprite] of graph.nodeLabelSprites.entries()) {
-    sprite.material.opacity = id === state.selectedId ? 1 : 0.82;
+    sprite.material.opacity = id === state.selectedId ? 0.98 : 0.78;
   }
   renderGraphScene();
 }
 
 function renderGraphScene() {
   if (!graph.renderer || !graph.camera || !graph.root) return;
+  animateNodeObjects();
   const damping = graph.reducedMotion ? 1 : 0.14;
   graph.yaw += (graph.targetYaw - graph.yaw) * damping;
   graph.pitch += (graph.targetPitch - graph.pitch) * damping;
   graph.distance += (graph.targetDistance - graph.distance) * damping;
+  graph.root.position.y = graph.width < 560 ? 56 : 70;
   graph.root.rotation.set(graph.pitch, graph.yaw, 0);
   graph.camera.position.set(0, 0, graph.distance);
-  graph.camera.lookAt(0, 0, 0);
+  graph.camera.lookAt(0, graph.width < 560 ? -24 : -16, 0);
   graph.renderer.render(graph.scene, graph.camera);
+}
+
+function animateNodeObjects() {
+  if (graph.reducedMotion || state.paused || graph.pointerDown) return;
+  const now = performance.now() * 0.001;
+  for (const [id, object] of graph.nodeObjects.entries()) {
+    const seed = hashUnit(id);
+    object.rotation.y = now * (0.12 + seed * 0.06) + seed * Math.PI;
+    object.rotation.x = Math.sin(now * 0.32 + seed * Math.PI * 2) * 0.035;
+  }
 }
 
 function animateGraph() {
@@ -637,8 +887,8 @@ function animateGraph() {
 }
 
 function resetGraphView() {
-  graph.targetYaw = -0.42;
-  graph.targetPitch = graph.width < 560 ? -0.16 : -0.24;
+  graph.targetYaw = -0.34;
+  graph.targetPitch = graph.width < 560 ? -0.1 : -0.12;
   graph.targetDistance = defaultGraphDistance();
   graph.yaw = graph.targetYaw;
   graph.pitch = graph.targetPitch;
@@ -647,8 +897,8 @@ function resetGraphView() {
 }
 
 function fitGraphDistance() {
-  const min = graph.width < 560 ? 640 : 560;
-  const max = graph.width < 560 ? 1420 : 1260;
+  const min = graph.width < 560 ? 720 : 620;
+  const max = graph.width < 560 ? 1440 : 1180;
   graph.targetDistance = clamp(graph.targetDistance, min, max);
   graph.distance = clamp(graph.distance, min, max);
 }
@@ -656,8 +906,12 @@ function fitGraphDistance() {
 function defaultGraphDistance() {
   const nodeCount = Math.max(state.nodes.size, 5);
   const density = clamp(Math.sqrt(nodeCount / 16), 1, 1.42);
-  const mobile = graph.width < 560 ? 1.18 : 1;
-  return clamp(760 * density * mobile, 680, graph.width < 560 ? 1360 : 1180);
+  const viewportScale = graph.width < 560 ? 1.08 : graph.width < 900 ? 1.12 : 1;
+  return clamp(
+    720 * density * viewportScale,
+    graph.width < 560 ? 780 : 650,
+    graph.width < 560 ? 1380 : 1120,
+  );
 }
 
 function compareNodes(a, b) {
@@ -751,11 +1005,50 @@ async function loadGithubSync() {
     syncTrackedRepos.textContent = status.tracked_repositories;
     githubSourceLink.href = status.source_url;
     githubSourceLink.textContent = status.source_url.replace("https://", "");
+    if (dashboardCronStatus) {
+      dashboardCronStatus.textContent = status.last_checked_at ? "Connected" : "Ready";
+      dashboardCronMeta.textContent = status.last_checked_at
+        ? `last sync ${formatDate(status.last_checked_at)}`
+        : "waiting for first sync";
+      dashboardIngestStatus.textContent = status.last_checked_at ? "Running" : "Ready";
+      dashboardIngestStatus.className = `status-chip ${status.last_checked_at ? "status-enabled" : "status-standby"}`;
+      dashboardIngestionList.innerHTML = `
+        <div class="entity-item">
+          <div>
+            <strong>GitHub source</strong>
+            <p>${escapeHtml(status.tracked_repositories)} repositories tracked</p>
+          </div>
+          <span class="status-chip ${status.last_checked_at ? "status-enabled" : "status-standby"}">${escapeHtml(status.last_checked_at ? "tracked" : "ready")}</span>
+        </div>
+        <div class="entity-item">
+          <div>
+            <strong>Chunk and index</strong>
+            <p>New source material flows into graph and vector memory.</p>
+          </div>
+          <span class="status-chip status-enabled">live</span>
+        </div>
+        <div class="entity-item">
+          <div>
+            <strong>Self-learning loop</strong>
+            <p>${status.run_improve ? "Runs improvement after sync." : "Manual improvement enabled from Sources."}</p>
+          </div>
+          <span class="status-chip ${status.run_improve ? "status-enabled" : "status-standby"}">${status.run_improve ? "auto" : "manual"}</span>
+        </div>
+      `;
+    }
   } catch (error) {
     githubSyncStatus.textContent = "Error";
     githubSyncStatus.className = "status-chip status-error";
     syncResult.innerHTML = "";
     syncResult.append(emptyState("Could not load sync status", error.message));
+    if (dashboardCronStatus) {
+      dashboardCronStatus.textContent = "Error";
+      dashboardCronMeta.textContent = "sync status failed";
+      dashboardIngestStatus.textContent = "Error";
+      dashboardIngestStatus.className = "status-chip status-error";
+      dashboardIngestionList.innerHTML = "";
+      dashboardIngestionList.append(emptyState("Could not load ingestion", error.message));
+    }
   }
 }
 
@@ -780,6 +1073,7 @@ function renderAccess(snapshot) {
   accessPrincipalList.innerHTML = "";
   accessTokenList.innerHTML = "";
   accessAuditList.innerHTML = "";
+  renderDashboardMcpAccess(snapshot);
 
   if (!snapshot.principals?.length) {
     accessPrincipalList.append(
@@ -847,6 +1141,34 @@ function renderAccess(snapshot) {
     empty.innerHTML = "<strong>No audit events</strong><p>Create or revoke a token to start the trail.</p>";
     accessAuditList.append(empty);
   }
+}
+
+function renderDashboardMcpAccess(snapshot) {
+  if (!dashboardMcpList || !dashboardMcpClients) return;
+  const activeTokens = (snapshot.tokens || []).filter((token) => !token.revoked_at);
+  dashboardMcpClients.textContent = `${activeTokens.length} active`;
+  dashboardMcpMeta.textContent = `${(snapshot.principals || []).length} principals`;
+  dashboardMcpStatus.textContent = "Authorized";
+  dashboardMcpStatus.className = "status-chip status-enabled";
+  dashboardMcpList.innerHTML = "";
+
+  if (!activeTokens.length) {
+    dashboardMcpList.append(emptyState("No MCP tokens", "Create a service-account token for agents."));
+    return;
+  }
+
+  activeTokens.slice(0, 3).forEach((token) => {
+    const item = document.createElement("div");
+    item.className = "entity-item";
+    item.innerHTML = `
+      <div>
+        <strong>${escapeHtml(token.name)}</strong>
+        <p>${escapeHtml(roleLabel(token.role))} - ${escapeHtml((token.scopes || []).slice(0, 3).join(", "))}</p>
+      </div>
+      <span class="status-chip status-enabled">${escapeHtml(token.prefix)}...</span>
+    `;
+    dashboardMcpList.append(item);
+  });
 }
 
 async function revokeAccessToken(tokenId) {
@@ -1245,6 +1567,9 @@ loadSession().then(() => {
   setPage(initialPage());
   loadMesh();
   loadGithubSync();
+  if (canUse("admin")) {
+    loadAccess();
+  }
   connectEvents();
   animateGraph();
 });

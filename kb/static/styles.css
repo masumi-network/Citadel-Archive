@@ -666,7 +666,7 @@ h3 {
   border-top: 1px solid rgba(70, 80, 94, 0.42);
   border-bottom: 1px solid rgba(70, 80, 94, 0.42);
   background:
-    linear-gradient(180deg, rgba(25, 31, 39, 0.98), rgba(12, 15, 20, 0.98)),
+    linear-gradient(180deg, rgba(22, 28, 35, 0.98), rgba(8, 11, 15, 0.99)),
     var(--field);
 }
 
@@ -677,10 +677,29 @@ h3 {
   z-index: 0;
   pointer-events: none;
   background-image:
-    linear-gradient(rgba(139, 199, 255, 0.06) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(139, 199, 255, 0.05) 1px, transparent 1px);
-  background-size: 36px 36px;
-  opacity: 0.28;
+    linear-gradient(rgba(139, 199, 255, 0.035) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(139, 199, 255, 0.03) 1px, transparent 1px),
+    linear-gradient(180deg, transparent 0%, rgba(88, 199, 169, 0.04) 52%, transparent 100%);
+  background-size:
+    42px 42px,
+    42px 42px,
+    100% 100%;
+  opacity: 0.22;
+}
+
+.canvas-wrap::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  background: linear-gradient(
+    90deg,
+    rgba(8, 11, 15, 0.48),
+    transparent 18%,
+    transparent 82%,
+    rgba(8, 11, 15, 0.48)
+  );
 }
 
 #graphCanvas {
@@ -1212,5 +1231,207 @@ textarea[aria-invalid="true"] {
 
   .status-bar {
     overflow-x: auto;
+  }
+}
+
+.dashboard-frame .shell {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.dashboard-frame .sidebar {
+  display: none;
+}
+
+.dashboard-frame .workspace {
+  width: min(1380px, calc(100vw - 28px));
+  margin: 0 auto;
+  padding: 14px 0 18px;
+}
+
+.dashboard-frame .system-tabs {
+  min-width: 0;
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+.dashboard-frame .page {
+  min-height: auto;
+}
+
+.dashboard-page {
+  gap: 12px;
+}
+
+.dashboard-hero {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 16px;
+  align-items: start;
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: rgba(21, 25, 31, 0.9);
+}
+
+.dashboard-hero h2 {
+  margin-top: 4px;
+  font-size: 26px;
+  line-height: 1.12;
+  text-transform: none;
+}
+
+.dashboard-copy {
+  max-width: 760px;
+  margin-top: 8px;
+  color: var(--muted);
+}
+
+.hero-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.inline-primary {
+  width: auto;
+  padding: 0 12px;
+}
+
+.dashboard-metrics {
+  padding: 0;
+  overflow: hidden;
+}
+
+.dashboard-stats {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 1px;
+  background: var(--border);
+}
+
+.dashboard-stats div {
+  border: 0;
+  border-radius: 0;
+  padding: 13px;
+  background: rgba(21, 25, 31, 0.96);
+}
+
+.dashboard-stats span {
+  display: block;
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.hidden-stats {
+  display: none;
+}
+
+.dashboard-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.45fr) minmax(320px, 0.55fr);
+  gap: 12px;
+}
+
+.dashboard-graph {
+  min-height: 590px;
+}
+
+.dashboard-graph .canvas-wrap {
+  min-height: 458px;
+}
+
+.dashboard-side {
+  display: grid;
+  gap: 12px;
+  align-content: start;
+}
+
+.dashboard-card {
+  min-height: 0;
+}
+
+.dashboard-bottom {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.dashboard-event-card {
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-raised);
+}
+
+.dashboard-event-card strong {
+  display: block;
+  margin-bottom: 4px;
+}
+
+.dashboard-event-card p {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.issue-card {
+  border-color: rgba(255, 131, 122, 0.42);
+  background: rgba(255, 131, 122, 0.08);
+}
+
+@media (max-width: 1120px) {
+  .dashboard-frame .workspace {
+    width: min(100vw - 24px, 1380px);
+  }
+
+  .dashboard-grid,
+  .dashboard-bottom,
+  .dashboard-hero {
+    grid-template-columns: 1fr;
+  }
+
+  .hero-actions {
+    justify-content: flex-start;
+    flex-wrap: wrap;
+  }
+}
+
+@media (max-width: 780px) {
+  .dashboard-frame .system-bar {
+    overflow: hidden;
+  }
+
+  .dashboard-frame .system-tabs {
+    width: 100%;
+  }
+
+  .dashboard-frame .system-status {
+    max-width: 100%;
+    overflow-x: auto;
+  }
+
+  .dashboard-frame .workspace {
+    padding: 10px 0 16px;
+  }
+
+  .dashboard-stats {
+    grid-template-columns: 1fr;
+  }
+
+  .dashboard-hero h2 {
+    font-size: 22px;
+  }
+
+  .dashboard-graph {
+    min-height: 540px;
+  }
+
+  .dashboard-graph .canvas-wrap {
+    min-height: 390px;
+  }
+
+  .hero-actions,
+  .hero-actions button {
+    width: 100%;
   }
 }

@@ -7,32 +7,27 @@
     <link rel="stylesheet" href="/static/styles.css" />
   </head>
   <body>
-    <div class="app-frame">
+    <div class="app-frame dashboard-frame">
       <header class="system-bar">
         <div class="system-brand">
-          <div class="window-controls" aria-hidden="true">
-            <span></span>
-            <span></span>
-            <span></span>
-          </div>
           <div class="brand compact">
             <div class="brand-mark" aria-hidden="true">CA</div>
             <div>
-              <h1>Citadel Archive</h1>
-              <p>Knowledge operating console</p>
+              <h1>Citadel Knowledge Dashboard</h1>
+              <p>Live GraphRAG memory and MCP access</p>
             </div>
           </div>
         </div>
 
         <nav class="system-tabs" aria-label="Primary pages">
-          <button class="nav-link" data-page-target="overview" type="button">Overview</button>
+          <button class="nav-link" data-page-target="overview" type="button">Dashboard</button>
           <button class="nav-link" data-page-target="search" type="button">Search</button>
           <button class="nav-link" data-page-target="ingest" data-min-role="writer" type="button">
             Ingest
           </button>
           <button class="nav-link" data-page-target="sources" type="button">Sources</button>
           <button class="nav-link" data-page-target="access" data-min-role="admin" type="button">
-            Access
+            MCP Tokens
           </button>
         </nav>
 
@@ -96,64 +91,156 @@
         </aside>
 
         <main class="workspace">
-          <section class="page page-active" data-page="overview" aria-labelledby="overviewTitle">
-            <div class="page-heading">
+          <section class="page page-active dashboard-page" data-page="overview" aria-labelledby="overviewTitle">
+            <div class="dashboard-hero">
               <div>
-                <p class="eyebrow">Overview</p>
-                <h2 id="overviewTitle">System State</h2>
+                <p class="eyebrow">Dashboard</p>
+                <h2 id="overviewTitle">Shared architecture knowledge base</h2>
+                <p class="dashboard-copy">
+                  Raw sources sync into indexed memory, the live GraphRAG map links them together,
+                  and authorized MCP clients can fetch or add context.
+                </p>
               </div>
-              <span id="runtimeStatus" class="status-chip status-standby">Booting</span>
-            </div>
-
-            <section class="metrics-window" aria-label="Runtime metrics">
-              <dl class="stats">
-                <div><dt>Nodes</dt><dd id="statNodes">0</dd></div>
-                <div><dt>Edges</dt><dd id="statEdges">0</dd></div>
-                <div><dt>Memory</dt><dd id="statDocuments">0</dd></div>
-                <div><dt>Searches</dt><dd id="statSearches">0</dd></div>
-                <div><dt>Feedback</dt><dd id="statFeedback">0</dd></div>
-                <div><dt>Upgrades</dt><dd id="statUpgrades">0</dd></div>
-                <div><dt>Errors</dt><dd id="statErrors">0</dd></div>
-              </dl>
-            </section>
-
-            <section id="mesh" class="graph-panel window" aria-labelledby="graphTitle">
-              <div class="window-titlebar graph-toolbar">
-                <div>
-                  <p class="eyebrow">Knowledge operations</p>
-                  <h2 id="graphTitle">Knowledge Mesh</h2>
-                  <p id="graphMeta">Waiting for snapshot</p>
-                </div>
-                <div class="toolbar-actions">
-                  <button id="fitButton" class="secondary-button" type="button">Fit</button>
-                  <button id="pauseButton" class="secondary-button" type="button">Pause</button>
-                </div>
-              </div>
-              <div id="meshAlert" class="inline-alert" hidden>
-                <div>
-                  <strong>Could not load the mesh</strong>
-                  <p id="meshAlertText">Try refreshing the dashboard.</p>
-                </div>
-                <button id="meshRetryButton" class="secondary-button compact-button" type="button">
-                  Retry
+              <div class="hero-actions">
+                <span id="runtimeStatus" class="status-chip status-standby">Booting</span>
+                <button class="secondary-button" data-page-target="sources" type="button">Open indexing</button>
+                <button class="primary-button inline-primary" data-page-target="access" data-min-role="admin" type="button">
+                  Manage MCP
                 </button>
               </div>
-              <div class="canvas-wrap">
-                <canvas
-                  id="graphCanvas"
-                  width="1200"
-                  height="800"
-                  tabindex="0"
-                  aria-label="Live knowledge graph visualization"
-                ></canvas>
-                <div id="canvasEmpty" class="canvas-empty" hidden>
-                  <h3>No mesh activity yet</h3>
-                  <p>Ingest a memory or run the GitHub sync to create the first nodes.</p>
+            </div>
+
+            <section class="metrics-window dashboard-metrics" aria-label="Dashboard status">
+              <dl class="stats dashboard-stats">
+                <div><dt>Cron job</dt><dd id="dashboardCronStatus">Checking</dd><span id="dashboardCronMeta">sync status</span></div>
+                <div><dt>Indexed memory</dt><dd id="statDocuments">0</dd><span>accepted records</span></div>
+                <div><dt>Graph nodes</dt><dd id="statNodes">0</dd><span id="statEdgesMeta"><span id="statEdges">0</span> edges</span></div>
+                <div><dt>MCP clients</dt><dd id="dashboardMcpClients">Role-gated</dd><span id="dashboardMcpMeta">admin only</span></div>
+              </dl>
+              <div class="hidden-stats" aria-hidden="true">
+                <span id="statSearches">0</span>
+                <span id="statFeedback">0</span>
+                <span id="statUpgrades">0</span>
+                <span id="statErrors">0</span>
+              </div>
+            </section>
+
+            <div class="dashboard-grid">
+              <section id="mesh" class="graph-panel window dashboard-graph" aria-labelledby="graphTitle">
+                <div class="window-titlebar graph-toolbar">
+                  <div>
+                    <p class="eyebrow">Live GraphRAG</p>
+                    <h2 id="graphTitle">Knowledge graph</h2>
+                    <p id="graphMeta">Waiting for snapshot</p>
+                  </div>
+                  <div class="toolbar-actions">
+                    <span class="status-chip status-enabled">Live</span>
+                    <button id="fitButton" class="secondary-button" type="button">Fit</button>
+                    <button id="pauseButton" class="secondary-button" type="button">Pause</button>
+                  </div>
                 </div>
-              </div>
-              <div id="selectedNode" class="selection" aria-live="polite">
-                Select a node to inspect it.
-              </div>
+                <div id="meshAlert" class="inline-alert" hidden>
+                  <div>
+                    <strong>Could not load the mesh</strong>
+                    <p id="meshAlertText">Try refreshing the dashboard.</p>
+                  </div>
+                  <button id="meshRetryButton" class="secondary-button compact-button" type="button">
+                    Retry
+                  </button>
+                </div>
+                <div class="canvas-wrap">
+                  <canvas
+                    id="graphCanvas"
+                    width="1200"
+                    height="800"
+                    tabindex="0"
+                    aria-label="Live knowledge graph visualization"
+                  ></canvas>
+                  <div id="canvasEmpty" class="canvas-empty" hidden>
+                    <h3>No mesh activity yet</h3>
+                    <p>Ingest a memory or run the GitHub sync to create the first nodes.</p>
+                  </div>
+                </div>
+                <div id="selectedNode" class="selection" aria-live="polite">
+                  Select a node to inspect it.
+                </div>
+              </section>
+
+              <aside class="dashboard-side" aria-label="Dashboard operations">
+                <section class="window action-panel dashboard-card">
+                  <div class="window-titlebar panel-heading">
+                    <div>
+                      <h2>Ingestion Queue</h2>
+                      <p class="panel-kicker">Cron, raw sources, indexing</p>
+                    </div>
+                    <span id="dashboardIngestStatus" class="status-chip status-standby">Checking</span>
+                  </div>
+                  <div id="dashboardIngestionList" class="entity-list">
+                    <div class="entity-item">
+                      <div>
+                        <strong>GitHub source</strong>
+                        <p>Waiting for sync status.</p>
+                      </div>
+                      <span class="status-chip">Pending</span>
+                    </div>
+                  </div>
+                </section>
+
+                <section class="window action-panel dashboard-card">
+                  <div class="window-titlebar panel-heading">
+                    <div>
+                      <h2>MCP Access</h2>
+                      <p class="panel-kicker">Token-gated graph access</p>
+                    </div>
+                    <span id="dashboardMcpStatus" class="status-chip">Locked</span>
+                  </div>
+                  <div id="dashboardMcpList" class="entity-list">
+                    <div class="entity-item">
+                      <div>
+                        <strong>Current session</strong>
+                        <p>Resolving role and scopes.</p>
+                      </div>
+                      <span class="status-chip">Checking</span>
+                    </div>
+                  </div>
+                </section>
+              </aside>
+            </div>
+
+            <section class="dashboard-bottom">
+              <article class="window action-panel">
+                <div class="window-titlebar">
+                  <div>
+                    <h2>Recent Learning</h2>
+                    <p class="panel-kicker">Latest graph event</p>
+                  </div>
+                </div>
+                <div id="dashboardRecentLearning" class="empty-state compact-empty">
+                  <strong>No events yet</strong>
+                  <p>Run sync, ingest, or search to teach the graph.</p>
+                </div>
+              </article>
+              <article class="window action-panel">
+                <div class="window-titlebar">
+                  <div>
+                    <h2>Retrieval Health</h2>
+                    <p class="panel-kicker">Graph, vector, feedback, global context</p>
+                  </div>
+                </div>
+                <div id="dashboardIndexSummary" class="entity-list"></div>
+              </article>
+              <article class="window action-panel">
+                <div class="window-titlebar">
+                  <div>
+                    <h2>Open Issue</h2>
+                    <p class="panel-kicker">Operational attention</p>
+                  </div>
+                </div>
+                <div id="dashboardOpenIssue" class="empty-state compact-empty">
+                  <strong>Checking status</strong>
+                  <p>Dashboard will flag sync, access, or indexing errors here.</p>
+                </div>
+              </article>
             </section>
           </section>
 
