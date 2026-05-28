@@ -227,6 +227,7 @@ def test_ui_shell_is_served_after_login() -> None:
     assert "Citadel Archive" in response.text
     assert "Citadel Vault" in response.text
     assert "Source Sync" in response.text
+    assert "Obsidian Vaults" in response.text
 
 
 def test_admin_can_create_and_use_scoped_access_token(tmp_path: Any) -> None:

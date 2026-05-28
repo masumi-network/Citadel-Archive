@@ -1,0 +1,23 @@
+.citadel-pane {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 12px;
+}
+
+.citadel-search-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+}
+
+.citadel-result {
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 6px;
+  padding: 10px;
+}
+
+.citadel-result pre {
+  margin: 6px 0 0;
+  white-space: pre-wrap;
+}

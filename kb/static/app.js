@@ -32,6 +32,10 @@ const syncTrackedRepos = document.getElementById("syncTrackedRepos");
 const githubSourceLink = document.getElementById("githubSourceLink");
 const syncRunSummary = document.getElementById("syncRunSummary");
 const syncResult = document.getElementById("syncResult");
+const obsidianVaultCount = document.getElementById("obsidianVaultCount");
+const obsidianDocumentCount = document.getElementById("obsidianDocumentCount");
+const obsidianSourceStatus = document.getElementById("obsidianSourceStatus");
+const obsidianSourceList = document.getElementById("obsidianSourceList");
 const feedbackStatus = document.getElementById("feedbackStatus");
 const feedbackResult = document.getElementById("feedbackResult");
 const accessTokenStatus = document.getElementById("accessTokenStatus");
@@ -156,6 +160,12 @@ function applyAccessControls() {
     const allowed = canUse(element.dataset.minRole);
     if (element.classList.contains("nav-link")) {
       element.disabled = !allowed;
+      return;
+    }
+    if (element.matches("form, fieldset")) {
+      element.querySelectorAll("button, input, textarea, select").forEach((control) => {
+        control.disabled = !allowed;
+      });
       return;
     }
     if (element.matches("button, input, textarea, select")) {
@@ -1052,6 +1062,66 @@ async function loadGithubSync() {
   }
 }
 
+async function loadObsidianSources() {
+  if (!obsidianSourceStatus || !obsidianSourceList) return;
+  try {
+    const payload = await api("/api/sources?type=obsidian_vault");
+    const summary = payload.summary || {};
+    const sources = payload.sources || [];
+    const vaults = Number(summary.obsidian_vaults || 0);
+    const documents = Number(summary.obsidian_documents || 0);
+    const conflicts = Number(summary.open_conflicts || 0);
+    obsidianVaultCount.textContent = String(vaults);
+    obsidianDocumentCount.textContent = String(documents);
+    obsidianSourceStatus.textContent = conflicts ? "Conflict" : vaults ? "Connected" : "Ready";
+    obsidianSourceStatus.className = `status-chip ${
+      conflicts ? "status-error" : vaults ? "status-enabled" : "status-standby"
+    }`;
+    obsidianSourceList.innerHTML = "";
+
+    if (!sources.length) {
+      obsidianSourceList.append(emptyState("No Obsidian vaults", "Register a team vault source."));
+    } else {
+      sources.forEach((source) => {
+        const item = document.createElement("div");
+        item.className = "entity-item";
+        item.innerHTML = `
+          <div>
+            <strong>${escapeHtml(source.name || "Obsidian vault")}</strong>
+            <p>${escapeHtml(source.documents || 0)} notes · ${escapeHtml(formatDate(source.last_push_at))}</p>
+          </div>
+          <span class="status-chip ${
+            source.open_conflicts ? "status-error" : "status-enabled"
+          }">${source.open_conflicts ? "conflict" : "synced"}</span>
+        `;
+        obsidianSourceList.append(item);
+      });
+    }
+
+    if (dashboardIngestionList && sources.length) {
+      sources.slice(0, 2).forEach((source) => {
+        const item = document.createElement("div");
+        item.className = "entity-item";
+        item.innerHTML = `
+          <div>
+            <strong>${escapeHtml(source.name || "Obsidian vault")}</strong>
+            <p>${escapeHtml(source.documents || 0)} synced notes from the team vault.</p>
+          </div>
+          <span class="status-chip ${
+            source.open_conflicts ? "status-error" : "status-enabled"
+          }">${source.open_conflicts ? "review" : "ready"}</span>
+        `;
+        dashboardIngestionList.append(item);
+      });
+    }
+  } catch (error) {
+    obsidianSourceStatus.textContent = "Error";
+    obsidianSourceStatus.className = "status-chip status-error";
+    obsidianSourceList.innerHTML = "";
+    obsidianSourceList.append(emptyState("Could not load Obsidian sources", error.message));
+  }
+}
+
 async function loadAccess() {
   if (!canUse("admin")) return;
   accessTokenStatus.textContent = "Loading";
@@ -1211,6 +1281,7 @@ function connectEvents() {
 document.getElementById("refreshButton").addEventListener("click", () => {
   loadMesh();
   loadGithubSync();
+  loadObsidianSources();
 });
 document.getElementById("meshRetryButton").addEventListener("click", () => loadMesh());
 document.getElementById("fitButton").addEventListener("click", () => {
@@ -1328,6 +1399,42 @@ document.getElementById("githubSyncButton").addEventListener("click", async (eve
     syncRunSummary.className = "status-chip status-error";
   } finally {
     setBusy(button, false, { idle: "Run GitHub sync", loading: "Syncing" });
+  }
+});
+
+document.getElementById("obsidianVaultForm").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const formData = new FormData(form);
+  const button = document.getElementById("obsidianVaultSubmit");
+  const error = document.getElementById("obsidianSourceError");
+  const vaultName = String(formData.get("vaultName") || "").trim();
+  error.textContent = "";
+  if (!vaultName) {
+    error.textContent = "Add a vault name.";
+    form.querySelector("[name='vaultName']").focus();
+    return;
+  }
+  obsidianSourceStatus.textContent = "Registering";
+  obsidianSourceStatus.className = "status-chip status-standby";
+  setBusy(button, true, { idle: "Register vault", loading: "Registering" });
+  try {
+    await api("/api/obsidian/vaults", {
+      method: "POST",
+      body: JSON.stringify({
+        vault_name: vaultName,
+        team_id: String(formData.get("teamId") || "").trim() || null,
+        plugin_version: "web",
+      }),
+    });
+    form.reset();
+    await Promise.all([loadObsidianSources(), loadMesh(false)]);
+  } catch (err) {
+    error.textContent = err.message;
+    obsidianSourceStatus.textContent = "Failed";
+    obsidianSourceStatus.className = "status-chip status-error";
+  } finally {
+    setBusy(button, false, { idle: "Register vault", loading: "Registering" });
   }
 });
 
@@ -1567,6 +1674,7 @@ loadSession().then(() => {
   setPage(initialPage());
   loadMesh();
   loadGithubSync();
+  loadObsidianSources();
   if (canUse("admin")) {
     loadAccess();
   }

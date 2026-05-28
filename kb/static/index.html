@@ -99,7 +99,7 @@
               <div class="panel-heading">
                 <div>
                   <h2>Shared Source</h2>
-                  <p class="panel-kicker">Daily Masumi repository scan</p>
+                  <p class="panel-kicker">Repository and Obsidian vaults</p>
                 </div>
                 <span id="githubSyncStatus" class="status-chip">Loading</span>
               </div>
@@ -111,6 +111,14 @@
                 <div>
                   <dt>Repos</dt>
                   <dd id="syncTrackedRepos">0</dd>
+                </div>
+                <div>
+                  <dt>Vaults</dt>
+                  <dd id="obsidianVaultCount">0</dd>
+                </div>
+                <div>
+                  <dt>Notes</dt>
+                  <dd id="obsidianDocumentCount">0</dd>
                 </div>
               </dl>
             </section>
@@ -515,6 +523,51 @@
                   Run GitHub sync
                 </button>
                 <div id="syncResult" class="sync-result" aria-live="polite"></div>
+              </section>
+
+              <section class="window action-panel">
+                <div class="window-titlebar panel-heading">
+                  <div>
+                    <h2>Obsidian Vaults</h2>
+                    <p class="panel-kicker">Team plugin source</p>
+                  </div>
+                  <span id="obsidianSourceStatus" class="status-chip">Loading</span>
+                </div>
+                <form id="obsidianVaultForm" class="form compact-form" data-min-role="writer">
+                  <div class="field-grid compact">
+                    <div class="field">
+                      <label for="obsidianVaultName">Vault name</label>
+                      <input
+                        id="obsidianVaultName"
+                        name="vaultName"
+                        type="text"
+                        autocomplete="off"
+                        placeholder="Team Vault"
+                        required
+                      />
+                    </div>
+                    <div class="field">
+                      <label for="obsidianTeamId">Team scope</label>
+                      <input
+                        id="obsidianTeamId"
+                        name="teamId"
+                        type="text"
+                        autocomplete="off"
+                        placeholder="masumi"
+                      />
+                    </div>
+                  </div>
+                  <p id="obsidianSourceError" class="form-error" role="alert"></p>
+                  <button id="obsidianVaultSubmit" class="primary-button" type="submit">
+                    Register vault
+                  </button>
+                </form>
+                <div id="obsidianSourceList" class="entity-list source-list" aria-live="polite">
+                  <div class="empty-state compact-empty">
+                    <strong>Checking vaults</strong>
+                    <p>Loading Obsidian source state.</p>
+                  </div>
+                </div>
               </section>
 
               <section class="window action-panel">

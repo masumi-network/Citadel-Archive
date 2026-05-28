@@ -1,0 +1,17 @@
+{
+  "name": "citadel-archive-obsidian",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Obsidian companion plugin for Citadel Archive.",
+  "scripts": {
+    "build": "tsc -noEmit -skipLibCheck && node esbuild.config.mjs production",
+    "dev": "node esbuild.config.mjs"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "builtin-modules": "^4.0.0",
+    "esbuild": "^0.24.0",
+    "obsidian": "^1.8.7",
+    "typescript": "^5.7.0"
+  }
+}

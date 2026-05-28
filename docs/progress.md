@@ -9,6 +9,8 @@ Last updated: 2026-05-28.
   tokens.
 - Researched the official `obsidianmd` GitHub organization and documented the
   sync/plugin integration path in `docs/obsidian-integration-plan.md`.
+- Added the Obsidian vault sync API, source status endpoint, revision/conflict
+  store, UI source panel, and private beta plugin scaffold.
 - Verified the web UI with browser render checks and backend tests with
   `uv run pytest`.
 

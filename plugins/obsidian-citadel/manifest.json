@@ -1,0 +1,10 @@
+{
+  "id": "citadel-archive",
+  "name": "Citadel Archive",
+  "version": "0.1.0",
+  "minAppVersion": "1.11.4",
+  "description": "Connect an Obsidian vault to a Citadel shared knowledge base.",
+  "author": "Citadel Archive",
+  "authorUrl": "https://github.com/sarthib7",
+  "isDesktopOnly": false
+}

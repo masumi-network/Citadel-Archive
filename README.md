@@ -60,9 +60,16 @@ Core API endpoints:
 - `GET /api/session`
 - `GET /api/mesh`
 - `GET /api/indexes`
+- `GET /api/sources`
 - `GET /api/github-sync`
 - `GET /api/learning-agent`
 - `GET /events`
+- `POST /api/obsidian/vaults`
+- `GET /api/obsidian/manifest`
+- `POST /api/obsidian/sync/push`
+- `GET /api/obsidian/sync/pull`
+- `POST /api/obsidian/conflicts/{conflict_id}/resolve`
+- `GET /api/documents/{document_id}`
 - `POST /ingest`
 - `POST /search`
 - `POST /feedback`
@@ -126,6 +133,24 @@ Use the Access page to create a user or service-account token. The token is
 shown once; Citadel stores only its hash, prefix, role, scopes, expiry, and
 last-used timestamp. Existing env keys remain the bootstrap/local fallback.
 API and MCP clients can pass the token with `Authorization: Bearer <token>`.
+
+## Obsidian Vault Sync
+
+Citadel includes an Obsidian-compatible source path for team vaults. The server
+stores vault registration, document hashes, revisions, sync cursors, and
+conflicts in:
+
+```bash
+CITADEL_OBSIDIAN_SYNC_STATE_PATH=/data/.citadel/obsidian_sync_state.json
+```
+
+The first sync mode is explicit push from an Obsidian plugin or API client. It
+does not silently crawl a full vault and it does not overwrite local Obsidian
+files from the server.
+
+The private beta plugin scaffold lives in `plugins/obsidian-citadel/`. It uses
+Obsidian `SecretStorage` for Citadel bearer tokens, `requestUrl` for HTTP, and
+the Vault APIs for note reads/frontmatter updates.
 
 Admin APIs:
 

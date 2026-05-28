@@ -753,6 +753,7 @@ h3 {
 }
 
 .index-list,
+.source-list,
 .event-list,
 .results,
 .form {
@@ -761,8 +762,13 @@ h3 {
   gap: 10px;
 }
 
-.index-list {
+.index-list,
+.source-list {
   margin-top: 12px;
+}
+
+.compact-form {
+  gap: 10px;
 }
 
 .index-item,
