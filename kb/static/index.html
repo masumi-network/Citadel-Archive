@@ -13,21 +13,21 @@
           <div class="brand compact">
             <div class="brand-mark" aria-hidden="true">CA</div>
             <div>
-              <h1>Citadel Knowledge Dashboard</h1>
-              <p>Live GraphRAG memory and MCP access</p>
+              <h1>Citadel Vault</h1>
+              <p>Shared knowledge base</p>
             </div>
           </div>
         </div>
 
         <nav class="system-tabs" aria-label="Primary pages">
-          <button class="nav-link" data-page-target="overview" type="button">Dashboard</button>
+          <button class="nav-link" data-page-target="overview" type="button">Graph</button>
           <button class="nav-link" data-page-target="search" type="button">Search</button>
           <button class="nav-link" data-page-target="ingest" data-min-role="writer" type="button">
-            Ingest
+            New note
           </button>
           <button class="nav-link" data-page-target="sources" type="button">Sources</button>
           <button class="nav-link" data-page-target="access" data-min-role="admin" type="button">
-            MCP Tokens
+            Access
           </button>
         </nav>
 
@@ -43,79 +43,113 @@
 
       <div class="shell">
         <aside class="sidebar" aria-label="Workspace navigation">
-          <section class="rail-card role-card">
-            <div class="panel-heading">
-              <div>
-                <h2>Workspace</h2>
-                <p id="roleSummary" class="panel-kicker">Resolving access</p>
-              </div>
-              <span id="accessMode" class="status-chip">Locked</span>
-            </div>
-          </section>
-
-          <nav class="system-map" aria-label="Workspace pages">
-            <button class="nav-link" data-page-target="overview" type="button">Overview</button>
-            <button class="nav-link" data-page-target="search" type="button">Search</button>
-            <button class="nav-link" data-page-target="ingest" data-min-role="writer" type="button">
-              Ingest
+          <nav class="vault-ribbon" aria-label="Quick commands">
+            <button class="ribbon-button" data-page-target="overview" aria-label="Open graph view" type="button">G</button>
+            <button class="ribbon-button" data-page-target="search" aria-label="Search vault" type="button">S</button>
+            <button
+              class="ribbon-button"
+              data-page-target="ingest"
+              data-min-role="writer"
+              aria-label="Create note"
+              type="button"
+            >
+              +
             </button>
-            <button class="nav-link" data-page-target="feedback" data-min-role="writer" type="button">
-              Feedback
-            </button>
-            <button class="nav-link" data-page-target="sources" type="button">Sources</button>
-            <button class="nav-link" data-page-target="events" type="button">Events</button>
-            <button class="nav-link" data-page-target="access" data-min-role="admin" type="button">
-              Access
+            <button class="ribbon-button" data-page-target="sources" aria-label="Open sources" type="button">R</button>
+            <button
+              class="ribbon-button"
+              data-page-target="access"
+              data-min-role="admin"
+              aria-label="Open access settings"
+              type="button"
+            >
+              A
             </button>
           </nav>
 
-          <section class="rail-card source-panel">
-            <div class="panel-heading">
-              <div>
-                <h2>GitHub Source</h2>
-                <p class="panel-kicker">Daily Masumi scan</p>
+          <div class="vault-sidebar-content">
+            <section class="rail-card role-card">
+              <div class="panel-heading">
+                <div>
+                  <h2>Vault</h2>
+                  <p id="roleSummary" class="panel-kicker">Resolving access</p>
+                </div>
+                <span id="accessMode" class="status-chip">Locked</span>
               </div>
-              <span id="githubSyncStatus" class="status-chip">Loading</span>
-            </div>
-            <dl class="source-meta">
-              <div>
-                <dt>Last check</dt>
-                <dd id="syncLastChecked">Waiting</dd>
+            </section>
+
+            <nav class="system-map" aria-label="Workspace pages">
+              <div class="vault-section-label">Files</div>
+              <button class="nav-link" data-page-target="overview" type="button">00 Graph overview</button>
+              <button class="nav-link" data-page-target="search" type="button">01 Vault search</button>
+              <button class="nav-link" data-page-target="ingest" data-min-role="writer" type="button">
+                02 New memory
+              </button>
+              <button class="nav-link" data-page-target="feedback" data-min-role="writer" type="button">
+                03 Feedback notes
+              </button>
+              <button class="nav-link" data-page-target="sources" type="button">04 Sources</button>
+              <button class="nav-link" data-page-target="events" type="button">05 Activity log</button>
+              <button class="nav-link" data-page-target="access" data-min-role="admin" type="button">
+                06 Access keys
+              </button>
+            </nav>
+
+            <section class="rail-card source-panel">
+              <div class="panel-heading">
+                <div>
+                  <h2>Shared Source</h2>
+                  <p class="panel-kicker">Daily Masumi repository scan</p>
+                </div>
+                <span id="githubSyncStatus" class="status-chip">Loading</span>
               </div>
-              <div>
-                <dt>Repos</dt>
-                <dd id="syncTrackedRepos">0</dd>
-              </div>
-            </dl>
-          </section>
+              <dl class="source-meta">
+                <div>
+                  <dt>Last check</dt>
+                  <dd id="syncLastChecked">Waiting</dd>
+                </div>
+                <div>
+                  <dt>Repos</dt>
+                  <dd id="syncTrackedRepos">0</dd>
+                </div>
+              </dl>
+            </section>
+
+            <section class="rail-card vault-links" aria-label="Pinned vault links">
+              <div class="vault-section-label">Pinned</div>
+              <a href="#overview">[[Architecture graph]]</a>
+              <a href="#sources">[[Repository digest]]</a>
+              <a href="#access">[[Agent access]]</a>
+            </section>
+          </div>
         </aside>
 
         <main class="workspace">
           <section class="page page-active dashboard-page" data-page="overview" aria-labelledby="overviewTitle">
             <div class="dashboard-hero">
               <div>
-                <p class="eyebrow">Dashboard</p>
-                <h2 id="overviewTitle">Shared architecture knowledge base</h2>
+                <p class="eyebrow">Global graph</p>
+                <h2 id="overviewTitle">Shared knowledge vault</h2>
                 <p class="dashboard-copy">
-                  Raw sources sync into indexed memory, the live GraphRAG map links them together,
-                  and authorized MCP clients can fetch or add context.
+                  Source digests, decisions, feedback, and agent notes resolve into one linked
+                  memory space for the Masumi team.
                 </p>
               </div>
               <div class="hero-actions">
                 <span id="runtimeStatus" class="status-chip status-standby">Booting</span>
-                <button class="secondary-button" data-page-target="sources" type="button">Open indexing</button>
+                <button class="secondary-button" data-page-target="sources" type="button">Open sources</button>
                 <button class="primary-button inline-primary" data-page-target="access" data-min-role="admin" type="button">
-                  Manage MCP
+                  Share access
                 </button>
               </div>
             </div>
 
             <section class="metrics-window dashboard-metrics" aria-label="Dashboard status">
               <dl class="stats dashboard-stats">
-                <div><dt>Cron job</dt><dd id="dashboardCronStatus">Checking</dd><span id="dashboardCronMeta">sync status</span></div>
-                <div><dt>Indexed memory</dt><dd id="statDocuments">0</dd><span>accepted records</span></div>
-                <div><dt>Graph nodes</dt><dd id="statNodes">0</dd><span id="statEdgesMeta"><span id="statEdges">0</span> edges</span></div>
-                <div><dt>MCP clients</dt><dd id="dashboardMcpClients">Role-gated</dd><span id="dashboardMcpMeta">admin only</span></div>
+                <div><dt>Daily sync</dt><dd id="dashboardCronStatus">Checking</dd><span id="dashboardCronMeta">sync status</span></div>
+                <div><dt>Notes indexed</dt><dd id="statDocuments">0</dd><span>accepted records</span></div>
+                <div><dt>Linked nodes</dt><dd id="statNodes">0</dd><span id="statEdgesMeta"><span id="statEdges">0</span> edges</span></div>
+                <div><dt>Shared access</dt><dd id="dashboardMcpClients">Role-gated</dd><span id="dashboardMcpMeta">admin only</span></div>
               </dl>
               <div class="hidden-stats" aria-hidden="true">
                 <span id="statSearches">0</span>
@@ -129,8 +163,8 @@
               <section id="mesh" class="graph-panel window dashboard-graph" aria-labelledby="graphTitle">
                 <div class="window-titlebar graph-toolbar">
                   <div>
-                    <p class="eyebrow">Live GraphRAG</p>
-                    <h2 id="graphTitle">Knowledge graph</h2>
+                    <p class="eyebrow">Linked memory</p>
+                    <h2 id="graphTitle">Vault graph</h2>
                     <p id="graphMeta">Waiting for snapshot</p>
                   </div>
                   <div class="toolbar-actions">
@@ -141,8 +175,8 @@
                 </div>
                 <div id="meshAlert" class="inline-alert" hidden>
                   <div>
-                    <strong>Could not load the mesh</strong>
-                    <p id="meshAlertText">Try refreshing the dashboard.</p>
+                    <strong>Could not load the vault graph</strong>
+                    <p id="meshAlertText">Try refreshing the vault.</p>
                   </div>
                   <button id="meshRetryButton" class="secondary-button compact-button" type="button">
                     Retry
@@ -157,12 +191,12 @@
                     aria-label="Live knowledge graph visualization"
                   ></canvas>
                   <div id="canvasEmpty" class="canvas-empty" hidden>
-                    <h3>No mesh activity yet</h3>
-                    <p>Ingest a memory or run the GitHub sync to create the first nodes.</p>
+                    <h3>No graph notes yet</h3>
+                    <p>Ingest a memory or run source sync to create the first linked nodes.</p>
                   </div>
                 </div>
                 <div id="selectedNode" class="selection" aria-live="polite">
-                  Select a node to inspect it.
+                  Select a note or node to inspect its links.
                 </div>
               </section>
 
@@ -170,15 +204,15 @@
                 <section class="window action-panel dashboard-card">
                   <div class="window-titlebar panel-heading">
                     <div>
-                      <h2>Ingestion Queue</h2>
-                      <p class="panel-kicker">Cron, raw sources, indexing</p>
+                      <h2>Inbox</h2>
+                      <p class="panel-kicker">Sources waiting to become notes</p>
                     </div>
                     <span id="dashboardIngestStatus" class="status-chip status-standby">Checking</span>
                   </div>
                   <div id="dashboardIngestionList" class="entity-list">
                     <div class="entity-item">
                       <div>
-                        <strong>GitHub source</strong>
+                        <strong>Source inbox</strong>
                         <p>Waiting for sync status.</p>
                       </div>
                       <span class="status-chip">Pending</span>
@@ -189,8 +223,8 @@
                 <section class="window action-panel dashboard-card">
                   <div class="window-titlebar panel-heading">
                     <div>
-                      <h2>MCP Access</h2>
-                      <p class="panel-kicker">Token-gated graph access</p>
+                      <h2>Shared Access</h2>
+                      <p class="panel-kicker">Team and agent readers</p>
                     </div>
                     <span id="dashboardMcpStatus" class="status-chip">Locked</span>
                   </div>
@@ -211,19 +245,19 @@
               <article class="window action-panel">
                 <div class="window-titlebar">
                   <div>
-                    <h2>Recent Learning</h2>
-                    <p class="panel-kicker">Latest graph event</p>
+                    <h2>Recent Note</h2>
+                    <p class="panel-kicker">Latest vault activity</p>
                   </div>
                 </div>
                 <div id="dashboardRecentLearning" class="empty-state compact-empty">
                   <strong>No events yet</strong>
-                  <p>Run sync, ingest, or search to teach the graph.</p>
+                  <p>Run sync, save a note, or search to teach the vault.</p>
                 </div>
               </article>
               <article class="window action-panel">
                 <div class="window-titlebar">
                   <div>
-                    <h2>Retrieval Health</h2>
+                    <h2>Retrieval Map</h2>
                     <p class="panel-kicker">Graph, vector, feedback, global context</p>
                   </div>
                 </div>
@@ -232,13 +266,13 @@
               <article class="window action-panel">
                 <div class="window-titlebar">
                   <div>
-                    <h2>Open Issue</h2>
+                    <h2>Needs Review</h2>
                     <p class="panel-kicker">Operational attention</p>
                   </div>
                 </div>
                 <div id="dashboardOpenIssue" class="empty-state compact-empty">
                   <strong>Checking status</strong>
-                  <p>Dashboard will flag sync, access, or indexing errors here.</p>
+                  <p>The vault will flag sync, access, or indexing errors here.</p>
                 </div>
               </article>
             </section>
@@ -248,14 +282,14 @@
             <div class="page-heading">
               <div>
                 <p class="eyebrow">Recall</p>
-                <h2 id="searchTitle">Search</h2>
+                <h2 id="searchTitle">Vault Search</h2>
               </div>
             </div>
             <div class="page-grid">
               <section id="search" class="window action-panel">
                 <div class="window-titlebar">
                   <div>
-                    <h2>Search</h2>
+                    <h2>Search Notes</h2>
                     <p class="panel-kicker">Recall graph and vector memory</p>
                   </div>
                 </div>
@@ -268,7 +302,7 @@
                       type="search"
                       required
                       autocomplete="off"
-                      placeholder="What changed in the archive?"
+                      placeholder="What should the vault remember?"
                       aria-describedby="searchError"
                     />
                   </div>
@@ -290,15 +324,15 @@
                     </div>
                   </div>
                   <p id="searchError" class="form-error" role="alert"></p>
-                  <button id="searchSubmit" class="primary-button" type="submit">Search mesh</button>
+                  <button id="searchSubmit" class="primary-button" type="submit">Search vault</button>
                 </form>
               </section>
 
               <section class="window action-panel results-window">
                 <div class="window-titlebar">
                   <div>
-                    <h2>Results</h2>
-                    <p class="panel-kicker">Returned answers and raw records</p>
+                    <h2>Linked Results</h2>
+                    <p class="panel-kicker">Returned answers and source records</p>
                   </div>
                 </div>
                 <div id="searchResults" class="results" aria-live="polite">
@@ -322,19 +356,19 @@
             <div class="page-heading">
               <div>
                 <p class="eyebrow">Write</p>
-                <h2 id="ingestTitle">Ingest</h2>
+                <h2 id="ingestTitle">New Memory</h2>
               </div>
             </div>
             <section class="window action-panel narrow-window">
               <div class="window-titlebar">
                 <div>
-                  <h2>Memory Ingest</h2>
-                  <p class="panel-kicker">Add source material to Citadel</p>
+                  <h2>New Vault Note</h2>
+                  <p class="panel-kicker">Add source material to shared memory</p>
                 </div>
               </div>
               <form id="ingestForm" class="form">
                 <div class="field">
-                  <label for="ingestData">Memory</label>
+                  <label for="ingestData">Note</label>
                   <textarea
                     id="ingestData"
                     name="data"
@@ -343,7 +377,7 @@
                     placeholder="Decision: we will run Citadel on Railway."
                     aria-describedby="ingestHint ingestError"
                   ></textarea>
-                  <p id="ingestHint" class="hint">Search only reads what has already been indexed.</p>
+                  <p id="ingestHint" class="hint">Search only reads notes that have been indexed.</p>
                 </div>
                 <div class="field-grid">
                   <div class="field">
@@ -362,7 +396,7 @@
                   </div>
                 </div>
                 <p id="ingestError" class="form-error" role="alert"></p>
-                <button id="ingestSubmit" class="primary-button" type="submit">Ingest memory</button>
+                <button id="ingestSubmit" class="primary-button" type="submit">Save to vault</button>
               </form>
             </section>
           </section>
@@ -378,7 +412,7 @@
             <div class="page-heading">
               <div>
                 <p class="eyebrow">Write</p>
-                <h2 id="feedbackTitle">Feedback</h2>
+                <h2 id="feedbackTitle">Feedback Note</h2>
               </div>
               <span id="feedbackStatus" class="status-chip">Standby</span>
             </div>
@@ -420,7 +454,7 @@
                     id="feedbackText"
                     name="text"
                     rows="4"
-                    placeholder="What should Citadel remember about this answer?"
+                    placeholder="What should the shared vault remember about this answer?"
                   ></textarea>
                 </div>
                 <div class="field-grid">
@@ -446,15 +480,15 @@
             <div class="page-heading">
               <div>
                 <p class="eyebrow">Sources</p>
-                <h2 id="sourcesTitle">Repository And Indexing</h2>
+                <h2 id="sourcesTitle">Sources And Indexes</h2>
               </div>
             </div>
             <div class="page-grid">
               <section class="window action-panel">
                 <div class="window-titlebar panel-heading">
                   <div>
-                    <h2>GitHub Sync</h2>
-                    <p class="panel-kicker">Fetch, ingest, improve</p>
+                    <h2>Source Sync</h2>
+                    <p class="panel-kicker">Fetch, link, improve</p>
                   </div>
                   <span id="syncRunSummary" class="status-chip">Standby</span>
                 </div>
@@ -519,18 +553,18 @@
             <div class="page-heading">
               <div>
                 <p class="eyebrow">Admin</p>
-                <h2 id="accessTitle">Access</h2>
+                <h2 id="accessTitle">Team Access</h2>
               </div>
             </div>
             <div class="role-grid">
               <article class="window role-panel">
                 <h2>Read Only</h2>
-                <p>View mesh, events, sources, indexes, and run search.</p>
+                <p>View graph, events, sources, indexes, and run search.</p>
                 <code>CITADEL_READER_KEYS=alice-reader,bob-reader</code>
               </article>
               <article class="window role-panel">
                 <h2>Read Write</h2>
-                <p>Read-only access plus ingest memories and record feedback.</p>
+                <p>Read-only access plus new notes and feedback records.</p>
                 <code>CITADEL_WRITER_KEYS=teammate-writer</code>
               </article>
               <article class="window role-panel">
@@ -630,7 +664,7 @@
             <div class="page-heading">
               <div>
                 <p class="eyebrow">Activity</p>
-                <h2 id="eventsTitle">Live Events</h2>
+                <h2 id="eventsTitle">Vault Activity</h2>
               </div>
               <span id="eventCount" class="status-chip">0</span>
             </div>
@@ -649,7 +683,8 @@
       </div>
 
       <footer class="status-bar" aria-label="Console status">
-        <span>Citadel OS Console</span>
+        <span>Citadel Vault</span>
+        <span>Shared knowledge base</span>
         <span>Railway: production</span>
         <span>Graph: Kuzu</span>
         <span>Vector: pgvector</span>

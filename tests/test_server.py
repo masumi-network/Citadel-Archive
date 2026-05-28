@@ -224,7 +224,8 @@ def test_ui_shell_is_served_after_login() -> None:
 
     assert response.status_code == 200
     assert "Citadel Archive" in response.text
-    assert "GitHub Sync" in response.text
+    assert "Citadel Vault" in response.text
+    assert "Source Sync" in response.text
 
 
 def test_admin_can_create_and_use_scoped_access_token(tmp_path: Any) -> None:

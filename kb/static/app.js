@@ -87,15 +87,15 @@ const graph = {
 };
 
 const colors = {
-  dataset: "#58c7a9",
-  document: "#e0b45b",
-  tag: "#b5bdc9",
-  index: "#8bc7ff",
-  query: "#f0c75e",
-  feedback: "#ff837a",
-  upgrade: "#69da93",
-  source: "#8bc7ff",
-  repository: "#b59cff",
+  dataset: "#a882ff",
+  document: "#e0de71",
+  tag: "#b9bbc8",
+  index: "#53dfdd",
+  query: "#e0de71",
+  feedback: "#fb464c",
+  upgrade: "#44cf6e",
+  source: "#53dfdd",
+  repository: "#a882ff",
 };
 
 function api(path, options = {}) {
@@ -147,8 +147,8 @@ function applyAccessControls() {
   sessionRole.textContent = label;
   sessionRole.className = `status-chip ${state.role ? "status-enabled" : "status-error"}`;
   roleSummary.textContent = state.role
-    ? `${label} workspace access`
-    : "No workspace session";
+    ? `${label} vault access`
+    : "No vault session";
   accessMode.textContent = label;
   accessMode.className = sessionRole.className;
 
@@ -179,7 +179,7 @@ function renderDashboardMcpSession() {
     <div class="entity-item">
       <div>
         <strong>Current session</strong>
-        <p>${escapeHtml(label)} access${state.role ? " through cookie or bearer token" : ""}</p>
+        <p>${escapeHtml(label)} vault access${state.role ? " through cookie or bearer token" : ""}</p>
       </div>
       <span class="status-chip ${state.role ? "status-enabled" : "status-error"}">${escapeHtml(state.role || "none")}</span>
     </div>
@@ -332,7 +332,7 @@ function renderSnapshot(snapshot) {
   if (!snapshot.events.length) {
     const empty = document.createElement("li");
     empty.className = "event-item empty-event";
-    empty.innerHTML = "<strong>No events yet</strong><p>Run a sync or ingest a memory.</p>";
+    empty.innerHTML = "<strong>No events yet</strong><p>Run a sync or save a vault note.</p>";
     eventList.append(empty);
   }
 }
@@ -365,7 +365,7 @@ function renderDashboardRecentEvent(events = []) {
     dashboardRecentLearning.className = "empty-state compact-empty";
     dashboardRecentLearning.innerHTML = `
       <strong>No events yet</strong>
-      <p>Run sync, ingest, or search to teach the graph.</p>
+      <p>Run sync, save a note, or search to teach the vault.</p>
     `;
     return;
   }
@@ -393,14 +393,14 @@ function renderDashboardOpenIssue(snapshot) {
     dashboardOpenIssue.className = "empty-state compact-empty";
     dashboardOpenIssue.innerHTML = `
       <strong>No activity yet</strong>
-      <p>Run a source sync to start building the shared graph.</p>
+      <p>Run source sync to start building the shared vault graph.</p>
     `;
     return;
   }
   dashboardOpenIssue.className = "dashboard-event-card";
   dashboardOpenIssue.innerHTML = `
     <strong>No blocking issues</strong>
-    <p>Graph updates are flowing. Keep an eye on weak source links and token scope holds.</p>
+    <p>Vault updates are flowing. Keep an eye on weak source links and token scope holds.</p>
   `;
 }
 
@@ -474,8 +474,8 @@ function formatDate(value) {
 
 function initializeGraph() {
   graph.scene = new THREE.Scene();
-  graph.scene.background = new THREE.Color(0x0d1117);
-  graph.scene.fog = new THREE.Fog(0x0d1117, 780, 1900);
+  graph.scene.background = new THREE.Color(0x1e1e1e);
+  graph.scene.fog = new THREE.Fog(0x1e1e1e, 780, 1900);
 
   graph.camera = new THREE.PerspectiveCamera(38, 1, 1, 2800);
   graph.camera.position.set(0, 0, graph.distance);
@@ -490,22 +490,22 @@ function initializeGraph() {
   graph.renderer.outputColorSpace = THREE.SRGBColorSpace;
   graph.renderer.toneMapping = THREE.ACESFilmicToneMapping;
   graph.renderer.toneMappingExposure = 1.05;
-  graph.renderer.setClearColor(0x0d1117, 1);
+  graph.renderer.setClearColor(0x1e1e1e, 1);
 
   graph.root = new THREE.Group();
   graph.root.rotation.order = "YXZ";
   graph.scene.add(graph.root);
 
   graph.scene.add(new THREE.AmbientLight(0xffffff, 0.34));
-  const hemisphereLight = new THREE.HemisphereLight(0xb9d8ff, 0x111820, 0.92);
+  const hemisphereLight = new THREE.HemisphereLight(0xd8ccff, 0x1e1e1e, 0.92);
   graph.scene.add(hemisphereLight);
-  const keyLight = new THREE.DirectionalLight(0xf4fbff, 1.85);
+  const keyLight = new THREE.DirectionalLight(0xf4f1ff, 1.8);
   keyLight.position.set(320, 460, 540);
   graph.scene.add(keyLight);
-  const fillLight = new THREE.PointLight(0x58c7a9, 0.95, 1100);
+  const fillLight = new THREE.PointLight(0xa882ff, 0.95, 1100);
   fillLight.position.set(-420, -120, 420);
   graph.scene.add(fillLight);
-  const rimLight = new THREE.DirectionalLight(0x8bc7ff, 0.72);
+  const rimLight = new THREE.DirectionalLight(0x53dfdd, 0.7);
   rimLight.position.set(-520, 260, -320);
   graph.scene.add(rimLight);
 
@@ -522,7 +522,7 @@ function createSceneBase() {
   base.position.y = -194;
   base.position.z = -16;
 
-  const grid = new THREE.GridHelper(980, 18, 0x58c7a9, 0x34404d);
+  const grid = new THREE.GridHelper(980, 18, 0xa882ff, 0x3f3f3f);
   for (const material of Array.isArray(grid.material) ? grid.material : [grid.material]) {
     material.transparent = true;
     material.opacity = 0.105;
@@ -531,9 +531,9 @@ function createSceneBase() {
   base.add(grid);
 
   const rings = [
-    { radius: 185, opacity: 0.26, color: 0x58c7a9 },
-    { radius: 300, opacity: 0.16, color: 0x8bc7ff },
-    { radius: 425, opacity: 0.1, color: 0xb59cff },
+    { radius: 185, opacity: 0.24, color: 0xa882ff },
+    { radius: 300, opacity: 0.14, color: 0x53dfdd },
+    { radius: 425, opacity: 0.1, color: 0xe0de71 },
   ];
   rings.forEach((ring) => {
     const geometry = new THREE.TorusGeometry(ring.radius, 0.9, 6, 128);
@@ -786,16 +786,16 @@ function createLabelSprite(node, radius) {
   context.textBaseline = "middle";
 
   roundedRect(context, 0.5, 0.5, width - 1, height - 1, 8);
-  context.fillStyle = "rgba(12, 15, 20, 0.76)";
+  context.fillStyle = "rgba(30, 30, 30, 0.86)";
   context.fill();
-  context.strokeStyle = "rgba(181, 189, 201, 0.2)";
+  context.strokeStyle = "rgba(186, 186, 186, 0.24)";
   context.stroke();
 
   context.beginPath();
   context.arc(16, height / 2, 3.5, 0, Math.PI * 2);
   context.fillStyle = colors[node.type] || "#b5bdc9";
   context.fill();
-  context.fillStyle = "#f2f4f7";
+  context.fillStyle = "#eff0f7";
   context.fillText(label, 27, height / 2, width - 36);
 
   const texture = new THREE.CanvasTexture(labelCanvas);
@@ -967,7 +967,7 @@ function truncate(value, length) {
 function selectNode(node) {
   state.selectedId = node?.id || null;
   if (!node) {
-    selectedNode.textContent = "Select a node to inspect it.";
+    selectedNode.textContent = "Select a note or node to inspect its links.";
     updateNodeSelection();
     return;
   }
@@ -991,7 +991,7 @@ async function loadMesh(showConnection = true) {
   } catch (error) {
     setConnectionState("error", "Offline");
     meshAlert.hidden = false;
-    meshAlertText.textContent = error.message || "Try refreshing the dashboard.";
+    meshAlertText.textContent = error.message || "Try refreshing the vault.";
     console.error(error);
   }
 }
@@ -1015,21 +1015,21 @@ async function loadGithubSync() {
       dashboardIngestionList.innerHTML = `
         <div class="entity-item">
           <div>
-            <strong>GitHub source</strong>
+            <strong>Source inbox</strong>
             <p>${escapeHtml(status.tracked_repositories)} repositories tracked</p>
           </div>
           <span class="status-chip ${status.last_checked_at ? "status-enabled" : "status-standby"}">${escapeHtml(status.last_checked_at ? "tracked" : "ready")}</span>
         </div>
         <div class="entity-item">
           <div>
-            <strong>Chunk and index</strong>
+            <strong>Linked note index</strong>
             <p>New source material flows into graph and vector memory.</p>
           </div>
           <span class="status-chip status-enabled">live</span>
         </div>
         <div class="entity-item">
           <div>
-            <strong>Self-learning loop</strong>
+            <strong>Shared learning loop</strong>
             <p>${status.run_improve ? "Runs improvement after sync." : "Manual improvement enabled from Sources."}</p>
           </div>
           <span class="status-chip ${status.run_improve ? "status-enabled" : "status-standby"}">${status.run_improve ? "auto" : "manual"}</span>
@@ -1047,7 +1047,7 @@ async function loadGithubSync() {
       dashboardIngestStatus.textContent = "Error";
       dashboardIngestStatus.className = "status-chip status-error";
       dashboardIngestionList.innerHTML = "";
-      dashboardIngestionList.append(emptyState("Could not load ingestion", error.message));
+      dashboardIngestionList.append(emptyState("Could not load source inbox", error.message));
     }
   }
 }
@@ -1390,12 +1390,12 @@ document.getElementById("ingestForm").addEventListener("submit", async (event) =
   error.textContent = "";
   form.querySelector("[name='data']").setAttribute("aria-invalid", "false");
   if (!data) {
-    error.textContent = "Add memory text before ingesting.";
+    error.textContent = "Add note text before saving.";
     form.querySelector("[name='data']").setAttribute("aria-invalid", "true");
     form.querySelector("[name='data']").focus();
     return;
   }
-  setBusy(button, true, { idle: "Ingest memory", loading: "Indexing" });
+  setBusy(button, true, { idle: "Save to vault", loading: "Indexing" });
   try {
     await api("/ingest", {
       method: "POST",
@@ -1410,7 +1410,7 @@ document.getElementById("ingestForm").addEventListener("submit", async (event) =
   } catch (err) {
     error.textContent = err.message;
   } finally {
-    setBusy(button, false, { idle: "Ingest memory", loading: "Indexing" });
+    setBusy(button, false, { idle: "Save to vault", loading: "Indexing" });
   }
 });
 
@@ -1429,7 +1429,7 @@ document.getElementById("searchForm").addEventListener("submit", async (event) =
     form.querySelector("[name='query']").focus();
     return;
   }
-  setBusy(button, true, { idle: "Search mesh", loading: "Searching" });
+  setBusy(button, true, { idle: "Search vault", loading: "Searching" });
   results.append(emptyState("Searching", "Checking graph and vector memory."));
   try {
     const response = await api("/search", {
@@ -1446,7 +1446,7 @@ document.getElementById("searchForm").addEventListener("submit", async (event) =
     results.innerHTML = "";
     error.textContent = err.message;
   } finally {
-    setBusy(button, false, { idle: "Search mesh", loading: "Searching" });
+    setBusy(button, false, { idle: "Search vault", loading: "Searching" });
   }
 });
 
@@ -1528,7 +1528,7 @@ function renderSearchResults(results) {
   const container = document.getElementById("searchResults");
   container.innerHTML = "";
   if (!results.length) {
-    container.append(emptyState("No results", "Try a broader query or ingest more source material."));
+    container.append(emptyState("No results", "Try a broader query or add more source material."));
     return;
   }
   results.slice(0, 6).forEach((result, index) => {
