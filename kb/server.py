@@ -19,6 +19,7 @@ from kb.github_sync import GitHubOrgSyncer
 from kb.learning_agent import LearningAgent
 from kb.mesh import MeshState
 from kb.models import FeedbackRequest
+from kb.obsidian_sync import ObsidianSyncStore, SyncPushDocument, normalize_path
 from kb.service import Citadel
 
 app = FastAPI(
@@ -151,6 +152,35 @@ class AccessTokenBody(BaseModel):
     expires_at: str | None = None
 
 
+class ObsidianVaultBody(BaseModel):
+    vault_name: str | None = Field(default=None, min_length=1, max_length=180)
+    name: str | None = Field(default=None, min_length=1, max_length=180)
+    team_id: str | None = Field(default=None, max_length=120)
+    plugin_version: str | None = Field(default=None, max_length=80)
+
+
+class ObsidianPushDocumentBody(BaseModel):
+    path: str = Field(min_length=1, max_length=600)
+    content: str = ""
+    base_rev: int | None = Field(default=None, ge=0)
+    deleted: bool = False
+    tags: list[str] = Field(default_factory=list)
+    dataset: str | None = None
+
+
+class ObsidianPushBody(BaseModel):
+    vault_id: str = Field(min_length=1)
+    documents: list[ObsidianPushDocumentBody] = Field(min_length=1)
+    dataset: str | None = None
+    session_id: str | None = None
+    tags: list[str] = Field(default_factory=list)
+
+
+class ObsidianConflictResolveBody(BaseModel):
+    resolution: str = Field(pattern="^(accept_local|accept_remote|save_both|manual)$")
+    body: str | None = None
+
+
 def get_citadel() -> Citadel:
     if not hasattr(app.state, "citadel"):
         app.state.citadel = Citadel.from_env()
@@ -185,6 +215,14 @@ def get_access_store() -> AccessStore:
         max_audit_events=config.audit_max_events,
     )
     return app.state.access_store
+
+
+def get_obsidian_sync() -> ObsidianSyncStore:
+    existing = getattr(app.state, "obsidian_sync", None)
+    if isinstance(existing, ObsidianSyncStore):
+        return existing
+    app.state.obsidian_sync = ObsidianSyncStore(get_citadel().config.obsidian_sync_state_path)
+    return app.state.obsidian_sync
 
 
 def sse(event: str, data: dict[str, Any]) -> str:
@@ -483,6 +521,40 @@ async def github_sync_status(request: Request) -> Any:
     return jsonable_encoder(await get_github_syncer().status())
 
 
+@app.get("/api/sources")
+async def sources(request: Request, type: str | None = None) -> Any:
+    require_role(request, "reader")
+    sources_payload: list[dict[str, Any]] = []
+    summary: dict[str, Any] = {}
+
+    if type in {None, "github"}:
+        github_status = await get_github_syncer().status()
+        sources_payload.append(
+            {
+                "id": "github-org",
+                "source_type": "github",
+                "name": github_status.get("org"),
+                "status": "tracked" if github_status.get("last_checked_at") else "ready",
+                "url": github_status.get("source_url"),
+                "last_checked_at": github_status.get("last_checked_at"),
+                "documents": github_status.get("tracked_repositories", 0),
+                "open_conflicts": 0,
+                "metadata": github_status,
+            }
+        )
+        summary["github_repositories"] = github_status.get("tracked_repositories", 0)
+
+    if type in {None, "obsidian_vault"}:
+        obsidian_status = get_obsidian_sync().source_status(source_type="obsidian_vault")
+        sources_payload.extend(obsidian_status["sources"])
+        summary.update(obsidian_status["summary"])
+
+    if type not in {None, "github", "obsidian_vault"}:
+        raise HTTPException(status_code=422, detail="Unsupported source type.")
+
+    return {"ok": True, "sources": sources_payload, "summary": summary}
+
+
 @app.post("/api/github-sync/run")
 async def run_github_sync(body: GitHubSyncBody, request: Request) -> Any:
     require_role(request, "admin")
@@ -495,6 +567,180 @@ async def run_github_sync(body: GitHubSyncBody, request: Request) -> Any:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
     await mesh_state.record_github_sync(citadel.config, result)
     return jsonable_encoder(result)
+
+
+@app.post("/api/obsidian/vaults")
+async def register_obsidian_vault(body: ObsidianVaultBody, request: Request) -> Any:
+    actor = require_role(request, "writer")
+    vault_name = body.vault_name or body.name
+    if not vault_name:
+        raise HTTPException(status_code=422, detail="Vault name is required.")
+    try:
+        vault = get_obsidian_sync().register_vault(
+            name=vault_name,
+            team_id=body.team_id,
+            plugin_version=body.plugin_version,
+            actor=actor,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    get_access_store().record_event(
+        action="obsidian.vault.register",
+        actor=actor,
+        success=True,
+        detail={"vault_id": vault.id, "team_id": body.team_id},
+    )
+    return {"ok": True, "vault": jsonable_encoder(vault)}
+
+
+@app.get("/api/obsidian/manifest")
+async def obsidian_manifest(request: Request, vault_id: str, cursor: int | None = None) -> Any:
+    require_role(request, "reader")
+    try:
+        manifest = get_obsidian_sync().manifest(vault_id=vault_id, cursor=cursor)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Vault not found.") from exc
+    return {"ok": True, **jsonable_encoder(manifest)}
+
+
+@app.post("/api/obsidian/sync/push")
+async def push_obsidian_sync(body: ObsidianPushBody, request: Request) -> Any:
+    actor = require_role(request, "writer")
+    citadel = get_citadel()
+    mesh_state = get_mesh()
+    push_documents = [
+        SyncPushDocument(
+            path=document.path,
+            content=document.content,
+            base_rev=document.base_rev,
+            deleted=document.deleted,
+            tags=tuple(document.tags),
+            dataset=document.dataset,
+        )
+        for document in body.documents
+    ]
+    try:
+        result = get_obsidian_sync().push(
+            vault_id=body.vault_id,
+            actor=actor,
+            documents=push_documents,
+            dataset=body.dataset or citadel.config.default_dataset,
+        )
+        manifest = get_obsidian_sync().manifest(vault_id=body.vault_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Vault not found.") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    documents_by_path = {}
+    for document in body.documents:
+        try:
+            documents_by_path[normalize_path(document.path)] = document
+        except ValueError:
+            continue
+
+    ingest_results: list[dict[str, Any]] = []
+    for accepted in result["accepted"]:
+        if accepted.get("deleted"):
+            continue
+        source_document = documents_by_path.get(accepted["path"])
+        if not source_document:
+            continue
+        document_tags = [*body.tags, *source_document.tags, "obsidian", "obsidian_vault"]
+        document_dataset = source_document.dataset or body.dataset or citadel.config.default_dataset
+        try:
+            ingest_result = await citadel.ingest(
+                source_document.content,
+                dataset=document_dataset,
+                tags=document_tags,
+                session_id=body.session_id,
+            )
+        except Exception as exc:  # pragma: no cover - depends on runtime Cognee configuration.
+            await mesh_state.record_error(citadel.config, operation="obsidian_sync", error=str(exc))
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
+        await mesh_state.record_ingest(
+            citadel.config,
+            ingest_result,
+            data=source_document.content,
+            dataset=document_dataset,
+            tags=document_tags,
+        )
+        ingest_results.append(
+            {
+                "document_id": accepted["document_id"],
+                "accepted": ingest_result.accepted,
+                "reason": ingest_result.reason,
+                "dataset": ingest_result.dataset,
+                "tags": list(ingest_result.tags),
+            }
+        )
+
+    await mesh_state.record_obsidian_sync(
+        citadel.config,
+        vault=manifest["vault"],
+        result=result,
+        dataset=body.dataset or citadel.config.default_dataset,
+    )
+    get_access_store().record_event(
+        action="obsidian.sync.push",
+        actor=actor,
+        success=True,
+        dataset=body.dataset or citadel.config.default_dataset,
+        detail={
+            "vault_id": body.vault_id,
+            "accepted": len(result["accepted"]),
+            "skipped": len(result["skipped"]),
+            "conflicts": len(result["conflicts"]),
+        },
+    )
+    return {"ok": True, **jsonable_encoder(result), "ingest_results": ingest_results}
+
+
+@app.get("/api/obsidian/sync/pull")
+async def pull_obsidian_sync(request: Request, vault_id: str, cursor: int | None = None) -> Any:
+    require_role(request, "reader")
+    try:
+        result = get_obsidian_sync().pull(vault_id=vault_id, cursor=cursor)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Vault not found.") from exc
+    return {"ok": True, **jsonable_encoder(result)}
+
+
+@app.post("/api/obsidian/conflicts/{conflict_id}/resolve")
+async def resolve_obsidian_conflict(
+    conflict_id: str,
+    body: ObsidianConflictResolveBody,
+    request: Request,
+) -> Any:
+    actor = require_role(request, "writer")
+    try:
+        result = get_obsidian_sync().resolve_conflict(
+            conflict_id=conflict_id,
+            actor=actor,
+            resolution=body.resolution,
+            body=body.body,
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Conflict not found.") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    get_access_store().record_event(
+        action="obsidian.conflict.resolve",
+        actor=actor,
+        success=True,
+        detail={"conflict_id": conflict_id, "resolution": body.resolution},
+    )
+    return {"ok": True, "conflict": jsonable_encoder(result)}
+
+
+@app.get("/api/documents/{document_id}")
+async def source_document(document_id: str, request: Request) -> Any:
+    require_role(request, "reader")
+    try:
+        document = get_obsidian_sync().document(document_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Document not found.") from exc
+    return {"ok": True, "document": jsonable_encoder(document)}
 
 
 @app.get("/api/learning-agent")

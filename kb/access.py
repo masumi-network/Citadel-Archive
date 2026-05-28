@@ -14,8 +14,16 @@ VALID_ROLES = frozenset(ROLE_ORDER)
 VALID_PRINCIPAL_KINDS = frozenset({"user", "service_account"})
 
 DEFAULT_SCOPES = {
-    "reader": ("kb:read", "kb:search", "sources:read"),
-    "writer": ("kb:read", "kb:search", "kb:ingest", "kb:feedback", "sources:read"),
+    "reader": ("kb:read", "kb:search", "sources:read", "obsidian:sync:pull"),
+    "writer": (
+        "kb:read",
+        "kb:search",
+        "kb:ingest",
+        "kb:feedback",
+        "sources:read",
+        "obsidian:sync:pull",
+        "obsidian:sync:push",
+    ),
     "admin": (
         "kb:read",
         "kb:search",
@@ -23,6 +31,8 @@ DEFAULT_SCOPES = {
         "kb:feedback",
         "sources:read",
         "sources:sync",
+        "obsidian:sync:pull",
+        "obsidian:sync:push",
         "agents:manage",
         "access:manage",
         "audit:read",

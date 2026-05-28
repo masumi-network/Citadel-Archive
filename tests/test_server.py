@@ -8,6 +8,7 @@ from kb.access import AccessStore
 from kb.config import CitadelConfig
 from kb.mesh import MeshState
 from kb.models import FeedbackResult, IngestResult
+from kb.obsidian_sync import ObsidianSyncStore
 from kb.server import app
 
 
@@ -288,6 +289,113 @@ def test_bearer_tokens_can_access_api_without_cookie(tmp_path: Any) -> None:
     assert session.json()["role"] == "writer"
     assert ingest.status_code == 200
     assert admin_run.status_code == 403
+
+
+def test_obsidian_vault_sync_registers_pushes_pulls_and_lists_sources(tmp_path: Any) -> None:
+    app.state.access_store = AccessStore(tmp_path / "access.json")
+    app.state.obsidian_sync = ObsidianSyncStore(tmp_path / "obsidian.json")
+    client = authed_client("test-writer")
+
+    registered = client.post(
+        "/api/obsidian/vaults",
+        json={"vault_name": "Team Vault", "team_id": "masumi", "plugin_version": "0.1.0"},
+    )
+    assert registered.status_code == 200
+    vault_id = registered.json()["vault"]["id"]
+
+    manifest = client.get(f"/api/obsidian/manifest?vault_id={vault_id}")
+    pushed = client.post(
+        "/api/obsidian/sync/push",
+        json={
+            "vault_id": vault_id,
+            "dataset": "notes",
+            "tags": ["team"],
+            "documents": [
+                {
+                    "path": "Team/Architecture.md",
+                    "content": "Architecture decision: Citadel syncs explicit Obsidian notes.",
+                }
+            ],
+        },
+    )
+
+    assert manifest.status_code == 200
+    assert manifest.json()["documents"] == []
+    assert pushed.status_code == 200
+    payload = pushed.json()
+    assert payload["accepted"][0]["path"] == "Team/Architecture.md"
+    assert payload["accepted"][0]["rev"] == 1
+    assert payload["ingest_results"][0]["accepted"] is True
+    document_id = payload["accepted"][0]["document_id"]
+
+    document = client.get(f"/api/documents/{document_id}")
+    pulled = client.get(f"/api/obsidian/sync/pull?vault_id={vault_id}&cursor=0")
+    sources = client.get("/api/sources?type=obsidian_vault")
+
+    assert document.status_code == 200
+    assert document.json()["document"]["body"].startswith("Architecture decision")
+    assert pulled.status_code == 200
+    assert pulled.json()["documents"][0]["normalized_path"] == "Team/Architecture.md"
+    assert sources.status_code == 200
+    assert sources.json()["summary"]["obsidian_vaults"] == 1
+    assert sources.json()["summary"]["obsidian_documents"] == 1
+
+    reader = authed_client("test-reader")
+    rejected = reader.post(
+        "/api/obsidian/sync/push",
+        json={
+            "vault_id": vault_id,
+            "documents": [{"path": "Team/Denied.md", "content": "Reader cannot push."}],
+        },
+    )
+    assert rejected.status_code == 403
+
+
+def test_obsidian_vault_sync_detects_and_resolves_conflicts(tmp_path: Any) -> None:
+    app.state.access_store = AccessStore(tmp_path / "access.json")
+    app.state.obsidian_sync = ObsidianSyncStore(tmp_path / "obsidian.json")
+    client = authed_client("test-writer")
+    vault_id = client.post("/api/obsidian/vaults", json={"vault_name": "Team Vault"}).json()[
+        "vault"
+    ]["id"]
+    first_push = client.post(
+        "/api/obsidian/sync/push",
+        json={
+            "vault_id": vault_id,
+            "documents": [{"path": "Team/Roadmap.md", "content": "Remote revision one."}],
+        },
+    )
+    stale_push = client.post(
+        "/api/obsidian/sync/push",
+        json={
+            "vault_id": vault_id,
+            "documents": [
+                {
+                    "path": "Team/Roadmap.md",
+                    "content": "Local edit from stale base.",
+                    "base_rev": 0,
+                }
+            ],
+        },
+    )
+
+    assert first_push.status_code == 200
+    assert stale_push.status_code == 200
+    conflict = stale_push.json()["conflicts"][0]
+    assert conflict["reason"] == "base_revision_mismatch"
+
+    resolved = client.post(
+        f"/api/obsidian/conflicts/{conflict['id']}/resolve",
+        json={"resolution": "manual", "body": "Merged roadmap note."},
+    )
+    manifest = client.get(f"/api/obsidian/manifest?vault_id={vault_id}")
+    document_id = first_push.json()["accepted"][0]["document_id"]
+    document = client.get(f"/api/documents/{document_id}")
+
+    assert resolved.status_code == 200
+    assert resolved.json()["conflict"]["status"] == "resolved_manual"
+    assert manifest.json()["documents"][0]["current_rev"] == 2
+    assert document.json()["document"]["body"] == "Merged roadmap note."
 
 
 def test_access_tokens_are_hashed_and_revocable(tmp_path: Any) -> None:

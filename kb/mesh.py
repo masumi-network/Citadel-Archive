@@ -242,6 +242,69 @@ class MeshState:
                 },
             )
 
+    async def record_obsidian_sync(
+        self,
+        config: CitadelConfig,
+        *,
+        vault: dict[str, Any],
+        result: dict[str, Any],
+        dataset: str | None = None,
+    ) -> None:
+        async with self._lock:
+            self._ensure_base_graph(config)
+            dataset_id = self._dataset_node(dataset or config.default_dataset)
+            source_id = stable_id("source", f"obsidian:{vault.get('id')}")
+            self.nodes[source_id] = {
+                "id": source_id,
+                "label": f"Obsidian / {vault.get('name') or 'Vault'}",
+                "type": "source",
+                "status": "conflict" if result.get("conflicts") else "synced",
+                "size": 44,
+                "metadata": {
+                    "source_type": "obsidian_vault",
+                    "vault_id": vault.get("id"),
+                    "team_id": vault.get("team_id"),
+                    "last_push_at": vault.get("last_push_at"),
+                    "accepted": len(result.get("accepted", [])),
+                    "skipped": len(result.get("skipped", [])),
+                    "conflicts": len(result.get("conflicts", [])),
+                },
+            }
+            self._edge(source_id, dataset_id, "updates")
+
+            for document in result.get("accepted", [])[:12]:
+                document_id = stable_id(
+                    "document",
+                    f"obsidian:{vault.get('id')}:{document.get('path')}",
+                )
+                self.nodes[document_id] = {
+                    "id": document_id,
+                    "label": document.get("path") or "Obsidian note",
+                    "type": "document",
+                    "status": "deleted" if document.get("deleted") else "indexed",
+                    "size": 24,
+                    "metadata": {
+                        "source_type": "obsidian_vault",
+                        "vault_id": vault.get("id"),
+                        "rev": document.get("rev"),
+                        "content_hash": document.get("content_hash"),
+                    },
+                }
+                self._edge(source_id, document_id, "synced")
+                self._edge(document_id, dataset_id, "indexed")
+
+            await self._record_event(
+                "obsidian_sync",
+                "Obsidian vault sync received",
+                {
+                    "vault_id": vault.get("id"),
+                    "vault_name": vault.get("name"),
+                    "accepted": len(result.get("accepted", [])),
+                    "skipped": len(result.get("skipped", [])),
+                    "conflicts": len(result.get("conflicts", [])),
+                },
+            )
+
     async def record_error(self, config: CitadelConfig, *, operation: str, error: str) -> None:
         async with self._lock:
             self._ensure_base_graph(config)
