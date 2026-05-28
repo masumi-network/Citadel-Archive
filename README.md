@@ -18,7 +18,8 @@ agents through the UI, API, and MCP.
 The shareable plan lives in
 [`docs/organization-vault-plan.md`](docs/organization-vault-plan.md). The
 canonical domain language lives in [`CONTEXT.md`](CONTEXT.md). Architecture
-decisions live in [`docs/adr/`](docs/adr/).
+decisions live in [`docs/adr/`](docs/adr/), and current refactor candidates live
+in [`docs/architecture-deepening-opportunities.md`](docs/architecture-deepening-opportunities.md).
 
 ## What This Adds
 
