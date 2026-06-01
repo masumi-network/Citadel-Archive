@@ -1,0 +1,26 @@
+[mcp_servers.citadel]
+command = "uv"
+args = [
+  "--directory",
+  "/Users/sarthiborkar/masumi/Citadel Archive",
+  "run",
+  "python",
+  "-m",
+  "kb.mcp_server",
+]
+[mcp_servers.citadel.env]
+CITADEL_HTTP_BASE_URL = "https://citadel-archive-production.up.railway.app"
+CITADEL_MCP_ACCESS_TOKEN = "PASTE_CITADEL_TOKEN_HERE"
+CITADEL_MCP_MAX_INGEST_BYTES = "200000"
+
+[mcp_servers.citadel.tools.citadel_ingest]
+approval_mode = "approve"
+
+[mcp_servers.citadel.tools.citadel_record_feedback]
+approval_mode = "approve"
+
+[mcp_servers.citadel.tools.citadel_run_learning_agent]
+approval_mode = "approve"
+
+[mcp_servers.citadel.tools.citadel_improve]
+approval_mode = "approve"

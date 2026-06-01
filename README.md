@@ -247,6 +247,7 @@ Citadel includes a stdio MCP server for team agents. It calls the hosted
 Citadel HTTP API and uses the same reader/writer/admin tokens as the UI.
 The server implementation lives in `kb/mcp_server.py`; the Codex plugin wrapper
 lives in `plugins/citadel-archive-mcp/`.
+Copy-paste Claude and Codex client templates live in `docs/mcp/`.
 
 ```bash
 CITADEL_HTTP_BASE_URL=https://citadel-archive-production.up.railway.app
