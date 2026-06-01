@@ -260,6 +260,19 @@ Recommended token roles:
 - Writer tokens: reader tools plus `citadel_ingest` and feedback.
 - Admin tokens: writer tools plus learning-agent runs and Cognee improvement.
 
+Safe defaults:
+
+- Use a reader service-account token for normal agent work.
+- Configure the client to require approval for `citadel_ingest` and
+  `citadel_record_feedback`.
+- Configure the client to require approval, or keep disabled by default, for
+  `citadel_run_learning_agent` and `citadel_improve`.
+- Use `https://` for hosted Citadel URLs. The MCP wrapper only allows plain
+  `http://` for localhost unless `CITADEL_MCP_ALLOW_INSECURE_HTTP=true` is set
+  for a trusted development network.
+- Keep `CITADEL_MCP_MAX_INGEST_BYTES` low enough that agents cannot accidentally
+  push large logs or secrets into durable memory.
+
 Example Claude/Codex MCP command:
 
 ```json

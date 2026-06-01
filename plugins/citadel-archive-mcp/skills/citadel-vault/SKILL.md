@@ -6,6 +6,9 @@ description: Use when a user asks project, source, architecture, or operational 
 # Citadel Vault
 
 Use the Citadel MCP server as the capability boundary for organization memory.
+Prefer reader service-account tokens. Treat writer and admin tokens as elevated
+access, and use them only when the user has clearly asked for the corresponding
+write or operational action.
 
 ## Read Path
 
@@ -30,6 +33,8 @@ Use:
 - `citadel_record_feedback` for Cognee QA feedback.
 
 Do not ingest secrets, one-off chat, private credentials, raw logs with sensitive values, or speculative notes that the user has not approved preserving.
+Keep payloads small and curated. If the context is large, summarize durable
+decisions and source facts instead of storing raw transcripts or logs.
 
 ## Admin Path
 
@@ -39,3 +44,4 @@ Use admin tools only when explicitly requested by the user:
 - `citadel_improve`
 
 These operations can mutate source-learning state or trigger backend work, so explain the intended action before calling them.
+If the client asks for approval, present the exact tool and expected effect.
