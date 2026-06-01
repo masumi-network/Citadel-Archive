@@ -112,6 +112,9 @@ class CogneePublicClient:
             return None
         return getattr(search_type, raw_value, getattr(search_type, "CHUNKS", None))
 
+    def _is_no_data_error(self, exc: Exception) -> bool:
+        return exc.__class__.__name__ == "NoDataError" or "No data found in the system" in str(exc)
+
     async def _create_cognee_database(self) -> None:
         from cognee.infrastructure.databases.relational import get_relational_engine
 
@@ -201,23 +204,33 @@ class CogneePublicClient:
 
         await self._ensure_cognee_ready(cognee)
         if session_id and hasattr(cognee, "recall"):
-            session_results = await cognee.recall(
-                query,
-                session_id=session_id,
-                top_k=top_k,
-                scope="session",
-            )
+            try:
+                session_results = await cognee.recall(
+                    query,
+                    session_id=session_id,
+                    top_k=top_k,
+                    scope="session",
+                )
+            except Exception as exc:
+                if not self._is_no_data_error(exc):
+                    raise
+                session_results = []
             if session_results:
                 return session_results
 
         query_type = self._configured_search_type(cognee)
         if query_type is None and hasattr(cognee, "recall"):
-            return await cognee.recall(
-                query,
-                datasets=[dataset],
-                session_id=session_id,
-                top_k=top_k,
-            )
+            try:
+                return await cognee.recall(
+                    query,
+                    datasets=[dataset],
+                    session_id=session_id,
+                    top_k=top_k,
+                )
+            except Exception as exc:
+                if self._is_no_data_error(exc):
+                    return []
+                raise
 
         search_kwargs = {
             "query_text": query,
@@ -227,7 +240,12 @@ class CogneePublicClient:
         }
         if query_type is not None:
             search_kwargs["query_type"] = query_type
-        return await cognee.search(**search_kwargs)
+        try:
+            return await cognee.search(**search_kwargs)
+        except Exception as exc:
+            if self._is_no_data_error(exc):
+                return []
+            raise
 
     async def add_feedback(
         self,
