@@ -443,6 +443,6 @@ GitHub auth; vault content is never in these files):
 Optional GitHub raw mirrors (same markdown as public Citadel-Archive):
 
 ```
-https://raw.githubusercontent.com/masumi-network/Citadel-Archive/main/plugins/citadel-archive-mcp/skills/citadel-mcp-connector/SKILL.md
-https://raw.githubusercontent.com/masumi-network/Citadel-Archive/main/plugins/citadel-archive-mcp/skills/citadel-data-boundary/SKILL.md
+https://raw.githubusercontent.com/masumi-network/Citadel-Archive/main/skills/citadel-mcp-connector/SKILL.md
+https://raw.githubusercontent.com/masumi-network/Citadel-Archive/main/skills/citadel-data-boundary/SKILL.md
 ```

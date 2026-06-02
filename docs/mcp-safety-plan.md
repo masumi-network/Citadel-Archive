@@ -115,7 +115,7 @@ Tasks:
   - writer token cannot call admin endpoints.
   - annotations are present on registered tools.
   - HTTP error details are redacted.
-- Update `plugins/citadel-archive-mcp/skills/citadel-vault/SKILL.md` with the
+- Update `skills/citadel-vault/SKILL.md` with the
   read/write/admin safety policy.
 - Add README snippets for safe Codex plugin MCP policy:
   - enable read tools by default for a reader service account.

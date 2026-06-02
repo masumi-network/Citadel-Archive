@@ -5,12 +5,12 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
 # Short public paths → bundled agent skills (no auth required).
+# These live in the top-level ``skills/`` directory so they are discoverable both
+# by the hosted ``/skills`` endpoint and by skills.sh (``npx skills add ...``).
 SKILL_FILES: dict[str, Path] = {
-    "connect": REPO_ROOT
-    / "plugins/citadel-archive-mcp/skills/citadel-mcp-connector/SKILL.md",
-    "vault": REPO_ROOT / "plugins/citadel-archive-mcp/skills/citadel-vault/SKILL.md",
-    "boundary": REPO_ROOT
-    / "plugins/citadel-archive-mcp/skills/citadel-data-boundary/SKILL.md",
+    "connect": REPO_ROOT / "skills/citadel-mcp-connector/SKILL.md",
+    "vault": REPO_ROOT / "skills/citadel-vault/SKILL.md",
+    "boundary": REPO_ROOT / "skills/citadel-data-boundary/SKILL.md",
 }
 
 SKILL_ALIASES: dict[str, str] = {

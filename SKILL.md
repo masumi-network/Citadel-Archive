@@ -33,24 +33,30 @@ Vault content and `ctdl_` tokens never belong in the public repo. See
 | Vault skill | `https://citadel-archive-production.up.railway.app/skills/vault` |
 | Boundary skill | `https://citadel-archive-production.up.railway.app/skills/boundary` |
 | HTTP API | Same host as hosted URL |
-| MCP server | `uv run python -m kb.mcp_server` (stdio, from a local clone) |
+| MCP endpoint | `https://citadel-archive-production.up.railway.app/mcp` (hosted, no clone) |
+| MCP auth | `Authorization: Bearer ctdl_...` |
 | Token format | `ctdl_...` (service-account or user token) |
 | Roles | `reader`, `writer`, `admin` |
-| App clone | `git clone https://github.com/masumi-network/Citadel-Archive.git` |
+| Local stdio MCP (dev only) | `uv run python -m kb.mcp_server` |
 
 ## How To Access Citadel
 
 ### Option A — Through the MCP Server (Recommended)
 
-The MCP server wraps the HTTP API and is the cleanest integration for coding
-agents. It connects over stdio and forwards calls to the hosted Citadel backend.
+The hosted MCP server is the cleanest integration for coding agents. Point the
+client at the hosted `/mcp` URL and send the token in the `Authorization` header
+— no clone, no local Python. Full per-client setup: `…/skills/connect`.
 
-**Required environment variables:**
-
-```bash
-CITADEL_HTTP_BASE_URL=https://citadel-archive-production.up.railway.app
-CITADEL_MCP_ACCESS_TOKEN=ctdl_...     # your service-account token
-CITADEL_MCP_DEFAULT_DATASET=masumi-network
+```json
+{
+  "mcpServers": {
+    "citadel": {
+      "type": "http",
+      "url": "https://citadel-archive-production.up.railway.app/mcp",
+      "headers": { "Authorization": "Bearer ${CITADEL_MCP_ACCESS_TOKEN}" }
+    }
+  }
+}
 ```
 
 **MCP tools available:**
@@ -59,6 +65,7 @@ CITADEL_MCP_DEFAULT_DATASET=masumi-network
 |---|---|---|
 | `citadel_session` | reader | Show authenticated role, actor, and capabilities |
 | `citadel_search` | reader | Search the Organization Vault |
+| `citadel_get_document` | reader | Fetch a full document by a search hit `id` |
 | `citadel_get_mesh` | reader | Get the current knowledge mesh snapshot |
 | `citadel_list_sources` | reader | GitHub sync state, learning status, indexes |
 | `citadel_ingest` | writer | Add durable context to the vault |

@@ -21,7 +21,15 @@ Agents read vault content only through MCP with a user `ctdl_` token — never f
 
 The agent will ask for a `ctdl_...` access token, configure MCP locally, verify the connection, and start searching the vault.
 
+> **Hosted MCP is the supported path.** Connect any client to
+> `https://citadel-archive-production.up.railway.app/mcp` with
+> `Authorization: Bearer ctdl_...` — no clone needed. This plugin is a legacy
+> stdio wrapper kept for offline/dev use.
+
 ## Bundled skills
+
+The agent skills now live in the repo's top-level [`skills/`](../../skills/)
+directory (so they install via `npx skills add masumi-network/Citadel-Archive`):
 
 | Directory | Purpose |
 |---|---|
@@ -29,8 +37,8 @@ The agent will ask for a `ctdl_...` access token, configure MCP locally, verify 
 | `skills/citadel-vault/` | Daily use: search, ingest, safety |
 | `skills/citadel-data-boundary/` | What must stay private |
 
-## Install as Codex plugin
+## Install as Codex plugin (legacy stdio)
 
-Point Codex at this directory (`plugins/citadel-archive-mcp/`). The bundled `.mcp.json` uses `"../.."` as the repo root when the plugin lives inside a Citadel-Archive clone. Otherwise copy `.mcp.json.example` from the repo root and set `--directory` to your clone path.
+Point Codex at this directory (`plugins/citadel-archive-mcp/`). The bundled `.mcp.json` uses `"../.."` as the repo root when the plugin lives inside a Citadel-Archive clone. For the no-clone path, use the hosted `/mcp` endpoint via the connect skill instead.
 
 See [docs/mcp/README.md](../../docs/mcp/README.md) and [docs/public-and-private.md](../../docs/public-and-private.md).

@@ -38,6 +38,62 @@ What may be public vs private: [`docs/public-and-private.md`](docs/public-and-pr
 | Data boundary | https://citadel-archive-production.up.railway.app/skills/boundary |
 | All skills | https://citadel-archive-production.up.railway.app/skills |
 
+The skills also live in the top-level `skills/` directory, so they can be
+installed straight from this repo via [skills.sh](https://skills.sh):
+
+```bash
+npx skills add masumi-network/Citadel-Archive
+```
+
+## Agent Entrypoint
+
+Share this URL with agents or teammates first:
+
+```text
+https://citadel-archive-production.up.railway.app/skills
+```
+
+That index points agents to the connector setup skill, vault usage skill, and
+public/private boundary rules.
+
+Copy-paste public smoke test:
+
+```bash
+export CITADEL_BASE_URL=https://citadel-archive-production.up.railway.app
+
+curl -fsS "$CITADEL_BASE_URL/healthz"
+curl -fsS "$CITADEL_BASE_URL/skills" | python3 -m json.tool
+curl -fsS "$CITADEL_BASE_URL/skills/connect" | sed -n '1,80p'
+```
+
+Copy-paste token smoke test:
+
+Do not paste the token or vault search output into public repos, issues, or chats.
+
+```bash
+export CITADEL_BASE_URL=https://citadel-archive-production.up.railway.app
+export CITADEL_MCP_ACCESS_TOKEN=ctdl_... # paste a reader/writer/admin token locally
+
+curl -fsS -H "Authorization: Bearer $CITADEL_MCP_ACCESS_TOKEN" \
+  "$CITADEL_BASE_URL/api/session" | python3 -m json.tool
+
+curl -fsS -X POST "$CITADEL_BASE_URL/search" \
+  -H "Authorization: Bearer $CITADEL_MCP_ACCESS_TOKEN" \
+  -H "Content-Type: application/json" \
+  --data '{"query":"repositories commits events","dataset":"masumi-network","top_k":3}' \
+  | python3 -m json.tool
+```
+
+Copy-paste local MCP wrapper start:
+
+```bash
+export CITADEL_HTTP_BASE_URL=https://citadel-archive-production.up.railway.app
+export CITADEL_MCP_ACCESS_TOKEN=ctdl_... # paste locally; never commit
+export CITADEL_MCP_DEFAULT_DATASET=masumi-network
+
+uv run python -m kb.mcp_server
+```
+
 Mirror export from Railway is planned; see [`docs/vault-backup-mirror.md`](docs/vault-backup-mirror.md).
 
 ## What This Adds
@@ -62,6 +118,12 @@ database settings.
 Set `CITADEL_ADMIN_KEY` before exposing the service publicly. Add
 `CITADEL_WRITER_KEYS` and `CITADEL_READER_KEYS` when sharing the workspace with
 teammates.
+
+Set `CITADEL_SEARCH_DEFAULT_DATASET` to the dataset that searches should target
+when a request omits `dataset` (e.g. `masumi-network`). Without it, a
+dataset-less `/search` queries the per-tenant `CITADEL_DEFAULT_DATASET`
+(`personal`) and the response includes a `note` plus `known_datasets` instead of
+silently returning an empty list.
 
 For OpenRouter, Cognee expects the custom provider form:
 
@@ -265,17 +327,54 @@ works for compatibility.
 
 ## MCP Server
 
-Citadel includes a stdio MCP server for team agents. It calls the hosted
-Citadel HTTP API and uses the same reader/writer/admin tokens as the UI.
-The server implementation lives in `kb/mcp_server.py`; the Codex plugin wrapper
-lives in `plugins/citadel-archive-mcp/`.
-Copy-paste Claude and Codex client templates live in `docs/mcp/`.
+Citadel serves a **hosted MCP endpoint** so agents connect with a URL and a
+token — no clone, no local Python:
+
+```text
+https://citadel-archive-production.up.railway.app/mcp
+Authorization: Bearer ctdl_<token>
+```
+
+It is a streamable-HTTP server mounted into the same FastAPI process
+(`kb/server.py` mounts `kb/mcp_server.py` at `/mcp`). Each request is
+authenticated by the caller's `ctdl_` bearer token — the same reader/writer/admin
+tokens as the UI — and dispatched against the in-process API.
+
+Claude Code project `.mcp.json`:
+
+```json
+{
+  "mcpServers": {
+    "citadel": {
+      "type": "http",
+      "url": "https://citadel-archive-production.up.railway.app/mcp",
+      "headers": { "Authorization": "Bearer ${CITADEL_MCP_ACCESS_TOKEN}" }
+    }
+  }
+}
+```
+
+The full per-client walkthrough (Cursor, Codex, the `mcp-remote` stdio bridge)
+lives in the connect skill: `…/skills/connect`.
+
+A **local stdio** server is still available for offline/dev use and points at the
+hosted API:
 
 ```bash
 CITADEL_HTTP_BASE_URL=https://citadel-archive-production.up.railway.app
 CITADEL_MCP_ACCESS_TOKEN=ctdl_...
 CITADEL_MCP_DEFAULT_DATASET=masumi-network
 uv run python -m kb.mcp_server
+```
+
+Hosted-MCP environment (set on the Railway web service):
+
+```bash
+# Forwarded calls hit the API in-process; default targets http://127.0.0.1:$PORT.
+CITADEL_MCP_SELF_BASE_URL=http://127.0.0.1:8000
+# Optional: pin Host/Origin allow-lists (enables DNS-rebinding protection).
+# Leave unset for a token-authenticated public endpoint.
+CITADEL_MCP_ALLOWED_HOSTS=citadel-archive-production.up.railway.app
 ```
 
 Recommended token roles:
@@ -311,9 +410,11 @@ Example Claude/Codex MCP command:
 }
 ```
 
-Exposed tools include `citadel_search`, `citadel_get_mesh`,
-`citadel_list_sources`, `citadel_ingest`, `citadel_record_feedback`,
-`citadel_run_learning_agent`, and `citadel_improve`.
+Exposed tools include `citadel_session`, `citadel_search`,
+`citadel_get_document`, `citadel_get_mesh`, `citadel_list_sources`,
+`citadel_ingest`, `citadel_record_feedback`, `citadel_run_learning_agent`, and
+`citadel_improve`. `citadel_get_document` takes the `id` returned on a search hit
+and fetches the full source document.
 
 The plugin is intentionally thin. It does not run a second Citadel backend. It
 bundles `.mcp.json` and a small agent skill so Codex can launch the stdio MCP
