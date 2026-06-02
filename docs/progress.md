@@ -1,6 +1,18 @@
 # Citadel Progress
 
-Last updated: 2026-05-29.
+Last updated: 2026-06-02.
+
+## 2026-06-02
+
+- Split repositories for production topology:
+  - [Citadel-Archive](https://github.com/masumi-network/Citadel-Archive) is public
+    (app, MCP, hosted agent skills).
+  - [Vault-Backup-Mirror](https://github.com/masumi-network/Vault-Backup-Mirror) is
+    private (Phase 1 Vault Backup Mirror target).
+- Documented mirror policy in `docs/vault-backup-mirror.md` and reserved
+  `CITADEL_BACKUP_MIRROR_*` configuration for the export job.
+- Published public/private boundary: `docs/public-and-private.md`, `SECURITY.md`,
+  hosted `/skills/boundary`, and scrubbed personal paths from MCP templates.
 
 ## 2026-05-29
 

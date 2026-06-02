@@ -13,16 +13,30 @@ web UI, and MCP server.
 This skill teaches an agent how to access Citadel, what it can do, and what it
 must never do.
 
+## Public vs private
+
+| Public | Private |
+|---|---|
+| [Citadel-Archive](https://github.com/masumi-network/Citadel-Archive) — code, docs | Railway vault — organization memory |
+| Hosted skills (`/skills/*`) | [Vault-Backup-Mirror](https://github.com/masumi-network/Vault-Backup-Mirror) |
+
+Vault content and `ctdl_` tokens never belong in the public repo. See
+[`docs/public-and-private.md`](docs/public-and-private.md) or
+`https://citadel-archive-production.up.railway.app/skills/boundary`.
+
 ## Quick Reference
 
 | What | Value |
 |---|---|
 | Hosted URL | `https://citadel-archive-production.up.railway.app` |
-| HTTP API | Same URL, endpoints listed below |
-| MCP server | `uv run python -m kb.mcp_server` (stdio) |
+| Connect skill | `https://citadel-archive-production.up.railway.app/skills/connect` |
+| Vault skill | `https://citadel-archive-production.up.railway.app/skills/vault` |
+| Boundary skill | `https://citadel-archive-production.up.railway.app/skills/boundary` |
+| HTTP API | Same host as hosted URL |
+| MCP server | `uv run python -m kb.mcp_server` (stdio, from a local clone) |
 | Token format | `ctdl_...` (service-account or user token) |
 | Roles | `reader`, `writer`, `admin` |
-| Repo path | `/Users/sarthiborkar/masumi/Citadel Archive` |
+| App clone | `git clone https://github.com/masumi-network/Citadel-Archive.git` |
 
 ## How To Access Citadel
 
@@ -188,11 +202,15 @@ uv run citadel learn --force
 
 ## Connecting a New Agent
 
-When setting up Citadel MCP for a new agent:
+Load the connector skill and follow it end-to-end:
+
+`https://citadel-archive-production.up.railway.app/skills/connect`
+
+Summary:
 
 1. **Get a token.** Ask the user for their Citadel service-account token (starts with `ctdl_`). Never ask for seed phrases, private keys, or admin keys.
 2. **Choose the role.** Reader for search-only; writer if the agent should also ingest.
-3. **Write the config.** See `docs/mcp/README.md` for Claude Code, Codex, and Cursor templates.
+3. **Write the config.** See `docs/mcp/README.md` or `.mcp.json.example` for Claude Code, Codex, and Cursor templates.
 4. **Set `CITADEL_MCP_MAX_INGEST_BYTES`** to limit ingest payload size (default 200KB).
 5. **Gate write/admin tools.** Configure the client to require approval for `citadel_ingest`, `citadel_record_feedback`, `citadel_run_learning_agent`, and `citadel_improve`.
 6. **Verify.** After writing config, restart the client and call `citadel_session`. If that works, try a small `citadel_search`.

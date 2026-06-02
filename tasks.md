@@ -158,9 +158,9 @@ CREATE EXTENSION IF NOT EXISTS vector;
   - reindex/delete
   - invite/team changes
   - token creation
-- Vault Backup Mirror should start as a private GitHub repository for
-  text-heavy, diffable vault history and manifests. Large blobs should move to
-  object storage if the mirror approaches GitHub repository limits.
+- Vault Backup Mirror private repo: `masumi-network/Vault-Backup-Mirror` (created).
+  Citadel Archive is public. Large blobs should move to object storage if the
+  mirror approaches GitHub repository limits.
 
 ## Next
 
@@ -175,7 +175,8 @@ CREATE EXTENSION IF NOT EXISTS vector;
 - Test self-upgrade.
 - Create team MCP service-account tokens and smoke-test search plus ingest from a
   Claude/Codex MCP client.
-- Design the Vault Backup Mirror export format and repository layout.
+- Design and implement Vault Backup Mirror export → `masumi-network/Vault-Backup-Mirror`
+  (see `docs/vault-backup-mirror.md`; `CITADEL_BACKUP_MIRROR_*` env vars reserved).
 
 ## Next: Team Access
 
