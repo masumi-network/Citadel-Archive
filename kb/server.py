@@ -21,6 +21,7 @@ from kb.mesh import MeshState
 from kb.models import FeedbackRequest
 from kb.obsidian_sync import ObsidianSyncStore, SyncPushDocument, normalize_path
 from kb.service import Citadel
+from kb.skills import skill_catalog, skill_path
 
 app = FastAPI(
     title="Citadel Archive",
@@ -481,9 +482,27 @@ async def revoke_access_token(token_id: str, request: Request) -> dict[str, Any]
     return {"ok": True, "api_token": jsonable_encoder(redacted)}
 
 
-@app.get("/healthz")
-async def healthz() -> dict[str, str | bool]:
-    return {"ok": True, "service": "citadel"}
+@app.get("/skills")
+async def list_skills(request: Request) -> dict[str, Any]:
+    """Public index of shareable agent skill URLs (no auth)."""
+    base = str(request.base_url).rstrip("/")
+    skills = [
+        {
+            **entry,
+            "url": f"{base}/skills/{entry['slug']}",
+        }
+        for entry in skill_catalog()
+    ]
+    return {"ok": True, "skills": skills}
+
+
+@app.get("/skills/{slug}")
+async def get_skill(slug: str) -> FileResponse:
+    """Serve a bundled agent skill as markdown (no auth)."""
+    path = skill_path(slug)
+    if path is None:
+        raise HTTPException(status_code=404, detail="Unknown skill")
+    return FileResponse(path, media_type="text/markdown; charset=utf-8")
 
 
 @app.get("/readyz")

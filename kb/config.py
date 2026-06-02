@@ -99,6 +99,9 @@ class CitadelConfig:
     github_sync_run_improve: bool = False
     github_sync_ingest_unchanged: bool = True
     github_token: str | None = None
+    backup_mirror_repo: str = "masumi-network/Vault-Backup-Mirror"
+    backup_mirror_enabled: bool = False
+    backup_mirror_branch: str = "main"
 
     @classmethod
     def from_env(cls, *, env_file: str | None = ".env") -> "CitadelConfig":
@@ -146,6 +149,12 @@ class CitadelConfig:
                 default=True,
             ),
             github_token=os.getenv("CITADEL_GITHUB_TOKEN") or os.getenv("GITHUB_TOKEN") or None,
+            backup_mirror_repo=os.getenv(
+                "CITADEL_BACKUP_MIRROR_REPO",
+                "masumi-network/Vault-Backup-Mirror",
+            ),
+            backup_mirror_enabled=_bool(os.getenv("CITADEL_BACKUP_MIRROR_ENABLED")),
+            backup_mirror_branch=os.getenv("CITADEL_BACKUP_MIRROR_BRANCH", "main"),
         )
 
     def with_tags(self, tags: Iterable[str]) -> "CitadelConfig":
