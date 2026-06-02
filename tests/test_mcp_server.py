@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import asyncio
 from io import BytesIO
+import inspect
 from typing import Any
 from urllib.error import HTTPError
 
@@ -41,6 +43,13 @@ def tool_fn(server: Any, name: str) -> Any:
     return server._tool_manager.get_tool(name).fn
 
 
+def run_tool(server: Any, name: str, *args: Any, **kwargs: Any) -> Any:
+    result = tool_fn(server, name)(*args, **kwargs)
+    if inspect.isawaitable(result):
+        return asyncio.run(result)
+    return result
+
+
 def test_registered_tools_include_safety_annotations() -> None:
     server = create_mcp_server(FakeHttpClient())
 
@@ -55,7 +64,7 @@ def test_search_clamps_top_k_and_tracks_tool_name() -> None:
     client = FakeHttpClient()
     server = create_mcp_server(client)
 
-    result = tool_fn(server, "citadel_search")(" source state ", None, top_k=999)
+    result = run_tool(server, "citadel_search", " source state ", None, top_k=999)
 
     assert result["payload"]["query"] == "source state"
     assert result["payload"]["top_k"] == MAX_SEARCH_TOP_K
@@ -68,8 +77,8 @@ def test_search_uses_mcp_default_dataset(monkeypatch: pytest.MonkeyPatch) -> Non
     client = FakeHttpClient()
     server = create_mcp_server(client)
 
-    result = tool_fn(server, "citadel_search")(" source state ", None)
-    explicit = tool_fn(server, "citadel_search")(" notes ", None, dataset="personal")
+    result = run_tool(server, "citadel_search", " source state ", None)
+    explicit = run_tool(server, "citadel_search", " notes ", None, dataset="personal")
 
     assert result["payload"]["dataset"] == "masumi-network"
     assert explicit["payload"]["dataset"] == "personal"
@@ -79,14 +88,14 @@ def test_write_tools_reject_empty_or_oversized_payloads(monkeypatch: pytest.Monk
     server = create_mcp_server(FakeHttpClient())
 
     with pytest.raises(ToolError, match="data must not be empty"):
-        tool_fn(server, "citadel_ingest")("   ", None)
+        run_tool(server, "citadel_ingest", "   ", None)
 
     monkeypatch.setenv("CITADEL_MCP_MAX_INGEST_BYTES", "4")
     with pytest.raises(ToolError, match="payload is 5 bytes"):
-        tool_fn(server, "citadel_ingest")("12345", None)
+        run_tool(server, "citadel_ingest", "12345", None)
 
     with pytest.raises(ToolError, match="qa_id must not be empty"):
-        tool_fn(server, "citadel_record_feedback")("", None)
+        run_tool(server, "citadel_record_feedback", "", None)
 
 
 def test_remote_http_base_url_is_rejected_without_escape_hatch(

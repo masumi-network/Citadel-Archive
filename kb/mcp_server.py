@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 import json
 import os
@@ -355,6 +356,10 @@ def _call(operation: str, func: Any) -> dict[str, Any]:
         raise ToolError(f"{operation} failed: {exc}") from exc
 
 
+async def _call_async(operation: str, func: Any) -> dict[str, Any]:
+    return await asyncio.to_thread(_call, operation, func)
+
+
 def create_mcp_server(
     client: CitadelHttpClient | None = None,
     *,
@@ -391,15 +396,15 @@ def create_mcp_server(
         )
 
     @mcp.tool(annotations=TOOL_POLICIES["citadel_session"].annotations)
-    def citadel_session(ctx: Context) -> dict[str, Any]:
+    async def citadel_session(ctx: Context) -> dict[str, Any]:
         """Return the authenticated Citadel role, actor, and capabilities."""
-        return _call(
+        return await _call_async(
             "citadel_session",
             lambda: resolve_client(ctx).get("/api/session", tool_name="citadel_session"),
         )
 
     @mcp.tool(annotations=TOOL_POLICIES["citadel_search"].annotations)
-    def citadel_search(
+    async def citadel_search(
         query: str,
         ctx: Context,
         dataset: str | None = None,
@@ -407,7 +412,7 @@ def create_mcp_server(
         top_k: int = 10,
     ) -> dict[str, Any]:
         """Search the Citadel Organization Vault."""
-        return _call(
+        return await _call_async(
             "citadel_search",
             lambda: resolve_client(ctx).post(
                 "/search",
@@ -422,18 +427,18 @@ def create_mcp_server(
         )
 
     @mcp.tool(annotations=TOOL_POLICIES["citadel_get_mesh"].annotations)
-    def citadel_get_mesh(ctx: Context) -> dict[str, Any]:
+    async def citadel_get_mesh(ctx: Context) -> dict[str, Any]:
         """Return Citadel's current knowledge mesh snapshot."""
-        return _call(
+        return await _call_async(
             "citadel_get_mesh",
             lambda: resolve_client(ctx).get("/api/mesh", tool_name="citadel_get_mesh"),
         )
 
     @mcp.tool(annotations=TOOL_POLICIES["citadel_get_document"].annotations)
-    def citadel_get_document(document_id: str, ctx: Context) -> dict[str, Any]:
+    async def citadel_get_document(document_id: str, ctx: Context) -> dict[str, Any]:
         """Fetch a full source document by the ``id`` returned in a search result."""
         normalized_id = _require_non_empty(document_id, "document_id")
-        return _call(
+        return await _call_async(
             "citadel_get_document",
             lambda: resolve_client(ctx).get(
                 f"/api/documents/{quote(normalized_id, safe='')}",
@@ -442,7 +447,7 @@ def create_mcp_server(
         )
 
     @mcp.tool(annotations=TOOL_POLICIES["citadel_list_sources"].annotations)
-    def citadel_list_sources(ctx: Context) -> dict[str, Any]:
+    async def citadel_list_sources(ctx: Context) -> dict[str, Any]:
         """Return configured learning sources, GitHub sync state, and index status."""
 
         def list_sources() -> dict[str, Any]:
@@ -456,10 +461,10 @@ def create_mcp_server(
                 "indexes": http.get("/api/indexes", tool_name="citadel_list_sources"),
             }
 
-        return _call("citadel_list_sources", list_sources)
+        return await _call_async("citadel_list_sources", list_sources)
 
     @mcp.tool(annotations=TOOL_POLICIES["citadel_ingest"].annotations)
-    def citadel_ingest(
+    async def citadel_ingest(
         data: str,
         ctx: Context,
         dataset: str | None = None,
@@ -482,13 +487,13 @@ def create_mcp_server(
                 tool_name="citadel_ingest",
             )
 
-        return _call(
+        return await _call_async(
             "citadel_ingest",
             post_ingest,
         )
 
     @mcp.tool(annotations=TOOL_POLICIES["citadel_record_feedback"].annotations)
-    def citadel_record_feedback(
+    async def citadel_record_feedback(
         qa_id: str,
         ctx: Context,
         score: int | None = None,
@@ -497,7 +502,7 @@ def create_mcp_server(
         dataset: str | None = None,
     ) -> dict[str, Any]:
         """Record feedback for a Cognee QA result. Requires writer access."""
-        return _call(
+        return await _call_async(
             "citadel_record_feedback",
             lambda: resolve_client(ctx).post(
                 "/feedback",
@@ -513,13 +518,13 @@ def create_mcp_server(
         )
 
     @mcp.tool(annotations=TOOL_POLICIES["citadel_run_learning_agent"].annotations)
-    def citadel_run_learning_agent(
+    async def citadel_run_learning_agent(
         ctx: Context,
         force: bool = False,
         dry_run: bool = False,
     ) -> dict[str, Any]:
         """Run the source learning agent. Requires admin access."""
-        return _call(
+        return await _call_async(
             "citadel_run_learning_agent",
             lambda: resolve_client(ctx).post(
                 "/api/learning-agent/run",
@@ -529,13 +534,13 @@ def create_mcp_server(
         )
 
     @mcp.tool(annotations=TOOL_POLICIES["citadel_improve"].annotations)
-    def citadel_improve(
+    async def citadel_improve(
         ctx: Context,
         dataset: str | None = None,
         session_ids: list[str] | None = None,
     ) -> dict[str, Any]:
         """Run Cognee improvement for a dataset/session list. Requires admin access."""
-        return _call(
+        return await _call_async(
             "citadel_improve",
             lambda: resolve_client(ctx).post(
                 "/improve",
