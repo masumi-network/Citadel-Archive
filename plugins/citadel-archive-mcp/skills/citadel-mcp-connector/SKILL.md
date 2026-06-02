@@ -55,6 +55,7 @@ Set these defaults unless the user overrides them:
 | GitHub repo | `https://github.com/masumi-network/Citadel-Archive.git` |
 | Max ingest bytes | `200000` |
 | Token env name | `CITADEL_MCP_ACCESS_TOKEN` |
+| Search dataset | `masumi-network` |
 
 ### 2. Ask the user (minimal)
 
@@ -129,6 +130,7 @@ Copy from `.mcp.json.example` at the repo root, or use:
       "env": {
         "CITADEL_HTTP_BASE_URL": "https://citadel-archive-production.up.railway.app",
         "CITADEL_MCP_ACCESS_TOKEN": "${CITADEL_MCP_ACCESS_TOKEN}",
+        "CITADEL_MCP_DEFAULT_DATASET": "masumi-network",
         "CITADEL_MCP_MAX_INGEST_BYTES": "200000"
       }
     }
@@ -157,6 +159,7 @@ args = [
 [mcp_servers.citadel.env]
 CITADEL_HTTP_BASE_URL = "https://citadel-archive-production.up.railway.app"
 CITADEL_MCP_ACCESS_TOKEN = "PASTE_ONCE_IN_LOCAL_CONFIG"
+CITADEL_MCP_DEFAULT_DATASET = "masumi-network"
 CITADEL_MCP_MAX_INGEST_BYTES = "200000"
 
 [mcp_servers.citadel.tools.citadel_ingest]
@@ -179,7 +182,7 @@ approval_mode = "approve"
 | Name | `citadel` |
 | Command | `uv` |
 | Args | `--directory`, `.` or clone path, `run`, `python`, `-m`, `kb.mcp_server` |
-| Env | `CITADEL_HTTP_BASE_URL`, `CITADEL_MCP_ACCESS_TOKEN`, `CITADEL_MCP_MAX_INGEST_BYTES` |
+| Env | `CITADEL_HTTP_BASE_URL`, `CITADEL_MCP_ACCESS_TOKEN`, `CITADEL_MCP_DEFAULT_DATASET`, `CITADEL_MCP_MAX_INGEST_BYTES` |
 
 Optional project file: `.cursor/mcp.json` with the same shape as Claude's `.mcp.json` if the team uses project-scoped MCP.
 
@@ -192,6 +195,7 @@ Point the host at `plugins/citadel-archive-mcp/` in the cloned repo. Update `.mc
 ```bash
 export CITADEL_HTTP_BASE_URL=https://citadel-archive-production.up.railway.app
 export CITADEL_MCP_ACCESS_TOKEN=ctdl_...
+export CITADEL_MCP_DEFAULT_DATASET=masumi-network
 export CITADEL_MCP_MAX_INGEST_BYTES=200000
 uv --directory "/absolute/path/to/Citadel-Archive" run python -m kb.mcp_server
 ```

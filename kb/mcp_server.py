@@ -178,6 +178,11 @@ def _max_ingest_bytes() -> int:
     return max(1, value)
 
 
+def _default_search_dataset() -> str | None:
+    raw_value = os.getenv("CITADEL_MCP_DEFAULT_DATASET", "").strip()
+    return raw_value or None
+
+
 def _require_non_empty(value: str, field_name: str) -> str:
     normalized = value.strip()
     if not normalized:
@@ -313,7 +318,7 @@ def create_mcp_server(client: CitadelHttpClient | None = None) -> FastMCP:
                 "/search",
                 {
                     "query": _require_non_empty(query, "query"),
-                    "dataset": dataset,
+                    "dataset": dataset or _default_search_dataset(),
                     "session_id": session_id,
                     "top_k": _clamp_top_k(top_k),
                 },

@@ -274,6 +274,7 @@ Copy-paste Claude and Codex client templates live in `docs/mcp/`.
 ```bash
 CITADEL_HTTP_BASE_URL=https://citadel-archive-production.up.railway.app
 CITADEL_MCP_ACCESS_TOKEN=ctdl_...
+CITADEL_MCP_DEFAULT_DATASET=masumi-network
 uv run python -m kb.mcp_server
 ```
 
@@ -304,7 +305,8 @@ Example Claude/Codex MCP command:
   "args": ["run", "python", "-m", "kb.mcp_server"],
   "env": {
     "CITADEL_HTTP_BASE_URL": "https://citadel-archive-production.up.railway.app",
-    "CITADEL_MCP_ACCESS_TOKEN": "${CITADEL_MCP_ACCESS_TOKEN}"
+    "CITADEL_MCP_ACCESS_TOKEN": "${CITADEL_MCP_ACCESS_TOKEN}",
+    "CITADEL_MCP_DEFAULT_DATASET": "masumi-network"
   }
 }
 ```

@@ -50,6 +50,7 @@ agents. It connects over stdio and forwards calls to the hosted Citadel backend.
 ```bash
 CITADEL_HTTP_BASE_URL=https://citadel-archive-production.up.railway.app
 CITADEL_MCP_ACCESS_TOKEN=ctdl_...     # your service-account token
+CITADEL_MCP_DEFAULT_DATASET=masumi-network
 ```
 
 **MCP tools available:**

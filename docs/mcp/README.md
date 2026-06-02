@@ -90,6 +90,7 @@ In your project root, create or merge into `.mcp.json`:
       "env": {
         "CITADEL_HTTP_BASE_URL": "https://citadel-archive-production.up.railway.app",
         "CITADEL_MCP_ACCESS_TOKEN": "${CITADEL_MCP_ACCESS_TOKEN}",
+        "CITADEL_MCP_DEFAULT_DATASET": "masumi-network",
         "CITADEL_MCP_MAX_INGEST_BYTES": "200000"
       }
     }
@@ -149,6 +150,7 @@ args = [
 [mcp_servers.citadel.env]
 CITADEL_HTTP_BASE_URL = "https://citadel-archive-production.up.railway.app"
 CITADEL_MCP_ACCESS_TOKEN = "PASTE_ONCE_IN_LOCAL_CODEX_CONFIG"
+CITADEL_MCP_DEFAULT_DATASET = "masumi-network"
 CITADEL_MCP_MAX_INGEST_BYTES = "200000"
 
 [mcp_servers.citadel.tools.citadel_ingest]
@@ -197,6 +199,7 @@ Open Cursor Settings → Features → Model Context Protocol. Add a new MCP serv
 - **Environment variables**:
   - `CITADEL_HTTP_BASE_URL` = `https://citadel-archive-production.up.railway.app`
   - `CITADEL_MCP_ACCESS_TOKEN` = `ctdl_...` (your token)
+  - `CITADEL_MCP_DEFAULT_DATASET` = `masumi-network`
   - `CITADEL_MCP_MAX_INGEST_BYTES` = `200000`
 
 ### Step 2 — Verify
@@ -239,6 +242,7 @@ With environment variables:
 ```bash
 CITADEL_HTTP_BASE_URL=https://citadel-archive-production.up.railway.app
 CITADEL_MCP_ACCESS_TOKEN=ctdl_...
+CITADEL_MCP_DEFAULT_DATASET=masumi-network
 CITADEL_MCP_MAX_INGEST_BYTES=200000
 ```
 
@@ -354,6 +358,7 @@ Citadel stores only the SHA-256 hash. The raw token is shown once at creation.
 |---|---|---|
 | `CITADEL_HTTP_BASE_URL` | `http://localhost:8000` | Citadel backend URL |
 | `CITADEL_MCP_ACCESS_TOKEN` | — | Bearer token for Citadel API |
+| `CITADEL_MCP_DEFAULT_DATASET` | — | Dataset used by `citadel_search` when callers omit `dataset` |
 | `CITADEL_MCP_MAX_INGEST_BYTES` | `200000` | Max ingest payload size |
 | `CITADEL_MCP_ALLOW_INSECURE_HTTP` | `false` | Allow non-localhost HTTP |
 | `CITADEL_MCP_TRANSPORT` | `stdio` | MCP transport (stdio or sse) |

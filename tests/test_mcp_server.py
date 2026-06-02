@@ -63,6 +63,18 @@ def test_search_clamps_top_k_and_tracks_tool_name() -> None:
     assert client.posts[0]["path"] == "/search"
 
 
+def test_search_uses_mcp_default_dataset(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("CITADEL_MCP_DEFAULT_DATASET", "masumi-network")
+    client = FakeHttpClient()
+    server = create_mcp_server(client)
+
+    result = tool_fn(server, "citadel_search")(" source state ")
+    explicit = tool_fn(server, "citadel_search")(" notes ", dataset="personal")
+
+    assert result["payload"]["dataset"] == "masumi-network"
+    assert explicit["payload"]["dataset"] == "personal"
+
+
 def test_write_tools_reject_empty_or_oversized_payloads(monkeypatch: pytest.MonkeyPatch) -> None:
     server = create_mcp_server(FakeHttpClient())
 
