@@ -482,6 +482,11 @@ async def revoke_access_token(token_id: str, request: Request) -> dict[str, Any]
     return {"ok": True, "api_token": jsonable_encoder(redacted)}
 
 
+@app.get("/healthz")
+async def healthz() -> dict[str, str | bool]:
+    return {"ok": True, "service": "citadel"}
+
+
 @app.get("/skills")
 async def list_skills(request: Request) -> dict[str, Any]:
     """Public index of shareable agent skill URLs (no auth)."""
