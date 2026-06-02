@@ -4,6 +4,7 @@ import asyncio
 import hashlib
 import hmac
 import json
+import os
 from pathlib import Path
 import secrets
 from typing import Any
@@ -359,6 +360,22 @@ def role_payload(role: str, identity: AccessIdentity | None = None) -> dict[str,
     }
 
 
+def public_base_url(request: Request) -> str:
+    configured = os.getenv("CITADEL_PUBLIC_BASE_URL") or os.getenv("CITADEL_HTTP_BASE_URL")
+    if configured:
+        return configured.rstrip("/")
+
+    forwarded_host = request.headers.get("x-forwarded-host") or request.headers.get("host")
+    forwarded_proto = request.headers.get("x-forwarded-proto")
+    if forwarded_host and forwarded_proto:
+        host = forwarded_host.split(",", 1)[0].strip()
+        proto = forwarded_proto.split(",", 1)[0].strip()
+        if host and proto:
+            return f"{proto}://{host}".rstrip("/")
+
+    return str(request.base_url).rstrip("/")
+
+
 @app.get("/", include_in_schema=False)
 async def ui(request: Request) -> Response:
     if not session_role(request):
@@ -490,7 +507,7 @@ async def healthz() -> dict[str, str | bool]:
 @app.get("/skills")
 async def list_skills(request: Request) -> dict[str, Any]:
     """Public index of shareable agent skill URLs (no auth)."""
-    base = str(request.base_url).rstrip("/")
+    base = public_base_url(request)
     skills = [
         {
             **entry,

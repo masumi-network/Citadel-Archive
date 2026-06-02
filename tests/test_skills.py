@@ -18,6 +18,22 @@ def test_list_skills() -> None:
     assert "mcp" in connect["aliases"]
 
 
+def test_list_skills_uses_forwarded_public_url() -> None:
+    client = TestClient(app, base_url="http://internal.local")
+
+    response = client.get(
+        "/skills",
+        headers={
+            "x-forwarded-proto": "https",
+            "x-forwarded-host": "citadel-archive-production.up.railway.app",
+        },
+    )
+
+    assert response.status_code == 200
+    connect = next(item for item in response.json()["skills"] if item["slug"] == "connect")
+    assert connect["url"] == "https://citadel-archive-production.up.railway.app/skills/connect"
+
+
 def test_get_skill_connect() -> None:
     client = TestClient(app)
     response = client.get("/skills/connect")
