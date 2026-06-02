@@ -103,15 +103,39 @@
   - reduced duplicate dashboard navigation chrome and made mobile content-first
   - rewrote the overview header around current vault state and primary actions
   - tests passing locally: `30 passed`
+- Production rollout verified on 2026-06-02:
+  - latest public repo commit: `cd33217` (`fix(mcp): default search to company dataset`)
+  - Railway web deployment: `891c81ee-4c44-4303-8792-0a282d9d62be` (`SUCCESS`)
+  - `/healthz` returns `{"ok":true,"service":"citadel"}`
+  - `/skills` returns HTTPS URLs for hosted skills
+  - failed deployment `7658403e-d79e-4d89-969b-34bb3aa45374` was caused by
+    Railway health checks receiving `404` from `/healthz`; fixed in `68d729e`
+  - `CITADEL_MCP_DEFAULT_DATASET=masumi-network` added for company MCP search
+  - MCP `citadel_search` returns live results through the reader service account
+  - local test suite passing: `53 passed`
+- Company reader service-account token created for MCP bootstrap:
+  - role: reader
+  - scopes: `kb:read`, `kb:search`, `sources:read`, `obsidian:sync:pull`
+  - token prefix only: `ctdl_oH3YQ0W`
+  - raw token stored only in ignored local `.citadel/company-reader-mcp.env`
+- Live learning-agent sync run on 2026-06-02:
+  - scanned 41 repositories
+  - processed 50 organization events and 198 commits
+  - ingestion accepted for the `masumi-network` dataset
+- Vault Backup Mirror initialized:
+  - repo: `masumi-network/Vault-Backup-Mirror`
+  - visibility: private
+  - branch: `main`
+  - scaffold commit: `deeb1c9`
 
 ## Current Railway State
 
 - Web service is live:
   - `https://citadel-archive-production.up.railway.app/healthz`
   - `https://citadel-archive-production.up.railway.app/`
-- Cron service is deployed from commit `451efdf18f039d4586b3afa4505d024ca06b3864`.
-- Local feedback UI, OS dashboard, role-key, learning-agent, and MCP changes have not
-  been deployed yet.
+- Web service latest deployment is `SUCCESS` at commit `cd33217`.
+- Cron service `Citadel-GitHub-Sync` has a successful build-only deployment at
+  commit `cd33217`; next scheduled run still needs post-03:00 UTC verification.
 - OpenRouter is configured through `OPENROUTER_API_KEY` and
   `LLM_MODEL=openrouter/free` on both Railway services.
 
@@ -164,17 +188,16 @@ CREATE EXTENSION IF NOT EXISTS vector;
 
 ## Next
 
-- Deploy local learning-agent and MCP changes to Railway.
 - Verify cron service next scheduled execution after 03:00 UTC.
 - Verify admin key unlocks UI.
 - Verify `/api/github-sync` in the hosted UI.
-- Run the learning agent once manually.
-- Test real ingest -> Cognee -> Postgres/pgvector/Kuzu.
-- Test search.
+- Continue testing real Cognee vector/graph search. Current live company MCP
+  search returns results through the GitHub sync state fallback for
+  `masumi-network`.
 - Test hosted feedback with a real Cognee QA ID.
 - Test self-upgrade.
-- Create team MCP service-account tokens and smoke-test search plus ingest from a
-  Claude/Codex MCP client.
+- Add writer/admin team MCP service-account tokens only when those roles are
+  needed; current company bootstrap token is reader-only.
 - Design and implement Vault Backup Mirror export → `masumi-network/Vault-Backup-Mirror`
   (see `docs/vault-backup-mirror.md`; `CITADEL_BACKUP_MIRROR_*` env vars reserved).
 

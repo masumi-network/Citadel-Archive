@@ -46,6 +46,19 @@ snapshots/
 
 Commits should be small, reviewable, and diff-friendly (Markdown, JSON, JSONL).
 
+## Current status
+
+Verified on 2026-06-02:
+
+- Repository exists at
+  [masumi-network/Vault-Backup-Mirror](https://github.com/masumi-network/Vault-Backup-Mirror).
+- Visibility: private.
+- Default branch: `main`.
+- Initial scaffold commit: `deeb1c9`.
+- Top-level scaffold: `.gitignore`, `README.md`, `manifests/`, `snapshots/`.
+- Automated export from Railway is not implemented yet; `CITADEL_BACKUP_MIRROR_*`
+  settings reserve the integration path.
+
 ## Configuration (Citadel Archive)
 
 Set on the Railway web service when mirror export is enabled:
@@ -62,7 +75,8 @@ repo only. Use a dedicated fine-grained or machine token—never commit it.
 ## Operational notes
 
 - Target size: ~1 GB practical ceiling; review at ~5 GB ([ADR 0001](adr/0001-github-vault-backup-mirror.md)).
-- If the mirror repo is empty, that is expected until the first export run.
+- If `snapshots/` has no dated export folders, that is expected until the first
+  export run.
 - Agents connect via MCP to Railway; admins may browse the mirror in GitHub for audit.
 
 ## Related
