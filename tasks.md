@@ -104,7 +104,7 @@
   - rewrote the overview header around current vault state and primary actions
   - tests passing locally: `30 passed`
 - Production rollout verified on 2026-06-02:
-  - latest public repo commit: `cd33217` (`fix(mcp): default search to company dataset`)
+  - functional rollout commit: `cd33217` (`fix(mcp): default search to company dataset`)
   - Railway web deployment: `891c81ee-4c44-4303-8792-0a282d9d62be` (`SUCCESS`)
   - `/healthz` returns `{"ok":true,"service":"citadel"}`
   - `/skills` returns HTTPS URLs for hosted skills
@@ -133,9 +133,10 @@
 - Web service is live:
   - `https://citadel-archive-production.up.railway.app/healthz`
   - `https://citadel-archive-production.up.railway.app/`
-- Web service latest deployment is `SUCCESS` at commit `cd33217`.
-- Cron service `Citadel-GitHub-Sync` has a successful build-only deployment at
-  commit `cd33217`; next scheduled run still needs post-03:00 UTC verification.
+- Web service auto-deploys `main`; health was verified after the progress
+  documentation rollout.
+- Cron service `Citadel-GitHub-Sync` has a successful build-only deployment and
+  schedule `0 3 * * *`; next scheduled run still needs post-03:00 UTC verification.
 - OpenRouter is configured through `OPENROUTER_API_KEY` and
   `LLM_MODEL=openrouter/free` on both Railway services.
 
