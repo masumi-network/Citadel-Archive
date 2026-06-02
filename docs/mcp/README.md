@@ -21,6 +21,17 @@ Do not commit tokens or vault content to git. See [public-and-private.md](../pub
 | Use vault | `https://citadel-archive-production.up.railway.app/skills/vault` |
 | Data boundary | `https://citadel-archive-production.up.railway.app/skills/boundary` |
 
+For Codex-compatible agents, share the install command instead:
+
+```bash
+npx skills add masumi-network/Citadel-Archive
+```
+
+The root `citadel-archive` skill points agents to the hosted connector, vault
+usage, and boundary skills. See
+[`../team-share-smoke-test.md`](../team-share-smoke-test.md) for the latest
+verified rollout checklist.
+
 **Table of contents:**
 
 - [Prerequisites](#prerequisites)
@@ -44,8 +55,9 @@ Before connecting, you need:
 1. **Citadel URL.** Default: `https://citadel-archive-production.up.railway.app`
 2. **Citadel access token.** A service-account token beginning with `ctdl_`.
    Create one through the Citadel UI (Access page) or ask your vault admin.
-3. **The repo cloned locally** (if the MCP server needs to run from source).
-   The MCP server is a thin stdio wrapper that calls the hosted Citadel HTTP API.
+3. **An MCP-capable client.** Hosted MCP needs only the `/mcp` URL plus the
+   Authorization header. Clone this repo only for local development or legacy
+   stdio-wrapper use.
 
 ### Getting a token
 

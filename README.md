@@ -45,16 +45,37 @@ installed straight from this repo via [skills.sh](https://skills.sh):
 npx skills add masumi-network/Citadel-Archive
 ```
 
+Verified team-share flow: see
+[`docs/team-share-smoke-test.md`](docs/team-share-smoke-test.md).
+
 ## Agent Entrypoint
 
-Share this URL with agents or teammates first:
+For a Codex-compatible agent, share this command first:
+
+```bash
+npx skills add masumi-network/Citadel-Archive
+```
+
+The installed root skill points the agent to the hosted MCP endpoint, the
+connector skill, the vault usage skill, and the public/private boundary rules.
+
+For agents that cannot install skills, share this URL instead:
 
 ```text
 https://citadel-archive-production.up.railway.app/skills
 ```
 
-That index points agents to the connector setup skill, vault usage skill, and
-public/private boundary rules.
+Give every teammate or agent identity its own Citadel access token. Do not reuse
+tokens between people, agents, or machines. Rotate a token immediately if it was
+pasted into chat, logs, issues, PRs, or any public repo.
+
+Verified on 2026-06-02 after commit `7a4a1d9`:
+
+- `npx skills add masumi-network/Citadel-Archive` installs the root
+  `citadel-archive` skill.
+- Hosted MCP `/mcp` lists tools and supports `citadel_session`,
+  `citadel_search`, and `citadel_ingest`.
+- A writer token can read and ingest through both direct HTTP and hosted MCP.
 
 Copy-paste public smoke test:
 

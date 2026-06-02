@@ -116,8 +116,13 @@
 - Company reader service-account token created for MCP bootstrap:
   - role: reader
   - scopes: `kb:read`, `kb:search`, `sources:read`, `obsidian:sync:pull`
-  - token prefix only: `ctdl_oH3YQ0W`
   - raw token stored only in ignored local `.citadel/company-reader-mcp.env`
+- Team-share flow verified on 2026-06-02:
+  - share command: `npx skills add masumi-network/Citadel-Archive`
+  - production verification commit: `7a4a1d9`
+  - hosted MCP `citadel_session`, `citadel_search`, and `citadel_ingest`
+    succeed with a writer token
+  - rotate any token that was pasted into chat or logs before team rollout
 - Live learning-agent sync run on 2026-06-02:
   - scanned 41 repositories
   - processed 50 organization events and 198 commits
@@ -197,8 +202,8 @@ CREATE EXTENSION IF NOT EXISTS vector;
   `masumi-network`.
 - Test hosted feedback with a real Cognee QA ID.
 - Test self-upgrade.
-- Add writer/admin team MCP service-account tokens only when those roles are
-  needed; current company bootstrap token is reader-only.
+- Issue fresh per-teammate/per-agent tokens for rollout; use reader by default
+  and writer/admin only when those roles are needed.
 - Design and implement Vault Backup Mirror export → `masumi-network/Vault-Backup-Mirror`
   (see `docs/vault-backup-mirror.md`; `CITADEL_BACKUP_MIRROR_*` env vars reserved).
 

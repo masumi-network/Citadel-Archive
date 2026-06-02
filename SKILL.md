@@ -39,6 +39,19 @@ Vault content and `ctdl_` tokens never belong in the public repo. See
 | Roles | `reader`, `writer`, `admin` |
 | Local stdio MCP (dev only) | `uv run python -m kb.mcp_server` |
 
+## Team Onboarding
+
+For Codex-compatible agents, install the public Citadel skill first:
+
+```bash
+npx skills add masumi-network/Citadel-Archive
+```
+
+This installs the root `citadel-archive` skill, which points agents to the
+hosted connector, vault usage, and data-boundary skills. Then provide a
+per-agent `ctdl_...` token. Do not share one token across multiple users or
+agents, and rotate any token that was pasted into chat or logs.
+
 ## How To Access Citadel
 
 ### Option A — Through the MCP Server (Recommended)
@@ -223,6 +236,10 @@ Summary:
 5. **Gate write/admin tools.** Configure the client to require approval for `citadel_ingest`, `citadel_record_feedback`, `citadel_run_learning_agent`, and `citadel_improve`.
 6. **Verify.** After writing config, restart the client and call `citadel_session`. If that works, try a small `citadel_search`.
 7. **Debug.** If the server fails: run `uv sync --dev` in the repo, check the token is present, check the URL is reachable. Do not print the token.
+
+Current production verification: hosted MCP was tested on 2026-06-02 at commit
+`7a4a1d9`; `citadel_session`, `citadel_search`, and `citadel_ingest` all
+returned successfully with a writer token.
 
 ## Architecture Context
 

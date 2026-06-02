@@ -27,6 +27,10 @@ Boundary detail: `https://citadel-archive-production.up.railway.app/skills/bound
 
 - Connect (this skill): `https://citadel-archive-production.up.railway.app/skills/connect`
 - After MCP works: `https://citadel-archive-production.up.railway.app/skills/vault`
+- Full repo skill install: `npx skills add masumi-network/Citadel-Archive`
+
+If the user shares the `npx skills add` command, install the root
+`citadel-archive` skill first, then continue this connector workflow.
 
 ## Agent workflow (run in order)
 
@@ -141,6 +145,13 @@ Ask the user to **restart** the client so the new server loads, then call tools:
 1. `citadel_session` — confirm role and capabilities.
 2. `citadel_search` with a small query (e.g. `architecture` or a project name).
 3. From a search hit, pass its `id` to `citadel_get_document` to drill down.
+
+Production smoke status, last verified 2026-06-02 at commit `7a4a1d9`:
+
+- hosted MCP initializes and lists Citadel tools;
+- `citadel_session` returns the caller role and capabilities;
+- `citadel_search` returns company search results;
+- `citadel_ingest` succeeds with a writer token.
 
 ### 4. Start fetching (normal operation)
 

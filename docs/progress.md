@@ -4,13 +4,26 @@ Last updated: 2026-06-02.
 
 ## 2026-06-02
 
+- Team-share readiness verified after commit `7a4a1d9`:
+  - `npx skills add masumi-network/Citadel-Archive` installs the root
+    `citadel-archive` skill.
+  - Production web service `Citadel-Archive` is `SUCCESS` and `RUNNING` on
+    Railway at commit `7a4a1d9`.
+  - Public endpoints `/healthz`, `/skills`, and `/skills/connect` return `200`.
+  - Direct HTTP with a writer token verifies `/api/session`, `/search`, and
+    `/ingest`.
+  - Hosted MCP verifies `initialize`, `tools/list`, `citadel_session`,
+    `citadel_search`, and `citadel_ingest`.
+  - Fixed hosted MCP self-call timeouts by offloading forwarded HTTP API calls
+    from the event loop.
+  - Any token pasted into chat or logs should be rotated before team rollout.
 - Production rollout checkpoint, verified after commit `cd33217`:
   - Railway web service `Citadel-Archive` deployment `891c81ee-4c44-4303-8792-0a282d9d62be`
     is `SUCCESS` and serves `/healthz`.
   - Hosted skill index serves HTTPS URLs for `/skills/connect`, `/skills/vault`,
     and `/skills/boundary`.
   - Reader service-account MCP token was created for company bootstrap and stored
-    only in ignored local `.citadel/` files; token prefix: `ctdl_oH3YQ0W`.
+    only in ignored local `.citadel/` files.
   - Local MCP `citadel_search` smoke test returns results when using
     `CITADEL_MCP_DEFAULT_DATASET=masumi-network`.
 - Diagnosed the failed Railway deployment `7658403e-d79e-4d89-969b-34bb3aa45374`:
