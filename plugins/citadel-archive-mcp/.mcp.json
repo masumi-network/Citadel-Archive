@@ -4,7 +4,7 @@
       "command": "uv",
       "args": [
         "--directory",
-        "/Users/sarthiborkar/masumi/Citadel Archive",
+        "../..",
         "run",
         "python",
         "-m",

@@ -1,6 +1,6 @@
 # Citadel
 
-Last updated: 2026-05-28.
+Last updated: 2026-06-02.
 
 Citadel is a thin self-hosted Organization Vault wrapper built on top of
 [Cognee](https://github.com/topoteretes/cognee), which is Apache-2.0 licensed.
@@ -20,6 +20,25 @@ The shareable plan lives in
 canonical domain language lives in [`CONTEXT.md`](CONTEXT.md). Architecture
 decisions live in [`docs/adr/`](docs/adr/), and current refactor candidates live
 in [`docs/architecture-deepening-opportunities.md`](docs/architecture-deepening-opportunities.md).
+
+## Repository layout
+
+| Repo | URL | Role |
+|---|---|---|
+| **Citadel Archive** (this repo) | https://github.com/masumi-network/Citadel-Archive | **Public** — app, MCP plugin, docs, agent skills (no vault content) |
+| **Vault Backup Mirror** | https://github.com/masumi-network/Vault-Backup-Mirror | **Private** — NAS-style backup of vault evidence |
+| **Railway deployment** | https://citadel-archive-production.up.railway.app | **Private** — live Organization Vault (search, ingest, mesh) |
+
+What may be public vs private: [`docs/public-and-private.md`](docs/public-and-private.md)
+
+| Agent skill | URL |
+|---|---|
+| Connect MCP | https://citadel-archive-production.up.railway.app/skills/connect |
+| Use vault | https://citadel-archive-production.up.railway.app/skills/vault |
+| Data boundary | https://citadel-archive-production.up.railway.app/skills/boundary |
+| All skills | https://citadel-archive-production.up.railway.app/skills |
+
+Mirror export from Railway is planned; see [`docs/vault-backup-mirror.md`](docs/vault-backup-mirror.md).
 
 ## What This Adds
 

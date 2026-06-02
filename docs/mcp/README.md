@@ -3,6 +3,24 @@
 This guide covers how to connect any MCP-capable coding agent to the Citadel
 Organization Vault.
 
+## Public vs private
+
+| Public | Private |
+|---|---|
+| This repo ([Citadel-Archive](https://github.com/masumi-network/Citadel-Archive)) — code, docs, skills | Railway vault — live memory, DB, hashed tokens |
+| Hosted skill URLs (`/skills/connect`, `/skills/vault`, `/skills/boundary`) | [Vault-Backup-Mirror](https://github.com/masumi-network/Vault-Backup-Mirror) — backup exports |
+| MCP tool names and API routes | `ctdl_` tokens, `.env`, vault search results |
+
+Do not commit tokens or vault content to git. See [public-and-private.md](../public-and-private.md).
+
+**Agent skill URLs (share these):**
+
+| Skill | URL |
+|---|---|
+| Connect MCP | `https://citadel-archive-production.up.railway.app/skills/connect` |
+| Use vault | `https://citadel-archive-production.up.railway.app/skills/vault` |
+| Data boundary | `https://citadel-archive-production.up.railway.app/skills/boundary` |
+
 **Table of contents:**
 
 - [Prerequisites](#prerequisites)
@@ -63,7 +81,7 @@ In your project root, create or merge into `.mcp.json`:
       "command": "uv",
       "args": [
         "--directory",
-        "/Users/sarthiborkar/masumi/Citadel Archive",
+        "/absolute/path/to/Citadel-Archive",
         "run",
         "python",
         "-m",
@@ -121,15 +139,16 @@ Append this to `~/.codex/config.toml`:
 command = "uv"
 args = [
   "--directory",
-  "/Users/sarthiborkar/masumi/Citadel Archive",
+  "/absolute/path/to/Citadel-Archive",
   "run",
   "python",
   "-m",
   "kb.mcp_server",
 ]
+
 [mcp_servers.citadel.env]
 CITADEL_HTTP_BASE_URL = "https://citadel-archive-production.up.railway.app"
-CITADEL_MCP_ACCESS_TOKEN = "PASTE_CITADEL_TOKEN_HERE"
+CITADEL_MCP_ACCESS_TOKEN = "PASTE_ONCE_IN_LOCAL_CODEX_CONFIG"
 CITADEL_MCP_MAX_INGEST_BYTES = "200000"
 
 [mcp_servers.citadel.tools.citadel_ingest]
@@ -169,7 +188,7 @@ Open Cursor Settings → Features → Model Context Protocol. Add a new MCP serv
 - **Args**:
   ```
   --directory
-  /Users/sarthiborkar/masumi/Citadel Archive
+  /absolute/path/to/Citadel-Archive
   run
   python
   -m
@@ -212,7 +231,7 @@ The MCP server is a standard stdio server. Any client that supports MCP stdio
 can connect by spawning:
 
 ```bash
-uv --directory "/Users/sarthiborkar/masumi/Citadel Archive" run python -m kb.mcp_server
+uv --directory "/absolute/path/to/Citadel-Archive" run python -m kb.mcp_server
 ```
 
 With environment variables:
@@ -347,7 +366,7 @@ Citadel stores only the SHA-256 hash. The raw token is shown once at creation.
 
 ```bash
 # Ensure dependencies are installed
-cd "/Users/sarthiborkar/masumi/Citadel Archive"
+cd "/absolute/path/to/Citadel-Archive"
 uv sync --dev
 
 # Test the MCP server manually
@@ -406,17 +425,19 @@ uv run python -m kb.mcp_server
 
 ## Connector Skill
 
-For agents that support loading skills from a URL, point them at:
+For agents that support loading skills from a URL, use the hosted paths (no
+GitHub auth; vault content is never in these files):
+
+| Skill | URL |
+|---|---|
+| MCP setup | `https://citadel-archive-production.up.railway.app/skills/connect` |
+| Vault usage | `https://citadel-archive-production.up.railway.app/skills/vault` |
+| Public vs private | `https://citadel-archive-production.up.railway.app/skills/boundary` |
+| Index | `https://citadel-archive-production.up.railway.app/skills` |
+
+Optional GitHub raw mirrors (same markdown as public Citadel-Archive):
 
 ```
 https://raw.githubusercontent.com/masumi-network/Citadel-Archive/main/plugins/citadel-archive-mcp/skills/citadel-mcp-connector/SKILL.md
-```
-
-This skill walks the agent through asking for the token, writing the right client
-config, and verifying the connection — without committing or echoing the token.
-
-For the full agent skill (dos, don'ts, tool reference, domain language), use:
-
-```
-https://raw.githubusercontent.com/masumi-network/Citadel-Archive/main/SKILL.md
+https://raw.githubusercontent.com/masumi-network/Citadel-Archive/main/plugins/citadel-archive-mcp/skills/citadel-data-boundary/SKILL.md
 ```
