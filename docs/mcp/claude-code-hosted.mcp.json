@@ -4,7 +4,7 @@
       "command": "uv",
       "args": [
         "--directory",
-        "/Users/sarthiborkar/masumi/Citadel Archive",
+        "/absolute/path/to/Citadel-Archive",
         "run",
         "python",
         "-m",
@@ -12,7 +12,7 @@
       ],
       "env": {
         "CITADEL_HTTP_BASE_URL": "https://citadel-archive-production.up.railway.app",
-        "CITADEL_MCP_ACCESS_TOKEN": "PASTE_CITADEL_TOKEN_HERE",
+        "CITADEL_MCP_ACCESS_TOKEN": "${CITADEL_MCP_ACCESS_TOKEN}",
         "CITADEL_MCP_MAX_INGEST_BYTES": "200000"
       }
     }

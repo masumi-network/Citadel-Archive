@@ -4,7 +4,7 @@
   "description": "Connect coding agents to the Citadel Organization Vault through MCP. Provides search, ingest, mesh exploration, source-learning status, and admin operations with role-based access control.",
   "author": {
     "name": "Citadel Archive",
-    "url": "https://github.com/sarthib7"
+    "url": "https://github.com/masumi-network"
   },
   "license": "Apache-2.0",
   "keywords": [
