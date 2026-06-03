@@ -196,6 +196,18 @@ def test_public_health_response_is_not_cacheable() -> None:
     assert response.headers["pragma"] == "no-cache"
 
 
+def test_mcp_legacy_path_redirects_relative() -> None:
+    client = TestClient(app, base_url="https://testserver")
+
+    response = client.post("/mcp", follow_redirects=False)
+
+    assert response.status_code == 307
+    assert response.headers["location"] == "/mcp/"
+    assert not response.headers["location"].startswith("http://")
+    assert response.headers["cache-control"] == "no-store"
+    assert response.headers["pragma"] == "no-cache"
+
+
 def test_login_page_uses_static_script_for_csp() -> None:
     client = TestClient(app, base_url="https://testserver")
 

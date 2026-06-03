@@ -29,9 +29,10 @@ from kb.service import Citadel
 from kb.skills import skill_catalog, skill_integrity, skill_path
 from kb.source_search import GITHUB_DOC_ID_PREFIX, github_section_document
 
-# Hosted MCP: one streamable-HTTP endpoint at /mcp, authenticated per request by
+# Hosted MCP: one streamable-HTTP endpoint at /mcp/, authenticated per request by
 # the caller's ctdl_ bearer token. No clone, no local Python — agents point their
-# MCP client at https://<host>/mcp with Authorization: Bearer <token>.
+# MCP client at https://<host>/mcp/ with Authorization: Bearer <token>.
+MCP_ENDPOINT_PATH = "/mcp/"
 mcp_server = create_mcp_server()
 mcp_app = mcp_server.streamable_http_app()
 
@@ -50,6 +51,14 @@ app = FastAPI(
 )
 STATIC_DIR = Path(__file__).with_name("static")
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+
+
+@app.api_route("/mcp", methods=["GET", "POST", "DELETE", "OPTIONS"], include_in_schema=False)
+async def mcp_trailing_slash_redirect() -> RedirectResponse:
+    """Keep legacy /mcp configs working without emitting an absolute http:// redirect."""
+    return RedirectResponse(url=MCP_ENDPOINT_PATH, status_code=307)
+
+
 app.mount("/mcp", mcp_app)
 ADMIN_COOKIE = "citadel_admin"
 MCP_TOOL_HEADER = "x-citadel-mcp-tool"
@@ -867,7 +876,7 @@ async def citadel_discovery_manifest(request: Request, response: Response) -> di
             "discovery": f"{base}/.well-known/citadel.json",
         },
         "mcp": {
-            "endpoint": f"{base}/mcp",
+            "endpoint": f"{base}{MCP_ENDPOINT_PATH}",
             "transport": "streamable_http",
             "authentication": {
                 "required": True,

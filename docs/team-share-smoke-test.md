@@ -69,7 +69,7 @@ curl -fsS -X POST "$CITADEL_BASE_URL/search" \
 
 ## Hosted MCP Checks
 
-A plain `curl` GET to `/mcp` is not a valid MCP client request. The endpoint
+A plain `curl` GET to `/mcp/` is not a valid MCP client request. The endpoint
 expects streamable HTTP with `Accept: text/event-stream` or a real MCP client.
 
 Expected MCP results with a writer token:

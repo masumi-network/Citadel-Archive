@@ -3,7 +3,7 @@ command = "npx"
 args = [
   "-y",
   "mcp-remote",
-  "https://citadel-archive-production.up.railway.app/mcp",
+  "https://citadel-archive-production.up.railway.app/mcp/",
   "--header",
   "Authorization: Bearer PASTE_ONCE_IN_LOCAL_CODEX_CONFIG",
 ]

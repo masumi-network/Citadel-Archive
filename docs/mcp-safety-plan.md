@@ -30,7 +30,7 @@ a scoped service-account token.
 Citadel currently has four relevant layers:
 
 - `kb/server.py`: the real FastAPI service and access-control boundary.
-- Hosted `/mcp`: streamable HTTP MCP mounted into the same FastAPI process.
+- Hosted `/mcp/`: streamable HTTP MCP mounted into the same FastAPI process.
   Each request authenticates with `Authorization: Bearer <ctdl_token>` and is
   checked by the same role/scope API boundary.
 - `kb/mcp_server.py`: the MCP implementation and local stdio fallback. Hosted
@@ -128,7 +128,7 @@ Tasks:
   - require approval, or disable by default, for `citadel_run_learning_agent`
     and `citadel_improve`.
 
-Status on 2026-06-03: implemented and extended. Hosted `/mcp` is the primary
+Status on 2026-06-03: implemented and extended. Hosted `/mcp/` is the primary
 path, stdio remains a fallback, `citadel_discovery` and `citadel://discovery`
 publish safe metadata, MCP calls are tagged in audit logs, and public skill files
 carry content hashes.

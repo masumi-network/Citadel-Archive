@@ -7,7 +7,7 @@ Last updated: 2026-06-03.
 - Installed this workspace's project MCP config against the hosted Citadel MCP
   endpoint:
   - `.mcp.json` now points to
-    `https://citadel-archive-production.up.railway.app/mcp`.
+    `https://citadel-archive-production.up.railway.app/mcp/`.
   - The config uses `${CITADEL_MCP_ACCESS_TOKEN}` and does not store a raw token.
 - Added persistent MCP audit attribution:
   - MCP forwarded calls are recorded as `mcp.<tool_name>` audit events.
@@ -55,9 +55,9 @@ Last updated: 2026-06-03.
 - Added `citadel_audit_events`, an admin MCP tool for bounded
   `all|mcp|access|failures` audit views backed by the same `/api/audit` redaction
   path.
-- Updated dashboard MCP setup snippets to use the hosted `/mcp` endpoint instead
+- Updated dashboard MCP setup snippets to use the hosted `/mcp/` endpoint instead
   of the older local `uv` wrapper path.
-- Updated hosted MCP docs/templates so the no-clone `/mcp` URL is the primary
+- Updated hosted MCP docs/templates so the no-clone `/mcp/` URL is the primary
   setup path, with the stdio wrapper left as a fallback/dev path.
 - Added verifiable hosted skill metadata:
   - `/skills` now includes `size_bytes`, `sha256`, and SRI-style `integrity`

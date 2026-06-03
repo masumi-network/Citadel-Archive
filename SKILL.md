@@ -35,7 +35,7 @@ Vault content and `ctdl_` tokens never belong in the public repo. See
 | Vault skill | `https://citadel-archive-production.up.railway.app/skills/vault` |
 | Boundary skill | `https://citadel-archive-production.up.railway.app/skills/boundary` |
 | HTTP API | Same host as hosted URL |
-| MCP endpoint | `https://citadel-archive-production.up.railway.app/mcp` (hosted, no clone) |
+| MCP endpoint | `https://citadel-archive-production.up.railway.app/mcp/` (hosted, no clone) |
 | MCP auth | `Authorization: Bearer ctdl_...` |
 | Token format | `ctdl_...` (service-account or user token) |
 | Roles | `reader`, `writer`, `admin` |
@@ -66,7 +66,7 @@ requirements, tool policy metadata, and public/private boundary rules.
 ### Option A — Through the MCP Server (Recommended)
 
 The hosted MCP server is the cleanest integration for coding agents. Point the
-client at the hosted `/mcp` URL and send the token in the `Authorization` header
+client at the hosted `/mcp/` URL and send the token in the `Authorization` header
 — no clone, no local Python. Full per-client setup: `…/skills/connect`.
 
 ```json
@@ -74,7 +74,7 @@ client at the hosted `/mcp` URL and send the token in the `Authorization` header
   "mcpServers": {
     "citadel": {
       "type": "http",
-      "url": "https://citadel-archive-production.up.railway.app/mcp",
+      "url": "https://citadel-archive-production.up.railway.app/mcp/",
       "headers": { "Authorization": "Bearer ${CITADEL_MCP_ACCESS_TOKEN}" }
     }
   }

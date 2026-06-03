@@ -58,7 +58,7 @@ def test_discovery_manifest_is_public_and_verifiable() -> None:
     assert payload["public_endpoints"]["discovery"] == (
         "https://citadel.example/.well-known/citadel.json"
     )
-    assert payload["mcp"]["endpoint"] == "https://citadel.example/mcp"
+    assert payload["mcp"]["endpoint"] == "https://citadel.example/mcp/"
     assert payload["mcp"]["authentication"] == {
         "required": True,
         "scheme": "bearer",
@@ -93,7 +93,7 @@ def test_discovery_manifest_uses_forwarded_public_url() -> None:
     assert response.status_code == 200
     payload = response.json()
     assert payload["service"]["base_url"] == "https://citadel-archive-production.up.railway.app"
-    assert payload["mcp"]["endpoint"] == "https://citadel-archive-production.up.railway.app/mcp"
+    assert payload["mcp"]["endpoint"] == "https://citadel-archive-production.up.railway.app/mcp/"
     connect = next(item for item in payload["skills"] if item["slug"] == "connect")
     assert connect["url"] == "https://citadel-archive-production.up.railway.app/skills/connect"
 
@@ -112,7 +112,7 @@ def test_public_urls_ignore_malformed_forwarded_headers() -> None:
     assert response.status_code == 200
     payload = response.json()
     assert payload["service"]["base_url"] == "https://citadel.example"
-    assert payload["mcp"]["endpoint"] == "https://citadel.example/mcp"
+    assert payload["mcp"]["endpoint"] == "https://citadel.example/mcp/"
     connect = next(item for item in payload["skills"] if item["slug"] == "connect")
     assert connect["url"] == "https://citadel.example/skills/connect"
 

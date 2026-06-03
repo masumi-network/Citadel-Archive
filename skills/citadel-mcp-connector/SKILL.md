@@ -9,7 +9,7 @@ Citadel is served as a **hosted MCP endpoint**. Agents connect with a URL and a
 token — there is **no repository to clone**, no `uv`, and no local Python.
 
 ```
-MCP endpoint:  https://citadel-archive-production.up.railway.app/mcp
+MCP endpoint:  https://citadel-archive-production.up.railway.app/mcp/
 Auth:          Authorization: Bearer ctdl_<your-token>
 ```
 
@@ -54,13 +54,13 @@ Defaults (override only if the user does):
 
 | Setting | Default |
 |---|---|
-| MCP endpoint | `https://citadel-archive-production.up.railway.app/mcp` |
+| MCP endpoint | `https://citadel-archive-production.up.railway.app/mcp/` |
 | Token env name | `CITADEL_MCP_ACCESS_TOKEN` |
 | Search dataset | `masumi-network` (the server defaults this too) |
 
 ### 2. Write the remote MCP config
 
-Pick the user's client. Each config points at the hosted `/mcp` URL and sends the
+Pick the user's client. Each config points at the hosted `/mcp/` URL and sends the
 token in the `Authorization` header. Store the token in an env var or the client's
 secret store — **never** as a literal in a tracked file.
 
@@ -71,7 +71,7 @@ secret store — **never** as a literal in a tracked file.
   "mcpServers": {
     "citadel": {
       "type": "http",
-      "url": "https://citadel-archive-production.up.railway.app/mcp",
+      "url": "https://citadel-archive-production.up.railway.app/mcp/",
       "headers": {
         "Authorization": "Bearer ${CITADEL_MCP_ACCESS_TOKEN}"
       }
@@ -84,7 +84,7 @@ Or one command (token expanded from your shell):
 
 ```bash
 claude mcp add --transport http citadel \
-  https://citadel-archive-production.up.railway.app/mcp \
+  https://citadel-archive-production.up.railway.app/mcp/ \
   --header "Authorization: Bearer ${CITADEL_MCP_ACCESS_TOKEN}"
 ```
 
@@ -96,7 +96,7 @@ Export the token first: `export CITADEL_MCP_ACCESS_TOKEN='ctdl_...'`.
 {
   "mcpServers": {
     "citadel": {
-      "url": "https://citadel-archive-production.up.railway.app/mcp",
+      "url": "https://citadel-archive-production.up.railway.app/mcp/",
       "headers": { "Authorization": "Bearer ctdl_..." }
     }
   }
@@ -114,14 +114,14 @@ For a client that only speaks stdio, bridge to the hosted endpoint with
 command = "npx"
 args = [
   "-y", "mcp-remote",
-  "https://citadel-archive-production.up.railway.app/mcp",
+  "https://citadel-archive-production.up.railway.app/mcp/",
   "--header", "Authorization: Bearer ctdl_...",
 ]
 ```
 
 #### Any other MCP host
 
-Point it at the streamable-HTTP URL `…/mcp` with header
+Point it at the streamable-HTTP URL `…/mcp/` with header
 `Authorization: Bearer ctdl_…`. If it cannot send headers, use the `mcp-remote`
 bridge above.
 
@@ -201,10 +201,10 @@ Production smoke status, last verified 2026-06-02 at commit `7a4a1d9`:
 | 403 on ingest | Token is reader-only; create a writer token |
 | Tools missing after config | Restart the MCP host |
 | Client can't send headers | Use the `mcp-remote` stdio bridge above |
-| Endpoint unreachable | Check `…/healthz`; confirm the `…/mcp` URL |
+| Endpoint unreachable | Check `…/healthz`; confirm the `…/mcp/` URL |
 
 ## Reference
 
-- Hosted MCP URL: `https://citadel-archive-production.up.railway.app/mcp`
+- Hosted MCP URL: `https://citadel-archive-production.up.railway.app/mcp/`
 - Hosted UI (create tokens): `https://citadel-archive-production.up.railway.app`
 - Vault usage skill: `https://citadel-archive-production.up.railway.app/skills/vault`

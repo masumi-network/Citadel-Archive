@@ -82,7 +82,7 @@ Verified on 2026-06-02 after commit `7a4a1d9`:
 
 - `npx skills add masumi-network/Citadel-Archive` installs the root
   `citadel-archive` skill.
-- Hosted MCP `/mcp` lists tools and supports `citadel_session`,
+- Hosted MCP `/mcp/` lists tools and supports `citadel_session`,
   `citadel_search`, and `citadel_ingest`.
 - A writer token can read and ingest through both direct HTTP and hosted MCP.
 
@@ -411,12 +411,12 @@ Citadel serves a **hosted MCP endpoint** so agents connect with a URL and a
 token — no clone, no local Python:
 
 ```text
-https://citadel-archive-production.up.railway.app/mcp
+https://citadel-archive-production.up.railway.app/mcp/
 Authorization: Bearer ctdl_<token>
 ```
 
 It is a streamable-HTTP server mounted into the same FastAPI process
-(`kb/server.py` mounts `kb/mcp_server.py` at `/mcp`). Each request is
+(`kb/server.py` mounts `kb/mcp_server.py` at `/mcp/`). Each request is
 authenticated by the caller's `ctdl_` bearer token — the same reader/writer/admin
 tokens as the UI — and dispatched against the in-process API.
 
@@ -433,7 +433,7 @@ Claude Code project `.mcp.json`:
   "mcpServers": {
     "citadel": {
       "type": "http",
-      "url": "https://citadel-archive-production.up.railway.app/mcp",
+      "url": "https://citadel-archive-production.up.railway.app/mcp/",
       "headers": { "Authorization": "Bearer ${CITADEL_MCP_ACCESS_TOKEN}" }
     }
   }

@@ -64,7 +64,7 @@ Before connecting, you need:
 1. **Citadel URL.** Default: `https://citadel-archive-production.up.railway.app`
 2. **Citadel access token.** A service-account token beginning with `ctdl_`.
    Create one through the Citadel UI (Access page) or ask your vault admin.
-3. **An MCP-capable client.** Hosted MCP needs only the `/mcp` URL plus the
+3. **An MCP-capable client.** Hosted MCP needs only the `/mcp/` URL plus the
    Authorization header. Clone this repo only for local development or legacy
    stdio-wrapper use.
 
@@ -100,7 +100,7 @@ In your project root, create or merge into `.mcp.json`:
   "mcpServers": {
     "citadel": {
       "type": "http",
-      "url": "https://citadel-archive-production.up.railway.app/mcp",
+      "url": "https://citadel-archive-production.up.railway.app/mcp/",
       "headers": {
         "Authorization": "Bearer ${CITADEL_MCP_ACCESS_TOKEN}"
       }
@@ -153,7 +153,7 @@ command = "npx"
 args = [
   "-y",
   "mcp-remote",
-  "https://citadel-archive-production.up.railway.app/mcp",
+  "https://citadel-archive-production.up.railway.app/mcp/",
   "--header",
   "Authorization: Bearer PASTE_ONCE_IN_LOCAL_CODEX_CONFIG",
 ]
@@ -194,7 +194,7 @@ Open Cursor Settings → Features → Model Context Protocol. Add a new MCP serv
 
 - **Name**: `citadel`
 - **Type**: hosted HTTP / streamable HTTP
-- **URL**: `https://citadel-archive-production.up.railway.app/mcp`
+- **URL**: `https://citadel-archive-production.up.railway.app/mcp/`
 - **Headers**:
   - `Authorization` = `Bearer ctdl_...` (your token)
 
@@ -231,7 +231,7 @@ section.
 The supported production endpoint is hosted streamable HTTP:
 
 ```text
-https://citadel-archive-production.up.railway.app/mcp
+https://citadel-archive-production.up.railway.app/mcp/
 Authorization: Bearer ctdl_<your-token>
 ```
 
@@ -239,7 +239,7 @@ If a client only supports stdio, bridge to the hosted endpoint:
 
 ```bash
 npx -y mcp-remote \
-  https://citadel-archive-production.up.railway.app/mcp \
+  https://citadel-archive-production.up.railway.app/mcp/ \
   --header "Authorization: Bearer ctdl_..."
 ```
 
