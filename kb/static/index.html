@@ -899,27 +899,32 @@
                   <article class="setup-snippet">
                     <div class="event-row">
                       <strong>Codex</strong>
-                      <span class="status-chip">stdio</span>
+                      <span class="status-chip">hosted</span>
                     </div>
-                    <pre><code>{
-  "mcpServers": {
-    "citadel": {
-      "command": "uv",
-      "args": ["run", "python", "-m", "kb.mcp_server"],
-      "env": {
-        "CITADEL_BASE_URL": "https://citadel-archive-production.up.railway.app",
-        "CITADEL_MCP_ACCESS_TOKEN": "ctdl_..."
-      }
-    }
-  }
-}</code></pre>
+                    <pre><code>[mcp_servers.citadel]
+command = "npx"
+args = [
+  "-y", "mcp-remote",
+  "https://citadel-archive-production.up.railway.app/mcp",
+  "--header", "Authorization: Bearer ctdl_..."
+]</code></pre>
                   </article>
                   <article class="setup-snippet">
                     <div class="event-row">
                       <strong>Claude Code</strong>
-                      <span class="status-chip">project</span>
+                      <span class="status-chip">http</span>
                     </div>
-                    <pre><code>uv run python -m kb.mcp_server</code></pre>
+                    <pre><code>{
+  "mcpServers": {
+    "citadel": {
+      "type": "http",
+      "url": "https://citadel-archive-production.up.railway.app/mcp",
+      "headers": {
+        "Authorization": "Bearer ${CITADEL_MCP_ACCESS_TOKEN}"
+      }
+    }
+  }
+}</code></pre>
                   </article>
                 </div>
               </section>
@@ -956,12 +961,33 @@
               </div>
               <span id="auditStatus" class="status-chip">Loading</span>
             </div>
+            <div class="audit-toolbar" aria-label="Audit filters">
+              <div class="segmented-control" id="auditFilterGroup" role="group" aria-label="Audit event filter">
+                <button class="segment-button active" type="button" data-audit-filter="all" aria-pressed="true">
+                  All
+                </button>
+                <button class="segment-button" type="button" data-audit-filter="mcp" aria-pressed="false">
+                  MCP
+                </button>
+                <button class="segment-button" type="button" data-audit-filter="access" aria-pressed="false">
+                  Access
+                </button>
+                <button class="segment-button" type="button" data-audit-filter="failures" aria-pressed="false">
+                  Failures
+                </button>
+              </div>
+              <dl id="auditMcpSummary" class="audit-summary" aria-live="polite">
+                <div><dt>MCP events</dt><dd>0</dd></div>
+                <div><dt>Failures</dt><dd>0</dd></div>
+                <div><dt>Actors</dt><dd>0</dd></div>
+              </dl>
+            </div>
             <div class="audit-grid">
               <section class="window action-panel">
                 <div class="window-titlebar">
                   <div>
-                    <h2>Agent And Access Actions</h2>
-                    <p class="panel-kicker">Tokens, sync, learning, conflicts</p>
+                    <h2 id="auditAccessTitle">Agent And Access Actions</h2>
+                    <p id="auditAccessSubtitle" class="panel-kicker">Tokens, sync, learning, conflicts</p>
                   </div>
                 </div>
                 <ol id="auditAccessList" class="event-list" aria-live="polite"></ol>
@@ -1049,17 +1075,17 @@
                 <div id="settingsMirrorList" class="entity-list">
                   <div class="entity-item">
                     <div>
-                      <strong>Mirror module</strong>
-                      <p>Not implemented in this build slice.</p>
+                      <strong>Manifest exporter</strong>
+                      <p>Loading mirror status.</p>
                     </div>
-                    <span class="status-chip status-standby">planned</span>
+                    <span class="status-chip status-standby">loading</span>
                   </div>
                   <div class="entity-item">
                     <div>
-                      <strong>Text-first export</strong>
-                      <p>Markdown, JSONL, manifests, hashes, actors, timestamps.</p>
+                      <strong>Tracked state files</strong>
+                      <p>Manifests, hashes, actors, timestamps.</p>
                     </div>
-                    <span class="status-chip status-standby">planned</span>
+                    <span class="status-chip status-standby">loading</span>
                   </div>
                 </div>
               </section>

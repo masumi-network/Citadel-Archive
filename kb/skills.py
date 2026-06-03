@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import base64
+import hashlib
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -40,6 +42,17 @@ def skill_path(slug: str) -> Path | None:
     return path if path.is_file() else None
 
 
+def skill_integrity(path: Path) -> dict[str, str | int]:
+    content = path.read_bytes()
+    digest = hashlib.sha256(content).digest()
+    sha256 = digest.hex()
+    return {
+        "size_bytes": len(content),
+        "sha256": sha256,
+        "integrity": f"sha256-{base64.b64encode(digest).decode('ascii')}",
+    }
+
+
 def skill_catalog() -> list[dict[str, object]]:
     """Metadata for the public /skills index (canonical slugs only)."""
     aliases_by_slug: dict[str, list[str]] = {slug: [] for slug in SKILL_FILES}
@@ -48,11 +61,13 @@ def skill_catalog() -> list[dict[str, object]]:
             aliases_by_slug[target].append(alias)
     rows: list[dict[str, object]] = []
     for slug in sorted(SKILL_FILES):
+        path = SKILL_FILES[slug]
         rows.append(
             {
                 "slug": slug,
                 "description": _SKILL_DESCRIPTIONS.get(slug, ""),
                 "aliases": sorted(aliases_by_slug[slug]),
+                **skill_integrity(path),
             }
         )
     return rows

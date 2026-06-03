@@ -9,7 +9,8 @@ Organization Vault.
 |---|---|
 | This repo ([Citadel-Archive](https://github.com/masumi-network/Citadel-Archive)) — code, docs, skills | Railway vault — live memory, DB, hashed tokens |
 | Hosted skill URLs (`/skills/connect`, `/skills/vault`, `/skills/boundary`) | [Vault-Backup-Mirror](https://github.com/masumi-network/Vault-Backup-Mirror) — backup exports |
-| MCP tool names and API routes | `ctdl_` tokens, `.env`, vault search results |
+| Agent discovery manifest (`/.well-known/citadel.json`) | `ctdl_` tokens, `.env`, vault search results |
+| MCP tool names and API routes | Obsidian sync contents and source documents |
 
 Do not commit tokens or vault content to git. See [public-and-private.md](../public-and-private.md).
 
@@ -20,6 +21,7 @@ Do not commit tokens or vault content to git. See [public-and-private.md](../pub
 | Connect MCP | `https://citadel-archive-production.up.railway.app/skills/connect` |
 | Use vault | `https://citadel-archive-production.up.railway.app/skills/vault` |
 | Data boundary | `https://citadel-archive-production.up.railway.app/skills/boundary` |
+| Discovery manifest | `https://citadel-archive-production.up.railway.app/.well-known/citadel.json` |
 
 For Codex-compatible agents, share the install command instead:
 
@@ -31,6 +33,13 @@ The root `citadel-archive` skill points agents to the hosted connector, vault
 usage, and boundary skills. See
 [`../team-share-smoke-test.md`](../team-share-smoke-test.md) for the latest
 verified rollout checklist.
+
+The hosted `/skills` index publishes `size_bytes`, `sha256`, and SRI-style
+`integrity` values for each skill. Each `/skills/*` response repeats the digest
+in `X-Citadel-Skill-SHA256` and `X-Citadel-Skill-Integrity` headers.
+The well-known discovery manifest also publishes the hosted MCP endpoint, token
+requirements, tool policy metadata, approval recommendations, and public/private
+boundary rules.
 
 **Table of contents:**
 
@@ -90,28 +99,18 @@ In your project root, create or merge into `.mcp.json`:
 {
   "mcpServers": {
     "citadel": {
-      "command": "uv",
-      "args": [
-        "--directory",
-        "/absolute/path/to/Citadel-Archive",
-        "run",
-        "python",
-        "-m",
-        "kb.mcp_server"
-      ],
-      "env": {
-        "CITADEL_HTTP_BASE_URL": "https://citadel-archive-production.up.railway.app",
-        "CITADEL_MCP_ACCESS_TOKEN": "${CITADEL_MCP_ACCESS_TOKEN}",
-        "CITADEL_MCP_DEFAULT_DATASET": "masumi-network",
-        "CITADEL_MCP_MAX_INGEST_BYTES": "200000"
+      "type": "http",
+      "url": "https://citadel-archive-production.up.railway.app/mcp",
+      "headers": {
+        "Authorization": "Bearer ${CITADEL_MCP_ACCESS_TOKEN}"
       }
     }
   }
 }
 ```
 
-Replace the repo path if Citadel is cloned elsewhere. Set the `CITADEL_MCP_ACCESS_TOKEN`
-environment variable in your shell (do not hard-code it):
+Set the `CITADEL_MCP_ACCESS_TOKEN` environment variable in your shell (do not
+hard-code it in a tracked project file):
 
 ```bash
 export CITADEL_MCP_ACCESS_TOKEN="ctdl_..."
@@ -122,10 +121,11 @@ export CITADEL_MCP_ACCESS_TOKEN="ctdl_..."
 Restart Claude Code. Run:
 
 ```
-Use the citadel_session tool.
+Use the citadel_discovery tool, then use the citadel_session tool.
 ```
 
-If it returns your role and actor info, the connection works.
+If discovery returns the safe manifest and session returns your role and actor
+info, the connection works.
 
 ### Step 3 — Try a search
 
@@ -149,21 +149,14 @@ Append this to `~/.codex/config.toml`:
 
 ```toml
 [mcp_servers.citadel]
-command = "uv"
+command = "npx"
 args = [
-  "--directory",
-  "/absolute/path/to/Citadel-Archive",
-  "run",
-  "python",
-  "-m",
-  "kb.mcp_server",
+  "-y",
+  "mcp-remote",
+  "https://citadel-archive-production.up.railway.app/mcp",
+  "--header",
+  "Authorization: Bearer PASTE_ONCE_IN_LOCAL_CODEX_CONFIG",
 ]
-
-[mcp_servers.citadel.env]
-CITADEL_HTTP_BASE_URL = "https://citadel-archive-production.up.railway.app"
-CITADEL_MCP_ACCESS_TOKEN = "PASTE_ONCE_IN_LOCAL_CODEX_CONFIG"
-CITADEL_MCP_DEFAULT_DATASET = "masumi-network"
-CITADEL_MCP_MAX_INGEST_BYTES = "200000"
 
 [mcp_servers.citadel.tools.citadel_ingest]
 approval_mode = "approve"
@@ -174,6 +167,9 @@ approval_mode = "approve"
 [mcp_servers.citadel.tools.citadel_run_learning_agent]
 approval_mode = "approve"
 
+[mcp_servers.citadel.tools.citadel_run_backup_mirror]
+approval_mode = "approve"
+
 [mcp_servers.citadel.tools.citadel_improve]
 approval_mode = "approve"
 ```
@@ -182,7 +178,7 @@ Write/admin tools are approval-gated so Codex asks before making vault changes.
 
 ### Step 2 — Verify
 
-Restart Codex. Ask it to call `citadel_session`.
+Restart Codex. Ask it to call `citadel_discovery`, then `citadel_session`.
 
 ### Template file
 
@@ -197,26 +193,15 @@ A ready-to-copy template is at `docs/mcp/codex-hosted.config.toml`.
 Open Cursor Settings → Features → Model Context Protocol. Add a new MCP server:
 
 - **Name**: `citadel`
-- **Type**: `command`
-- **Command**: `uv`
-- **Args**:
-  ```
-  --directory
-  /absolute/path/to/Citadel-Archive
-  run
-  python
-  -m
-  kb.mcp_server
-  ```
-- **Environment variables**:
-  - `CITADEL_HTTP_BASE_URL` = `https://citadel-archive-production.up.railway.app`
-  - `CITADEL_MCP_ACCESS_TOKEN` = `ctdl_...` (your token)
-  - `CITADEL_MCP_DEFAULT_DATASET` = `masumi-network`
-  - `CITADEL_MCP_MAX_INGEST_BYTES` = `200000`
+- **Type**: hosted HTTP / streamable HTTP
+- **URL**: `https://citadel-archive-production.up.railway.app/mcp`
+- **Headers**:
+  - `Authorization` = `Bearer ctdl_...` (your token)
 
 ### Step 2 — Verify
 
-Start a new chat in Cursor and ask it to use `citadel_session`.
+Start a new chat in Cursor and ask it to use `citadel_discovery`, then
+`citadel_session`.
 
 ---
 
@@ -235,43 +220,49 @@ that discovers skills can load it to learn how to access Citadel.
 
 ### Connecting from Pi
 
-If Pi supports MCP servers, add the same MCP config as Claude Code above. The
-MCP server is the same stdio wrapper regardless of which agent calls it.
+If Pi supports hosted MCP servers, add the same URL/header config as Claude Code
+above. If it only supports stdio, use the `mcp-remote` bridge shown in the Codex
+section.
 
 ---
 
 ## Any MCP Client (Generic)
 
-The MCP server is a standard stdio server. Any client that supports MCP stdio
-can connect by spawning:
+The supported production endpoint is hosted streamable HTTP:
 
-```bash
-uv --directory "/absolute/path/to/Citadel-Archive" run python -m kb.mcp_server
+```text
+https://citadel-archive-production.up.railway.app/mcp
+Authorization: Bearer ctdl_<your-token>
 ```
 
-With environment variables:
+If a client only supports stdio, bridge to the hosted endpoint:
+
+```bash
+npx -y mcp-remote \
+  https://citadel-archive-production.up.railway.app/mcp \
+  --header "Authorization: Bearer ctdl_..."
+```
+
+The server exposes:
+
+- **13 tools**: `citadel_discovery`, `citadel_session`, `citadel_search`,
+  `citadel_get_document`, `citadel_get_mesh`, `citadel_list_sources`,
+  `citadel_ingest`, `citadel_record_feedback`, `citadel_run_learning_agent`,
+  `citadel_backup_mirror_status`, `citadel_run_backup_mirror`,
+  `citadel_audit_events`, `citadel_improve`
+- **5 resources**: `citadel://discovery`, `citadel://session`,
+  `citadel://sources`, `citadel://indexes`, `citadel://events/recent`
+- **3 prompts**: `citadel_answer_from_kb`, `citadel_ingest_decision`,
+  `citadel_summarize_source_changes`
+
+The local stdio wrapper is still available for offline/dev use:
 
 ```bash
 CITADEL_HTTP_BASE_URL=https://citadel-archive-production.up.railway.app
 CITADEL_MCP_ACCESS_TOKEN=ctdl_...
 CITADEL_MCP_DEFAULT_DATASET=masumi-network
 CITADEL_MCP_MAX_INGEST_BYTES=200000
-```
-
-The server exposes:
-
-- **8 tools**: `citadel_session`, `citadel_search`, `citadel_get_mesh`,
-  `citadel_list_sources`, `citadel_ingest`, `citadel_record_feedback`,
-  `citadel_run_learning_agent`, `citadel_improve`
-- **4 resources**: `citadel://session`, `citadel://sources`,
-  `citadel://indexes`, `citadel://events/recent`
-- **3 prompts**: `citadel_answer_from_kb`, `citadel_ingest_decision`,
-  `citadel_summarize_source_changes`
-
-For SSE transport instead of stdio, set:
-
-```bash
-CITADEL_MCP_TRANSPORT=sse
+uv --directory "/absolute/path/to/Citadel-Archive" run python -m kb.mcp_server
 ```
 
 ---
@@ -297,7 +288,9 @@ curl -X POST https://citadel-archive-production.up.railway.app/ingest \
   -d '{"data": "Project decided on PostgreSQL + pgvector for vault storage.", "tags": ["architecture", "decision"]}'
 ```
 
-All endpoints require `Authorization: Bearer <token>` except `/healthz` and `/readyz`.
+All endpoints require `Authorization: Bearer <token>` except public health and
+discovery metadata: `/healthz`, `/.well-known/citadel.json`, `/skills`, and
+`/skills/*`. `/readyz` is authenticated because it checks private index state.
 
 ---
 
@@ -336,8 +329,10 @@ Citadel stores only the SHA-256 hash. The raw token is shown once at creation.
 
 | Tool | Description | Parameters |
 |---|---|---|
+| `citadel_discovery` | Safe agent discovery metadata: MCP endpoint, skill hashes, tool policy | — |
 | `citadel_session` | Show authenticated role, actor, capabilities | — |
-| `citadel_search` | Search the Organization Vault | `query`, `dataset?`, `session_id?`, `top_k?` |
+| `citadel_search` | Search the Organization Vault; each hit includes `_citadel` provenance, hash, and retrieval metadata | `query`, `dataset?`, `session_id?`, `top_k?` |
+| `citadel_get_document` | Fetch a full document by a search hit `id` when `_citadel.retrieval.document_drilldown_available` is true | `document_id` |
 | `citadel_get_mesh` | Current knowledge mesh snapshot | — |
 | `citadel_list_sources` | Source-learning, GitHub sync, index status | — |
 
@@ -353,12 +348,16 @@ Citadel stores only the SHA-256 hash. The raw token is shown once at creation.
 | Tool | Description | Parameters |
 |---|---|---|
 | `citadel_run_learning_agent` | Run source-learning agent | `force?`, `dry_run?` |
+| `citadel_backup_mirror_status` | Inspect backup mirror manifest status | — |
+| `citadel_run_backup_mirror` | Run backup mirror manifest export | `dry_run?` |
+| `citadel_audit_events` | Inspect bounded audit events | `view?`, `limit?` |
 | `citadel_improve` | Run Cognee improvement cycle | `dataset?`, `session_ids?` |
 
 ### Resources
 
 | URI | Description |
 |---|---|
+| `citadel://discovery` | Safe public discovery metadata |
 | `citadel://session` | Current role and capabilities |
 | `citadel://sources` | Source-learning status |
 | `citadel://indexes` | Index status |
@@ -451,6 +450,11 @@ GitHub auth; vault content is never in these files):
 | Vault usage | `https://citadel-archive-production.up.railway.app/skills/vault` |
 | Public vs private | `https://citadel-archive-production.up.railway.app/skills/boundary` |
 | Index | `https://citadel-archive-production.up.railway.app/skills` |
+| Discovery manifest | `https://citadel-archive-production.up.railway.app/.well-known/citadel.json` |
+
+Use the index when an agent needs verification metadata. Skill responses include
+`X-Citadel-Skill-SHA256`, `X-Citadel-Skill-Integrity`, and an ETag derived from
+the served markdown bytes.
 
 Optional GitHub raw mirrors (same markdown as public Citadel-Archive):
 

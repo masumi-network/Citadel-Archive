@@ -31,20 +31,21 @@ pgvector / Kuzu). The mirror is for recovery, audit, diffs, and rebuild inputs.
 - Embeddings, vector index files, or graph database files
 - Large binaries by default (use object storage + manifest refs if needed later)
 
-## Planned layout (export not implemented yet)
+## Layout
 
 ```text
 manifests/
   latest.json                 # pointer to last successful export
 snapshots/
   YYYY-MM-DD/
-    manifest.json
-    sources/
-    contributions/
-    conflicts/
+    YYYYMMDD-HHMMSSZ/
+      manifest.json
 ```
 
-Commits should be small, reviewable, and diff-friendly (Markdown, JSON, JSONL).
+The current exporter is manifest-only. It tracks configured state files by path,
+size, timestamp, and SHA-256 hash, but does not copy raw state file contents.
+Future commits should stay small, reviewable, and diff-friendly (Markdown, JSON,
+JSONL).
 
 ## Current status
 
@@ -56,8 +57,19 @@ Verified on 2026-06-02:
 - Default branch: `main`.
 - Initial scaffold commit: `deeb1c9`.
 - Top-level scaffold: `.gitignore`, `README.md`, `manifests/`, `snapshots/`.
-- Automated export from Railway is not implemented yet; `CITADEL_BACKUP_MIRROR_*`
-  settings reserve the integration path.
+- Manifest-only export is implemented through `/api/backup-mirror`,
+  `/api/backup-mirror/run`, and `scripts/run_backup_mirror.py`.
+- Opt-in GitHub push is implemented through the GitHub Contents API. Push remains
+  disabled by default and requires `CITADEL_BACKUP_MIRROR_PUSH_ENABLED=true`
+  plus a dedicated mirror token.
+
+Operational checkpoint on 2026-06-03:
+
+- Local tests pass for the backup-mirror API and cron wrapper.
+- The live Railway web service has not yet deployed those API routes; a hosted
+  dry-run call to `/api/backup-mirror/run` returned `404 Not Found`.
+- Deploy the current Citadel Archive changes before creating or enabling the
+  backup-mirror cron service.
 
 ## Configuration (Citadel Archive)
 
@@ -65,12 +77,30 @@ Set on the Railway web service when mirror export is enabled:
 
 ```bash
 CITADEL_BACKUP_MIRROR_REPO=masumi-network/Vault-Backup-Mirror
-CITADEL_BACKUP_MIRROR_ENABLED=false   # true when export job ships
+CITADEL_BACKUP_MIRROR_ENABLED=false   # true for non-dry-run manifest writes
+CITADEL_BACKUP_MIRROR_PUSH_ENABLED=false
 CITADEL_BACKUP_MIRROR_BRANCH=main
+CITADEL_BACKUP_MIRROR_ROOT_PATH=/data/.citadel/backup_mirror
+CITADEL_BACKUP_MIRROR_TOKEN=github_pat_...   # only when push is enabled
 ```
 
 The GitHub token used for pushes must have `contents: write` on the private mirror
 repo only. Use a dedicated fine-grained or machine token—never commit it.
+
+Dry-run the cron wrapper before enabling writes:
+
+```bash
+CITADEL_RUN_MODE=backup-mirror
+CITADEL_BACKUP_MIRROR_TARGET_URL=https://citadel-archive-production.up.railway.app
+CITADEL_BACKUP_MIRROR_ACCESS_KEY=ctdl_...
+CITADEL_BACKUP_MIRROR_DRY_RUN=true
+uv run python scripts/run_railway.py
+```
+
+When `CITADEL_BACKUP_MIRROR_PUSH_ENABLED=true`, Citadel pushes only
+`manifests/latest.json` and the dated `snapshots/.../manifest.json` through the
+GitHub Contents API. Raw state files, access tokens, embeddings, vector indexes,
+and graph database files are not uploaded.
 
 ## Operational notes
 

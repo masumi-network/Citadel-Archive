@@ -142,13 +142,16 @@ wrong, or revoked. Never print the token in errors.
 
 Ask the user to **restart** the client so the new server loads, then call tools:
 
-1. `citadel_session` — confirm role and capabilities.
-2. `citadel_search` with a small query (e.g. `architecture` or a project name).
-3. From a search hit, pass its `id` to `citadel_get_document` to drill down.
+1. `citadel_discovery` — confirm the MCP endpoint, skill hashes, tool policy,
+   and public/private boundary metadata.
+2. `citadel_session` — confirm role and capabilities.
+3. `citadel_search` with a small query (e.g. `architecture` or a project name).
+4. From a search hit, pass its `id` to `citadel_get_document` to drill down.
 
 Production smoke status, last verified 2026-06-02 at commit `7a4a1d9`:
 
 - hosted MCP initializes and lists Citadel tools;
+- `citadel_discovery` returns the safe public manifest;
 - `citadel_session` returns the caller role and capabilities;
 - `citadel_search` returns company search results;
 - `citadel_ingest` succeeds with a writer token.
@@ -156,7 +159,9 @@ Production smoke status, last verified 2026-06-02 at commit `7a4a1d9`:
 ### 4. Start fetching (normal operation)
 
 - **Before** answering project/architecture/source questions → `citadel_search`.
-- To open a hit in full → `citadel_get_document` with the result `id`.
+- Cite from each hit's `_citadel.provenance` and `_citadel.content_sha256`.
+- To open a hit in full → `citadel_get_document` with the result `id`, but only
+  when `_citadel.retrieval.document_drilldown_available` is true.
 - **When** the user asks to remember something durable → `citadel_ingest`
   (writer token + approval).
 - Follow the **citadel-vault** skill for read/write/admin rules.
@@ -165,6 +170,7 @@ Production smoke status, last verified 2026-06-02 at commit `7a4a1d9`:
 
 | Tool | Role | What it does |
 |---|---|---|
+| `citadel_discovery` | reader | Safe manifest with MCP endpoint, skill hashes, and tool policy |
 | `citadel_session` | reader | Authenticated role, actor, scopes |
 | `citadel_search` | reader | Search the vault (dataset defaults server-side) |
 | `citadel_get_document` | reader | Fetch a full document by a search hit `id` |
@@ -173,6 +179,9 @@ Production smoke status, last verified 2026-06-02 at commit `7a4a1d9`:
 | `citadel_ingest` | writer | Add durable context |
 | `citadel_record_feedback` | writer | Record feedback on a QA result |
 | `citadel_run_learning_agent` | admin | Run source learning |
+| `citadel_backup_mirror_status` | admin | Inspect backup mirror manifest status |
+| `citadel_run_backup_mirror` | admin | Run backup mirror manifest export |
+| `citadel_audit_events` | admin | Inspect bounded audit events |
 | `citadel_improve` | admin | Run Cognee improvement |
 
 ## Safety rules
@@ -181,8 +190,8 @@ Production smoke status, last verified 2026-06-02 at commit `7a4a1d9`:
 - Do not echo tokens in chat, logs, or tool output.
 - Prefer **reader** tokens; use writer/admin only for explicit write/ops actions.
 - Approval-gate `citadel_ingest`, `citadel_record_feedback`,
-  `citadel_run_learning_agent`, and `citadel_improve` when the client supports
-  per-tool approval.
+  `citadel_run_learning_agent`, `citadel_run_backup_mirror`, and
+  `citadel_improve` when the client supports per-tool approval.
 
 ## Troubleshooting
 

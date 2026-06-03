@@ -123,6 +123,18 @@ def default_scopes(role: str) -> tuple[str, ...]:
     return DEFAULT_SCOPES[role]
 
 
+def validate_role_scopes(role: str, scopes: tuple[str, ...] | list[str]) -> tuple[str, ...]:
+    validate_role(role)
+    normalized = _dedupe(tuple(scopes))
+    allowed = set(default_scopes(role))
+    extra = sorted(set(normalized) - allowed)
+    if extra:
+        raise ValueError(
+            f"Scopes exceed {role} role: {', '.join(extra)}"
+        )
+    return normalized
+
+
 def validate_role(role: str) -> None:
     if role not in VALID_ROLES:
         raise ValueError(f"Unsupported role: {role}")
@@ -215,7 +227,7 @@ class AccessStore:
             kind=kind,
             name=name.strip(),
             role=role,
-            scopes=_dedupe(tuple(scopes) if scopes else default_scopes(role)),
+            scopes=validate_role_scopes(role, tuple(scopes) if scopes else default_scopes(role)),
             team_id=team_id,
             created_at=now_iso(),
         )
@@ -240,6 +252,14 @@ class AccessStore:
             raise KeyError(principal_id)
         resolved_role = role or principal.role
         validate_role(resolved_role)
+        resolved_scopes = (
+            validate_role_scopes(resolved_role, scopes)
+            if scopes is not None
+            else validate_role_scopes(
+                resolved_role,
+                principal.scopes if resolved_role == principal.role else default_scopes(resolved_role),
+            )
+        )
         token = new_api_token()
         api_token = ApiToken(
             id=f"token_{uuid4().hex}",
@@ -248,7 +268,7 @@ class AccessStore:
             token_hash=hash_api_token(token),
             prefix=token[:12],
             role=resolved_role,
-            scopes=_dedupe(tuple(scopes) if scopes else principal.scopes or default_scopes(resolved_role)),
+            scopes=resolved_scopes,
             team_id=team_id if team_id is not None else principal.team_id,
             created_at=now_iso(),
             expires_at=expires_at,

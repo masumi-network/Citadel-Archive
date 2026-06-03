@@ -66,6 +66,17 @@ def _obsidian_sync_state_path(value: str | None) -> str:
     return str(Path(root) / "obsidian_sync_state.json")
 
 
+def _backup_mirror_root_path(value: str | None) -> str:
+    if value:
+        return value
+    root = (
+        os.getenv("CITADEL_STATE_DIRECTORY")
+        or os.getenv("SYSTEM_ROOT_DIRECTORY")
+        or ("/data/.citadel" if Path("/data").exists() else ".citadel")
+    )
+    return str(Path(root) / "backup_mirror")
+
+
 @dataclass(frozen=True)
 class CitadelConfig:
     tenant_id: str = "personal"
@@ -102,7 +113,10 @@ class CitadelConfig:
     github_token: str | None = None
     backup_mirror_repo: str = "masumi-network/Vault-Backup-Mirror"
     backup_mirror_enabled: bool = False
+    backup_mirror_push_enabled: bool = False
     backup_mirror_branch: str = "main"
+    backup_mirror_root_path: str = ".citadel/backup_mirror"
+    backup_mirror_token: str | None = None
 
     @classmethod
     def from_env(cls, *, env_file: str | None = ".env") -> "CitadelConfig":
@@ -156,7 +170,16 @@ class CitadelConfig:
                 "masumi-network/Vault-Backup-Mirror",
             ),
             backup_mirror_enabled=_bool(os.getenv("CITADEL_BACKUP_MIRROR_ENABLED")),
+            backup_mirror_push_enabled=_bool(os.getenv("CITADEL_BACKUP_MIRROR_PUSH_ENABLED")),
             backup_mirror_branch=os.getenv("CITADEL_BACKUP_MIRROR_BRANCH", "main"),
+            backup_mirror_root_path=_backup_mirror_root_path(
+                os.getenv("CITADEL_BACKUP_MIRROR_ROOT_PATH")
+            ),
+            backup_mirror_token=(
+                os.getenv("CITADEL_BACKUP_MIRROR_TOKEN")
+                or os.getenv("CITADEL_BACKUP_MIRROR_GITHUB_TOKEN")
+                or None
+            ),
         )
 
     def with_tags(self, tags: Iterable[str]) -> "CitadelConfig":

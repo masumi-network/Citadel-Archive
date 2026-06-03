@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 from io import BytesIO
 import inspect
+import json
 from typing import Any
 from urllib.error import HTTPError
 
@@ -11,6 +12,7 @@ from mcp.server.fastmcp.exceptions import ToolError
 
 import kb.mcp_server as mcp_server
 from kb.mcp_server import (
+    MAX_AUDIT_LIMIT,
     MAX_SEARCH_TOP_K,
     TOOL_POLICIES,
     CitadelHttpClient,
@@ -23,10 +25,32 @@ class FakeHttpClient:
     def __init__(self) -> None:
         self.gets: list[dict[str, Any]] = []
         self.posts: list[dict[str, Any]] = []
+        self.public_gets: list[str] = []
 
-    def get(self, path: str, *, tool_name: str | None = None) -> dict[str, Any]:
-        self.gets.append({"path": path, "tool_name": tool_name})
-        return {"ok": True, "path": path, "tool_name": tool_name}
+    def get(
+        self,
+        path: str,
+        *,
+        tool_name: str | None = None,
+        extra_headers: dict[str, str] | None = None,
+    ) -> dict[str, Any]:
+        self.gets.append(
+            {
+                "path": path,
+                "tool_name": tool_name,
+                "extra_headers": extra_headers or {},
+            }
+        )
+        return {
+            "ok": True,
+            "path": path,
+            "tool_name": tool_name,
+            "extra_headers": extra_headers or {},
+        }
+
+    def get_public(self, path: str) -> dict[str, Any]:
+        self.public_gets.append(path)
+        return {"ok": True, "path": path, "public": True}
 
     def post(
         self,
@@ -60,6 +84,73 @@ def test_registered_tools_include_safety_annotations() -> None:
         assert tool.annotations == policy.annotations
 
 
+def test_discovery_tool_authenticates_then_fetches_public_manifest() -> None:
+    client = FakeHttpClient()
+    server = create_mcp_server(client)
+
+    result = run_tool(server, "citadel_discovery", None)
+
+    assert result["path"] == "/.well-known/citadel.json"
+    assert result["tool_name"] is None
+    assert client.gets == [
+        {"path": "/api/session", "tool_name": "citadel_discovery", "extra_headers": {}},
+        {"path": "/.well-known/citadel.json", "tool_name": None, "extra_headers": {}},
+    ]
+
+
+def test_discovery_forwarded_headers_are_validated() -> None:
+    class FakeRequest:
+        headers = {
+            "x-forwarded-proto": "https",
+            "x-forwarded-host": "citadel-archive-production.up.railway.app",
+        }
+        url = "http://127.0.0.1:8000/mcp"
+
+    class FakeRequestContext:
+        request = FakeRequest()
+
+    class FakeContext:
+        request_context = FakeRequestContext()
+
+    assert mcp_server._public_url_headers_from_context(FakeContext()) == {
+        "X-Forwarded-Host": "citadel-archive-production.up.railway.app",
+        "X-Forwarded-Proto": "https",
+    }
+
+
+def test_discovery_forwarded_headers_reject_malformed_values() -> None:
+    class FakeRequest:
+        headers = {
+            "x-forwarded-proto": "javascript",
+            "x-forwarded-host": "evil.example/path",
+        }
+        url = "http://127.0.0.1:8000/mcp"
+
+    class FakeRequestContext:
+        request = FakeRequest()
+
+    class FakeContext:
+        request_context = FakeRequestContext()
+
+    assert mcp_server._public_url_headers_from_context(FakeContext()) == {}
+
+
+def test_discovery_resource_reads_public_manifest_only() -> None:
+    client = FakeHttpClient()
+    server = create_mcp_server(client)
+
+    resource = asyncio.run(server._resource_manager.get_resource("citadel://discovery"))
+
+    assert resource is not None
+    assert json.loads(resource.fn()) == {
+        "ok": True,
+        "path": "/.well-known/citadel.json",
+        "public": True,
+    }
+    assert client.public_gets == ["/.well-known/citadel.json"]
+    assert client.gets == []
+
+
 def test_search_clamps_top_k_and_tracks_tool_name() -> None:
     client = FakeHttpClient()
     server = create_mcp_server(client)
@@ -82,6 +173,37 @@ def test_search_uses_mcp_default_dataset(monkeypatch: pytest.MonkeyPatch) -> Non
 
     assert result["payload"]["dataset"] == "masumi-network"
     assert explicit["payload"]["dataset"] == "personal"
+
+
+def test_backup_mirror_tools_forward_admin_calls() -> None:
+    client = FakeHttpClient()
+    server = create_mcp_server(client)
+
+    status = run_tool(server, "citadel_backup_mirror_status", None)
+    run = run_tool(server, "citadel_run_backup_mirror", None)
+    write = run_tool(server, "citadel_run_backup_mirror", None, dry_run=False)
+
+    assert status["path"] == "/api/backup-mirror"
+    assert status["tool_name"] == "citadel_backup_mirror_status"
+    assert run["path"] == "/api/backup-mirror/run"
+    assert run["payload"] == {"dry_run": True}
+    assert run["tool_name"] == "citadel_run_backup_mirror"
+    assert write["payload"] == {"dry_run": False}
+
+
+def test_audit_tool_uses_bounded_server_view() -> None:
+    client = FakeHttpClient()
+    server = create_mcp_server(client)
+
+    default = run_tool(server, "citadel_audit_events", None)
+    failures = run_tool(server, "citadel_audit_events", None, view="failures", limit=999)
+
+    assert default["path"] == "/api/audit?view=mcp&limit=50"
+    assert default["tool_name"] == "citadel_audit_events"
+    assert failures["path"] == f"/api/audit?view=failures&limit={MAX_AUDIT_LIMIT}"
+
+    with pytest.raises(ToolError, match="view must be one of"):
+        run_tool(server, "citadel_audit_events", None, view="everything")
 
 
 def test_write_tools_reject_empty_or_oversized_payloads(monkeypatch: pytest.MonkeyPatch) -> None:

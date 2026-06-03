@@ -27,22 +27,25 @@ a scoped service-account token.
 
 ## Current Shape
 
-Citadel currently has three relevant layers:
+Citadel currently has four relevant layers:
 
 - `kb/server.py`: the real FastAPI service and access-control boundary.
-- `kb/mcp_server.py`: a local stdio MCP wrapper that forwards calls to the
-  FastAPI service with `Authorization: Bearer <CITADEL_MCP_ACCESS_TOKEN>`.
+- Hosted `/mcp`: streamable HTTP MCP mounted into the same FastAPI process.
+  Each request authenticates with `Authorization: Bearer <ctdl_token>` and is
+  checked by the same role/scope API boundary.
+- `kb/mcp_server.py`: the MCP implementation and local stdio fallback. Hosted
+  requests use the caller's bearer token; stdio fallback uses
+  `CITADEL_MCP_ACCESS_TOKEN`.
+- Public skill/discovery surfaces: `/skills`, `/skills/*`, and
+  `/.well-known/citadel.json`, which publish metadata only.
 - `plugins/citadel-archive-mcp/`: a thin Codex plugin that bundles `.mcp.json`
-  and a skill.
+  and a skill for clients that still need packaged setup.
 
-This is the right default for phase 1. The latest MCP authorization spec says
-HTTP transports should follow the MCP OAuth authorization profile, while stdio
-transports should retrieve credentials from the environment. Citadel is doing
-the stdio/env path today.
-
-Do not expose a hosted remote HTTP MCP server yet. The hosted remote path should
-be a later OAuth/OIDC project, not a quick wrapper around the current bearer
-token API.
+The current production path uses Citadel-issued bearer tokens, per-token scopes,
+approval guidance, MCP tool annotations, and audit attribution. OAuth/OIDC
+protected-resource metadata remains the later enterprise-auth path; until then,
+the bearer-token MCP endpoint must keep strict HTTPS, scope checks, per-agent
+tokens, and redacted audit/error surfaces.
 
 ## Threat Model
 
@@ -81,6 +84,8 @@ Primary risks:
 8. Minimize output size and redact secrets in error surfaces.
 9. Use MCP tool annotations for client UX, but treat annotations as hints, not
    enforcement.
+10. Serve public skill/discovery metadata with integrity hashes and browser
+    security headers; never include vault contents or tokens in public metadata.
 
 ## Phase 1: Local Stdio Hardening
 
@@ -123,10 +128,21 @@ Tasks:
   - require approval, or disable by default, for `citadel_run_learning_agent`
     and `citadel_improve`.
 
+Status on 2026-06-03: implemented and extended. Hosted `/mcp` is the primary
+path, stdio remains a fallback, `citadel_discovery` and `citadel://discovery`
+publish safe metadata, MCP calls are tagged in audit logs, and public skill files
+carry content hashes.
+
 ## Phase 2: Scope Enforcement
 
 Goal: make Citadel tokens least-privilege in the API, not just descriptive in
 the UI.
+
+Status on 2026-06-03: implemented. `kb/server.py` uses `require_access(role,
+scope)` on protected API routes, bootstrap env keys receive the default scopes
+for their role, and scoped service-account tokens are denied when the required
+scope is missing. `kb/access.py` rejects custom token scopes that exceed the
+selected role.
 
 Tasks:
 
@@ -145,6 +161,17 @@ Tasks:
 ## Phase 3: MCP Audit Trail
 
 Goal: make agent activity attributable.
+
+Status on 2026-06-03: implemented for hosted and stdio-forwarded MCP calls.
+`kb/mcp_server.py` forwards `X-Citadel-MCP-Tool`, and `kb/server.py` records
+`mcp.<tool_name>` audit events in the persistent access store. Events include
+actor, role, tool, path, required role/scope, dataset when known, success/failure,
+status or redacted error class, and safe counts/hashes instead of raw queries,
+note bodies, feedback text, or tokens. Admins and agents with `audit:read` can
+query `/api/audit` with `view=all|mcp|access|failures` and an optional bounded
+`limit` to retrieve the same filtered audit view outside the dashboard. MCP
+admins can use `citadel_audit_events`, which calls the same API with a bounded
+client-side limit.
 
 Tasks:
 
@@ -187,14 +214,13 @@ Tasks:
 - Treat URLs from vault content as untrusted. Do not embed or auto-fetch them
   in client code without domain review.
 
-## Phase 6: Hosted Remote MCP, Later
+## Phase 6: Hosted MCP Auth Evolution
 
-Goal: expose Citadel as a real remote MCP server only after auth is ready.
+Goal: evolve the hosted MCP endpoint from Citadel-issued bearer tokens to a
+standards-based OAuth/OIDC profile when the organization needs enterprise SSO.
 
 Tasks:
 
-- Add a separate remote MCP endpoint using streamable HTTP, not the stdio
-  wrapper.
 - Implement MCP protected resource metadata.
 - Use OAuth/OIDC access tokens with:
   - bearer auth on every request.
@@ -209,6 +235,28 @@ Tasks:
 - Add SSRF controls if Citadel ever becomes an MCP client that fetches OAuth
   metadata from arbitrary remote MCP servers.
 
+## Phase 7: Browser And Public Surface Hardening
+
+Status on 2026-06-03: implemented for baseline headers.
+
+Tasks:
+
+- Serve dashboard, JSON, public skill files, static assets, and MCP responses
+  with baseline browser security headers:
+  - strict self-only Content Security Policy.
+  - `X-Content-Type-Options: nosniff`.
+  - `X-Frame-Options: DENY` plus `frame-ancestors 'none'`.
+  - `Referrer-Policy: no-referrer`.
+  - restrictive `Permissions-Policy`.
+  - same-origin cross-origin opener/resource policy.
+- Set HSTS only for HTTPS or HTTPS-forwarded requests.
+- Keep login JavaScript in `/static/login.js`; do not reintroduce inline login
+  script that would require `unsafe-inline`.
+- Use explicit cache policy:
+  - public skill/discovery/static metadata: `Cache-Control: public, max-age=300`.
+  - health, login, authenticated API, vault search/document, audit, and MCP
+    responses: `Cache-Control: no-store` and `Pragma: no-cache`.
+
 ## Acceptance Criteria
 
 - A reader MCP token cannot mutate Citadel.
@@ -217,6 +265,7 @@ Tasks:
 - Tokens are never printed in normal MCP errors.
 - Non-local HTTP Citadel endpoints are blocked by default.
 - MCP calls are attributable in audit logs.
+- Public and authenticated HTTP responses include browser security headers.
 - Plugin validation and the Python test suite pass.
 
 ## First Implementation Slice

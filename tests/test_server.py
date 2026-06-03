@@ -133,6 +133,79 @@ def test_healthz() -> None:
     assert response.json() == {"ok": True, "service": "citadel"}
 
 
+def test_security_headers_are_applied_to_http_responses() -> None:
+    client = TestClient(app, base_url="https://testserver")
+
+    response = client.get("/healthz")
+
+    assert response.status_code == 200
+    assert response.headers["content-security-policy"] == (
+        "default-src 'self'; "
+        "script-src 'self'; "
+        "style-src 'self'; "
+        "img-src 'self' data:; "
+        "font-src 'self'; "
+        "connect-src 'self'; "
+        "base-uri 'self'; "
+        "form-action 'self'; "
+        "frame-ancestors 'none'; "
+        "object-src 'none'"
+    )
+    assert response.headers["x-content-type-options"] == "nosniff"
+    assert response.headers["x-frame-options"] == "DENY"
+    assert response.headers["referrer-policy"] == "no-referrer"
+    assert response.headers["cross-origin-opener-policy"] == "same-origin"
+    assert response.headers["cross-origin-resource-policy"] == "same-origin"
+    assert "camera=()" in response.headers["permissions-policy"]
+    assert response.headers["strict-transport-security"] == (
+        "max-age=31536000; includeSubDomains"
+    )
+
+
+def test_security_headers_do_not_force_hsts_on_plain_http() -> None:
+    client = TestClient(app, base_url="http://testserver")
+
+    response = client.get("/healthz")
+
+    assert response.status_code == 200
+    assert response.headers["x-content-type-options"] == "nosniff"
+    assert "strict-transport-security" not in response.headers
+
+
+def test_private_responses_are_no_store() -> None:
+    client = authed_client()
+
+    session = client.get("/api/session")
+    search = client.post("/search", json={"query": "useful"})
+
+    assert session.status_code == 200
+    assert search.status_code == 200
+    assert session.headers["cache-control"] == "no-store"
+    assert session.headers["pragma"] == "no-cache"
+    assert search.headers["cache-control"] == "no-store"
+    assert search.headers["pragma"] == "no-cache"
+
+
+def test_public_health_response_is_not_cacheable() -> None:
+    client = TestClient(app)
+
+    response = client.get("/healthz")
+
+    assert response.status_code == 200
+    assert response.headers["cache-control"] == "no-store"
+    assert response.headers["pragma"] == "no-cache"
+
+
+def test_login_page_uses_static_script_for_csp() -> None:
+    client = TestClient(app, base_url="https://testserver")
+
+    response = client.get("/login")
+
+    assert response.status_code == 200
+    assert '<script src="/static/login.js" type="module"></script>' in response.text
+    assert "<script>\n" not in response.text
+
+
 def test_api_uses_configured_citadel_service() -> None:
     client = authed_client()
 
@@ -154,7 +227,19 @@ def test_api_uses_configured_citadel_service() -> None:
     assert ingest.status_code == 200
     assert ingest.json()["tags"] == ["research"]
     assert search.status_code == 200
-    assert search.json()["results"][0]["top_k"] == 3
+    search_hit = search.json()["results"][0]
+    assert search_hit["top_k"] == 3
+    assert search_hit["id"].startswith("chunk:")
+    assert search_hit["_citadel"]["rank"] == 1
+    assert search_hit["_citadel"]["dataset"] == "notes"
+    assert search_hit["_citadel"]["result_id"] == search_hit["id"]
+    assert len(search_hit["_citadel"]["content_sha256"]) == 64
+    assert search_hit["_citadel"]["provenance"] == {}
+    assert search_hit["_citadel"]["retrieval"] == {
+        "untrusted_context": True,
+        "citation_required": True,
+        "document_drilldown_available": False,
+    }
     assert mesh.status_code == 200
     assert mesh.json()["stats"]["documents"] == 1
     assert indexes.status_code == 200
@@ -228,6 +313,8 @@ def test_ui_shell_is_served_after_login() -> None:
     assert "Citadel Vault" in response.text
     assert "Source Sync" in response.text
     assert "Obsidian Vaults" in response.text
+    assert "mcp-remote" in response.text
+    assert "Audit event filter" in response.text
 
 
 def test_admin_can_create_and_use_role_based_access_token(tmp_path: Any) -> None:
@@ -290,6 +377,310 @@ def test_bearer_tokens_can_access_api_without_cookie(tmp_path: Any) -> None:
     assert session.json()["role"] == "writer"
     assert ingest.status_code == 200
     assert admin_run.status_code == 403
+
+
+def test_custom_token_scopes_are_enforced(tmp_path: Any) -> None:
+    app.state.access_store = AccessStore(tmp_path / "access.json")
+    client = authed_client()
+    created = client.post(
+        "/api/access/tokens",
+        json={
+            "name": "ingest-only-agent",
+            "role": "writer",
+            "kind": "service_account",
+            "scopes": ["kb:ingest"],
+        },
+    )
+    token = created.json()["token"]
+    api_client = TestClient(app, base_url="https://testserver")
+
+    login = api_client.post("/admin/session", json={"access_key": token})
+    ingest = api_client.post(
+        "/ingest",
+        json={"data": "A scoped note"},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    feedback = api_client.post(
+        "/feedback",
+        json={"qa_id": "qa-1", "score": 1},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    search = api_client.post(
+        "/search",
+        json={"query": "note"},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert created.status_code == 200
+    assert created.json()["api_token"]["scopes"] == ["kb:ingest"]
+    assert login.status_code == 200
+    assert login.json()["capabilities"] == {"read": False, "write": True, "admin": False}
+    assert ingest.status_code == 200
+    assert feedback.status_code == 403
+    assert feedback.json()["detail"] == "Scope required: kb:feedback."
+    assert search.status_code == 403
+    assert search.json()["detail"] == "Scope required: kb:search."
+
+
+def test_custom_token_scopes_cannot_exceed_role(tmp_path: Any) -> None:
+    app.state.access_store = AccessStore(tmp_path / "access.json")
+    client = authed_client()
+
+    reader_with_write_scope = client.post(
+        "/api/access/tokens",
+        json={
+            "name": "bad-reader",
+            "role": "reader",
+            "kind": "service_account",
+            "scopes": ["kb:read", "kb:ingest"],
+        },
+    )
+    writer_with_admin_scope = client.post(
+        "/api/access/tokens",
+        json={
+            "name": "bad-writer",
+            "role": "writer",
+            "kind": "service_account",
+            "scopes": ["kb:read", "sources:sync"],
+        },
+    )
+
+    assert reader_with_write_scope.status_code == 422
+    assert "Scopes exceed reader role: kb:ingest" in reader_with_write_scope.json()["detail"]
+    assert writer_with_admin_scope.status_code == 422
+    assert "Scopes exceed writer role: sources:sync" in writer_with_admin_scope.json()["detail"]
+
+
+def test_admin_token_scopes_are_enforced_for_management_surfaces(tmp_path: Any) -> None:
+    app.state.access_store = AccessStore(tmp_path / "access.json")
+    client = authed_client()
+    created = client.post(
+        "/api/access/tokens",
+        json={
+            "name": "access-manager",
+            "role": "admin",
+            "kind": "service_account",
+            "scopes": ["access:manage"],
+        },
+    )
+    token = created.json()["token"]
+    api_client = TestClient(app, base_url="https://testserver")
+
+    access = api_client.get("/api/access", headers={"Authorization": f"Bearer {token}"})
+    audit = api_client.get("/api/audit", headers={"Authorization": f"Bearer {token}"})
+    learning_run = api_client.post(
+        "/api/learning-agent/run",
+        json={"dry_run": True},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert created.status_code == 200
+    assert access.status_code == 200
+    assert audit.status_code == 403
+    assert audit.json()["detail"] == "Scope required: audit:read."
+    assert learning_run.status_code == 403
+    assert learning_run.json()["detail"] == "Scope required: sources:sync."
+
+
+def test_mcp_search_calls_are_attributable_and_redacted(tmp_path: Any) -> None:
+    app.state.access_store = AccessStore(tmp_path / "access.json")
+    client = authed_client("test-reader")
+
+    response = client.post(
+        "/search",
+        json={
+            "query": "sensitive roadmap question",
+            "dataset": "masumi-network",
+            "top_k": 2,
+        },
+        headers={"X-Citadel-MCP-Tool": "citadel_search"},
+    )
+
+    assert response.status_code == 200
+    events = app.state.access_store.snapshot()["audit_events"]
+    event = events[-1]
+    serialized = str(event)
+
+    assert event["action"] == "mcp.citadel_search"
+    assert event["actor_id"] == "bootstrap:reader"
+    assert event["role"] == "reader"
+    assert event["success"] is True
+    assert event["dataset"] == "masumi-network"
+    assert event["detail"]["surface"] == "mcp"
+    assert event["detail"]["tool"] == "citadel_search"
+    assert event["detail"]["required_role"] == "reader"
+    assert event["detail"]["required_scope"] == "kb:search"
+    assert event["detail"]["result_count"] == 1
+    assert event["detail"]["top_k"] == 2
+    assert event["detail"]["query_length"] == len("sensitive roadmap question")
+    assert "query_sha256" in event["detail"]
+    assert "sensitive roadmap question" not in serialized
+
+
+def test_failed_mcp_auth_is_audited_without_actor(tmp_path: Any) -> None:
+    app.state.access_store = AccessStore(tmp_path / "access.json")
+    app.state.citadel = FakeCitadel()
+    app.state.mesh = MeshState()
+    client = TestClient(app, base_url="https://testserver")
+
+    response = client.post(
+        "/search",
+        json={"query": "anything"},
+        headers={"X-Citadel-MCP-Tool": "citadel_search"},
+    )
+
+    assert response.status_code == 401
+    events = app.state.access_store.snapshot()["audit_events"]
+    event = events[-1]
+
+    assert event["action"] == "mcp.citadel_search"
+    assert event["actor_id"] is None
+    assert event["role"] is None
+    assert event["success"] is False
+    assert event["dataset"] is None
+    assert event["detail"]["surface"] == "mcp"
+    assert event["detail"]["tool"] == "citadel_search"
+    assert event["detail"]["path"] == "/search"
+    assert event["detail"]["status_code"] == 401
+
+
+def test_audit_api_filters_summarizes_and_limits_events(tmp_path: Any) -> None:
+    app.state.access_store = AccessStore(tmp_path / "access.json")
+    admin = authed_client()
+    created = admin.post(
+        "/api/access/tokens",
+        json={"name": "reader-agent", "role": "reader", "kind": "service_account"},
+    )
+    reader = authed_client("test-reader")
+    search = reader.post(
+        "/search",
+        json={"query": "sensitive project question", "dataset": "masumi-network"},
+        headers={"X-Citadel-MCP-Tool": "citadel_search"},
+    )
+    session = reader.get("/api/session", headers={"X-Citadel-MCP-Tool": "citadel_session"})
+    unauthenticated = TestClient(app, base_url="https://testserver")
+    failed = unauthenticated.post(
+        "/search",
+        json={"query": "do not log this"},
+        headers={"X-Citadel-MCP-Tool": "citadel_search"},
+    )
+
+    all_events = admin.get("/api/audit")
+    mcp_events = admin.get("/api/audit?view=mcp&limit=1")
+    access_events = admin.get("/api/audit?view=access")
+    failure_events = admin.get("/api/audit?view=failures")
+    invalid_view = admin.get("/api/audit?view=unknown")
+    invalid_limit = admin.get("/api/audit?limit=0")
+
+    assert created.status_code == 200
+    assert search.status_code == 200
+    assert session.status_code == 200
+    assert failed.status_code == 401
+
+    assert all_events.status_code == 200
+    assert all_events.json()["view"] == "all"
+    assert all_events.json()["summary"] == {
+        "total_events": 4,
+        "returned_events": 4,
+        "mcp_events": 3,
+        "access_events": 1,
+        "failure_events": 1,
+        "mcp_failures": 1,
+        "mcp_actors": 1,
+    }
+
+    assert mcp_events.status_code == 200
+    assert mcp_events.json()["view"] == "mcp"
+    assert mcp_events.json()["summary"]["returned_events"] == 1
+    assert len(mcp_events.json()["audit_events"]) == 1
+    assert mcp_events.json()["audit_events"][0]["action"] == "mcp.citadel_search"
+    assert mcp_events.json()["audit_events"][0]["success"] is False
+    assert "do not log this" not in str(mcp_events.json())
+
+    assert access_events.status_code == 200
+    assert [event["action"] for event in access_events.json()["audit_events"]] == [
+        "access.token.create"
+    ]
+
+    assert failure_events.status_code == 200
+    assert [event["id"] for event in failure_events.json()["audit_events"]] == [
+        mcp_events.json()["audit_events"][0]["id"]
+    ]
+    assert invalid_view.status_code == 422
+    assert invalid_limit.status_code == 422
+
+
+def test_backup_mirror_status_and_run_are_admin_scoped(tmp_path: Any) -> None:
+    config = CitadelConfig(
+        admin_key="test-admin",
+        reader_keys=("test-reader",),
+        writer_keys=("test-writer",),
+        access_store_path=str(tmp_path / "access.json"),
+        obsidian_sync_state_path=str(tmp_path / "obsidian.json"),
+        github_sync_state_path=str(tmp_path / "github.json"),
+        backup_mirror_root_path=str(tmp_path / "mirror"),
+        backup_mirror_enabled=False,
+    )
+    (tmp_path / "github.json").write_text(
+        '{"last_checked_at":"2026-06-03T00:00:00Z"}',
+        encoding="utf-8",
+    )
+    citadel = FakeCitadel()
+    citadel.config = config
+    app.state.citadel = citadel
+    app.state.mesh = MeshState()
+    app.state.access_store = AccessStore(config.access_store_path)
+    admin = TestClient(app, base_url="https://testserver")
+    reader = TestClient(app, base_url="https://testserver")
+    assert admin.post("/admin/session", json={"access_key": "test-admin"}).status_code == 200
+    assert reader.post("/admin/session", json={"access_key": "test-reader"}).status_code == 200
+
+    status = admin.get("/api/backup-mirror")
+    dry_run = admin.post("/api/backup-mirror/run", json={"dry_run": True})
+    disabled_run = admin.post("/api/backup-mirror/run", json={"dry_run": False})
+    reader_status = reader.get("/api/backup-mirror")
+
+    assert status.status_code == 200
+    assert status.json()["enabled"] is False
+    assert status.json()["summary"]["available_files"] == 1
+    assert dry_run.status_code == 200
+    assert dry_run.json()["written"] is False
+    assert dry_run.json()["manifest"]["summary"]["available_files"] == 1
+    assert disabled_run.status_code == 409
+    assert reader_status.status_code == 403
+    events = app.state.access_store.snapshot()["audit_events"]
+    assert [event["action"] for event in events] == ["backup_mirror.run", "backup_mirror.run"]
+    assert events[0]["success"] is True
+    assert events[1]["success"] is False
+
+
+def test_backup_mirror_push_errors_are_audited(tmp_path: Any) -> None:
+    config = CitadelConfig(
+        admin_key="test-admin",
+        access_store_path=str(tmp_path / "access.json"),
+        obsidian_sync_state_path=str(tmp_path / "obsidian.json"),
+        github_sync_state_path=str(tmp_path / "github.json"),
+        backup_mirror_root_path=str(tmp_path / "mirror"),
+        backup_mirror_enabled=True,
+        backup_mirror_push_enabled=True,
+        backup_mirror_token=None,
+    )
+    citadel = FakeCitadel()
+    citadel.config = config
+    app.state.citadel = citadel
+    app.state.mesh = MeshState()
+    app.state.access_store = AccessStore(config.access_store_path)
+    client = TestClient(app, base_url="https://testserver")
+    assert client.post("/admin/session", json={"access_key": "test-admin"}).status_code == 200
+
+    response = client.post("/api/backup-mirror/run", json={"dry_run": False})
+
+    assert response.status_code == 502
+    assert response.json()["detail"] == "Vault Backup Mirror push token is not configured."
+    events = app.state.access_store.snapshot()["audit_events"]
+    assert events[-1]["action"] == "backup_mirror.run"
+    assert events[-1]["success"] is False
+    assert events[-1]["detail"]["reason"] == "publish_failed"
 
 
 def test_obsidian_vault_sync_registers_pushes_pulls_and_lists_sources(tmp_path: Any) -> None:
@@ -428,6 +819,24 @@ class EmptyCitadel(FakeCitadel):
         return []
 
 
+class ProvenanceCitadel(FakeCitadel):
+    async def search(self, query: str, **kwargs: Any) -> list[dict[str, Any]]:
+        return [
+            {
+                "id": "ghsync:abc123",
+                "source": "github_sync_state",
+                "dataset": kwargs["dataset"],
+                "session_id": "masumi-github-daily",
+                "title": "Recent commits",
+                "content": "teach the archive about commits",
+                "metadata": {
+                    "source_url": "https://github.com/orgs/masumi-network/repositories",
+                    "checked_at": "2026-06-01T00:00:00Z",
+                },
+            }
+        ]
+
+
 def test_search_without_dataset_hints_known_datasets() -> None:
     client = authed_client("test-reader")
     app.state.citadel = EmptyCitadel()
@@ -451,6 +860,33 @@ def test_search_with_explicit_empty_dataset_omits_hint() -> None:
     body = response.json()
     assert body["results"] == []
     assert "note" not in body
+
+
+def test_search_results_include_source_provenance_envelope() -> None:
+    client = authed_client("test-reader")
+    app.state.citadel = ProvenanceCitadel()
+
+    response = client.post(
+        "/search",
+        json={"query": "commits", "dataset": "masumi-network"},
+    )
+
+    assert response.status_code == 200
+    hit = response.json()["results"][0]
+    assert hit["id"] == "ghsync:abc123"
+    assert hit["_citadel"]["rank"] == 1
+    assert hit["_citadel"]["dataset"] == "masumi-network"
+    assert hit["_citadel"]["result_id"] == "ghsync:abc123"
+    assert hit["_citadel"]["document_endpoint"] == "/api/documents/ghsync:abc123"
+    assert hit["_citadel"]["provenance"] == {
+        "source": "github_sync_state",
+        "source_url": "https://github.com/orgs/masumi-network/repositories",
+        "title": "Recent commits",
+        "session_id": "masumi-github-daily",
+    }
+    assert hit["_citadel"]["retrieval"]["untrusted_context"] is True
+    assert hit["_citadel"]["retrieval"]["citation_required"] is True
+    assert hit["_citadel"]["retrieval"]["document_drilldown_available"] is True
 
 
 def test_github_digest_search_hit_drills_down_to_document(tmp_path: Any) -> None:

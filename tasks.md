@@ -107,7 +107,17 @@
   - functional rollout commit: `cd33217` (`fix(mcp): default search to company dataset`)
   - Railway web deployment: `891c81ee-4c44-4303-8792-0a282d9d62be` (`SUCCESS`)
   - `/healthz` returns `{"ok":true,"service":"citadel"}`
-  - `/skills` returns HTTPS URLs for hosted skills
+  - `/skills` returns HTTPS URLs plus content hashes for hosted skills
+  - `/.well-known/citadel.json` returns MCP, skill, auth, tool-policy, and
+    boundary metadata without vault contents
+  - `/search` returns additive `_citadel` provenance and retrieval metadata on
+    dict results so agents can cite and decide when drill-down is available
+  - Dashboard search cards surface `_citadel` provenance and only show source
+    drill-down links when the backend marks them available
+  - HTTP responses include baseline browser security headers; HSTS is limited to
+    HTTPS/HTTPS-forwarded requests
+  - Private/authenticated responses default to `Cache-Control: no-store`; public
+    skill/discovery/static metadata is short-cacheable
   - failed deployment `7658403e-d79e-4d89-969b-34bb3aa45374` was caused by
     Railway health checks receiving `404` from `/healthz`; fixed in `68d729e`
   - `CITADEL_MCP_DEFAULT_DATASET=masumi-network` added for company MCP search
@@ -123,6 +133,20 @@
   - hosted MCP `citadel_session`, `citadel_search`, and `citadel_ingest`
     succeed with a writer token
   - rotate any token that was pasted into chat or logs before team rollout
+- MCP audit trail added:
+  - forwarded MCP calls are tagged with `X-Citadel-MCP-Tool`
+  - persistent audit events use `mcp.<tool_name>` actions
+  - events capture actor, role, tool, required scope, dataset when known, and
+    success/failure
+  - audit details store safe counts and hashes instead of raw tokens, queries,
+    note bodies, or feedback text
+- Token scopes are enforced server-side:
+  - protected API routes use role plus required scope checks
+  - bootstrap env keys receive the default scopes for their role
+  - service-account tokens can be narrowed to custom scopes
+  - custom scopes that exceed the selected role are rejected
+- Admin audit dashboard can filter MCP-originated events, non-MCP access/admin
+  events, and failures; MCP summary counts are visible in the Audit page.
 - Live learning-agent sync run on 2026-06-02:
   - scanned 41 repositories
   - processed 50 organization events and 198 commits
@@ -132,6 +156,11 @@
   - visibility: private
   - branch: `main`
   - scaffold commit: `deeb1c9`
+- GitHub sync cron verified on 2026-06-03:
+  - service: `Citadel-GitHub-Sync`
+  - scheduled run logged at `2026-06-03T03:04:06Z`
+  - result: `ingested=true`, `dry_run=false`, `improved=false`
+  - next scheduled run: `2026-06-04T03:00:00Z`
 
 ## Current Railway State
 
@@ -140,8 +169,11 @@
   - `https://citadel-archive-production.up.railway.app/`
 - Web service auto-deploys `main`; health was verified after the progress
   documentation rollout.
-- Cron service `Citadel-GitHub-Sync` has a successful build-only deployment and
-  schedule `0 3 * * *`; next scheduled run still needs post-03:00 UTC verification.
+- Cron service `Citadel-GitHub-Sync` has schedule `0 3 * * *` and the
+  2026-06-03 scheduled run completed with ingestion accepted.
+- Production web is still deployed at commit `97c3009`; the local backup-mirror
+  API exists in this workspace but is not live yet. A dry-run call to
+  `/api/backup-mirror/run` returned `404 Not Found` on 2026-06-03.
 - OpenRouter is configured through `OPENROUTER_API_KEY` and
   `LLM_MODEL=openrouter/free` on both Railway services.
 
@@ -194,7 +226,8 @@ CREATE EXTENSION IF NOT EXISTS vector;
 
 ## Next
 
-- Verify cron service next scheduled execution after 03:00 UTC.
+- Deploy the current backup-mirror/API/MCP hardening changes to Railway before
+  creating the backup-mirror cron service.
 - Verify admin key unlocks UI.
 - Verify `/api/github-sync` in the hosted UI.
 - Continue testing real Cognee vector/graph search. Current live company MCP
@@ -204,8 +237,14 @@ CREATE EXTENSION IF NOT EXISTS vector;
 - Test self-upgrade.
 - Issue fresh per-teammate/per-agent tokens for rollout; use reader by default
   and writer/admin only when those roles are needed.
-- Design and implement Vault Backup Mirror export → `masumi-network/Vault-Backup-Mirror`
-  (see `docs/vault-backup-mirror.md`; `CITADEL_BACKUP_MIRROR_*` env vars reserved).
+- Re-run the backup-mirror dry-run after deployment:
+  `scripts/run_railway.py` with `CITADEL_RUN_MODE=backup-mirror` against the
+  hosted API should return `200` from `/api/backup-mirror/run`.
+- Create the Railway `backup-mirror` cron service using
+  `CITADEL_RUN_MODE=backup-mirror` and a mounted `/data` volume.
+- Configure a dedicated `CITADEL_BACKUP_MIRROR_TOKEN`, enable
+  `CITADEL_BACKUP_MIRROR_PUSH_ENABLED=true`, and verify the first private mirror
+  commit only contains manifest JSON.
 
 ## Next: Team Access
 
@@ -239,13 +278,13 @@ CREATE EXTENSION IF NOT EXISTS vector;
 
 - Continue OS-style page deepening:
   - add richer Knowledge document/source drilldowns
-  - add a first-class Agent tool-call audit table
+  - add drill-down views for MCP audit events and linked source documents
+  - add audit export and event detail pages on top of `/api/audit?view=...`
   - add editable Settings controls after backend policy modules exist
 - Make Sources/Ingest the default writer workspace.
 - Make Home/Access/Agents/Audit the admin workspace.
-- Add MCP tool-call persistence so Audit can show real MCP calls.
 - Add model/provider state once the server exposes it safely.
-- Add Vault Backup Mirror controls after the mirror module exists.
+- Add Vault Backup Mirror write controls and export history drill-downs.
 
 ## Later
 

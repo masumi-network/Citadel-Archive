@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import base64
+import hashlib
+
 from fastapi.testclient import TestClient
 
 from kb.server import app
@@ -9,6 +12,7 @@ def test_list_skills() -> None:
     client = TestClient(app, base_url="https://citadel.example")
     response = client.get("/skills")
     assert response.status_code == 200
+    assert response.headers["cache-control"] == "public, max-age=300"
     payload = response.json()
     assert payload["ok"] is True
     slugs = {item["slug"] for item in payload["skills"]}
@@ -16,6 +20,9 @@ def test_list_skills() -> None:
     connect = next(item for item in payload["skills"] if item["slug"] == "connect")
     assert connect["url"] == "https://citadel.example/skills/connect"
     assert "mcp" in connect["aliases"]
+    assert connect["size_bytes"] > 0
+    assert len(connect["sha256"]) == 64
+    assert connect["integrity"].startswith("sha256-")
 
 
 def test_list_skills_uses_forwarded_public_url() -> None:
@@ -34,19 +41,121 @@ def test_list_skills_uses_forwarded_public_url() -> None:
     assert connect["url"] == "https://citadel-archive-production.up.railway.app/skills/connect"
 
 
+def test_discovery_manifest_is_public_and_verifiable() -> None:
+    client = TestClient(app, base_url="https://citadel.example")
+    response = client.get("/.well-known/citadel.json")
+
+    assert response.status_code == 200
+    assert response.headers["cache-control"] == "public, max-age=300"
+    payload = response.json()
+    assert payload["ok"] is True
+    assert payload["service"] == {
+        "name": "Citadel Archive",
+        "kind": "organization_vault",
+        "version": "0.1.0",
+        "base_url": "https://citadel.example",
+    }
+    assert payload["public_endpoints"]["discovery"] == (
+        "https://citadel.example/.well-known/citadel.json"
+    )
+    assert payload["mcp"]["endpoint"] == "https://citadel.example/mcp"
+    assert payload["mcp"]["authentication"] == {
+        "required": True,
+        "scheme": "bearer",
+        "token_prefix": "ctdl_",
+        "header": "Authorization",
+    }
+    tool_names = {tool["name"] for tool in payload["mcp"]["tools"]}
+    assert {"citadel_session", "citadel_search", "citadel_ingest"} <= tool_names
+    assert "citadel_ingest" in payload["mcp"]["approval_recommended_for"]
+    connect = next(item for item in payload["skills"] if item["slug"] == "connect")
+    assert connect["url"] == "https://citadel.example/skills/connect"
+    assert len(connect["sha256"]) == 64
+    assert connect["integrity"].startswith("sha256-")
+    assert "vault search results and source documents" in payload["security"]["private_data"]
+    serialized = response.text
+    assert "test-admin" not in serialized
+    assert "test-reader" not in serialized
+    assert "test-writer" not in serialized
+
+
+def test_discovery_manifest_uses_forwarded_public_url() -> None:
+    client = TestClient(app, base_url="http://internal.local")
+
+    response = client.get(
+        "/.well-known/citadel.json",
+        headers={
+            "x-forwarded-proto": "https",
+            "x-forwarded-host": "citadel-archive-production.up.railway.app",
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["service"]["base_url"] == "https://citadel-archive-production.up.railway.app"
+    assert payload["mcp"]["endpoint"] == "https://citadel-archive-production.up.railway.app/mcp"
+    connect = next(item for item in payload["skills"] if item["slug"] == "connect")
+    assert connect["url"] == "https://citadel-archive-production.up.railway.app/skills/connect"
+
+
+def test_public_urls_ignore_malformed_forwarded_headers() -> None:
+    client = TestClient(app, base_url="https://citadel.example")
+
+    response = client.get(
+        "/.well-known/citadel.json",
+        headers={
+            "x-forwarded-proto": "javascript",
+            "x-forwarded-host": "evil.example/path",
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["service"]["base_url"] == "https://citadel.example"
+    assert payload["mcp"]["endpoint"] == "https://citadel.example/mcp"
+    connect = next(item for item in payload["skills"] if item["slug"] == "connect")
+    assert connect["url"] == "https://citadel.example/skills/connect"
+
+
 def test_get_skill_connect() -> None:
     client = TestClient(app)
+    catalog = client.get("/skills").json()
+    connect = next(item for item in catalog["skills"] if item["slug"] == "connect")
+
     response = client.get("/skills/connect")
     assert response.status_code == 200
     assert "citadel-mcp-connector" in response.text
     assert response.headers["content-type"].startswith("text/markdown")
+    digest = hashlib.sha256(response.content).digest()
+    sha256 = digest.hex()
+    assert sha256 == connect["sha256"]
+    assert len(response.content) == connect["size_bytes"]
+    assert connect["integrity"] == f"sha256-{base64.b64encode(digest).decode('ascii')}"
+    assert response.headers["x-citadel-skill-sha256"] == sha256
+    assert response.headers["x-citadel-skill-integrity"] == connect["integrity"]
+    assert response.headers["etag"] == f"\"sha256-{sha256}\""
+    assert response.headers["cache-control"] == "public, max-age=300"
+
+
+def test_static_assets_are_short_cacheable() -> None:
+    client = TestClient(app)
+
+    response = client.get("/static/login.js")
+
+    assert response.status_code == 200
+    assert response.headers["cache-control"] == "public, max-age=300"
+    assert response.headers["x-content-type-options"] == "nosniff"
 
 
 def test_get_skill_alias() -> None:
     client = TestClient(app)
+    catalog = client.get("/skills").json()
+    connect = next(item for item in catalog["skills"] if item["slug"] == "connect")
+
     response = client.get("/skills/mcp")
     assert response.status_code == 200
     assert "Citadel MCP Connector" in response.text
+    assert response.headers["x-citadel-skill-sha256"] == connect["sha256"]
 
 
 def test_get_skill_unknown() -> None:

@@ -1,20 +1,10 @@
 {
   "mcpServers": {
     "citadel": {
-      "command": "uv",
-      "args": [
-        "--directory",
-        "/absolute/path/to/Citadel-Archive",
-        "run",
-        "python",
-        "-m",
-        "kb.mcp_server"
-      ],
-      "env": {
-        "CITADEL_HTTP_BASE_URL": "https://citadel-archive-production.up.railway.app",
-        "CITADEL_MCP_ACCESS_TOKEN": "${CITADEL_MCP_ACCESS_TOKEN}",
-        "CITADEL_MCP_DEFAULT_DATASET": "masumi-network",
-        "CITADEL_MCP_MAX_INGEST_BYTES": "200000"
+      "type": "http",
+      "url": "https://citadel-archive-production.up.railway.app/mcp",
+      "headers": {
+        "Authorization": "Bearer ${CITADEL_MCP_ACCESS_TOKEN}"
       }
     }
   }

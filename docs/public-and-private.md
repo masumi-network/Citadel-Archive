@@ -53,7 +53,7 @@ Agents / humans ──MCP/HTTPS + ctdl token──► Railway (live vault)
 | Reader `ctdl_` token + MCP | Search, mesh, sources, read resources |
 | Writer token | Above + ingest and feedback (with approval) |
 | Admin token | Above + learning agent, improve, token APIs |
-| No token | Only public `/healthz` and hosted **skill markdown** (`/skills/*`) |
+| No token | Only public `/healthz`, `/.well-known/citadel.json`, `/skills`, and hosted **skill markdown** (`/skills/*`) |
 
 Agents must **not** assume the public GitHub repo contains team memory. All vault
 queries go to Railway with a user-provided token.

@@ -1,19 +1,12 @@
 [mcp_servers.citadel]
-command = "uv"
+command = "npx"
 args = [
-  "--directory",
-  "/absolute/path/to/Citadel-Archive",
-  "run",
-  "python",
-  "-m",
-  "kb.mcp_server",
+  "-y",
+  "mcp-remote",
+  "https://citadel-archive-production.up.railway.app/mcp",
+  "--header",
+  "Authorization: Bearer PASTE_ONCE_IN_LOCAL_CODEX_CONFIG",
 ]
-
-[mcp_servers.citadel.env]
-CITADEL_HTTP_BASE_URL = "https://citadel-archive-production.up.railway.app"
-CITADEL_MCP_ACCESS_TOKEN = "PASTE_ONCE_IN_LOCAL_CODEX_CONFIG"
-CITADEL_MCP_DEFAULT_DATASET = "masumi-network"
-CITADEL_MCP_MAX_INGEST_BYTES = "200000"
 
 [mcp_servers.citadel.tools.citadel_ingest]
 approval_mode = "approve"

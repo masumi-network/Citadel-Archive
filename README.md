@@ -1,6 +1,6 @@
 # Citadel
 
-Last updated: 2026-06-02.
+Last updated: 2026-06-03.
 
 Citadel is a thin self-hosted Organization Vault wrapper built on top of
 [Cognee](https://github.com/topoteretes/cognee), which is Apache-2.0 licensed.
@@ -37,6 +37,7 @@ What may be public vs private: [`docs/public-and-private.md`](docs/public-and-pr
 | Use vault | https://citadel-archive-production.up.railway.app/skills/vault |
 | Data boundary | https://citadel-archive-production.up.railway.app/skills/boundary |
 | All skills | https://citadel-archive-production.up.railway.app/skills |
+| Agent discovery manifest | https://citadel-archive-production.up.railway.app/.well-known/citadel.json |
 
 The skills also live in the top-level `skills/` directory, so they can be
 installed straight from this repo via [skills.sh](https://skills.sh):
@@ -44,6 +45,14 @@ installed straight from this repo via [skills.sh](https://skills.sh):
 ```bash
 npx skills add masumi-network/Citadel-Archive
 ```
+
+The hosted `/skills` index includes `size_bytes`, `sha256`, and SRI-style
+`integrity` metadata for each skill. The individual `/skills/*` markdown
+responses include matching `X-Citadel-Skill-SHA256` and
+`X-Citadel-Skill-Integrity` headers so agents can verify what they loaded.
+The well-known discovery manifest repeats the skill metadata and lists the
+hosted MCP endpoint, token requirements, tool policy metadata, and public/private
+boundary rules without exposing vault content.
 
 Verified team-share flow: see
 [`docs/team-share-smoke-test.md`](docs/team-share-smoke-test.md).
@@ -83,6 +92,7 @@ Copy-paste public smoke test:
 export CITADEL_BASE_URL=https://citadel-archive-production.up.railway.app
 
 curl -fsS "$CITADEL_BASE_URL/healthz"
+curl -fsS "$CITADEL_BASE_URL/.well-known/citadel.json" | python3 -m json.tool
 curl -fsS "$CITADEL_BASE_URL/skills" | python3 -m json.tool
 curl -fsS "$CITADEL_BASE_URL/skills/connect" | sed -n '1,80p'
 ```
@@ -115,7 +125,8 @@ export CITADEL_MCP_DEFAULT_DATASET=masumi-network
 uv run python -m kb.mcp_server
 ```
 
-Mirror export from Railway is planned; see [`docs/vault-backup-mirror.md`](docs/vault-backup-mirror.md).
+Mirror manifest export is available, with opt-in GitHub push to the private
+mirror repo. See [`docs/vault-backup-mirror.md`](docs/vault-backup-mirror.md).
 
 ## What This Adds
 
@@ -167,7 +178,7 @@ Health endpoints:
 
 ```bash
 curl http://localhost:8000/healthz
-curl http://localhost:8000/readyz
+curl -H "Authorization: Bearer $CITADEL_MCP_ACCESS_TOKEN" http://localhost:8000/readyz
 ```
 
 Core API endpoints:
@@ -244,6 +255,11 @@ Role permissions:
 - Admin: writer permissions plus GitHub sync, self-upgrade, token creation,
   token revocation, and audit viewing.
 
+Tokens are checked by both role and scope. Custom scopes can only reduce a
+token's permissions within its role; Citadel rejects scopes that exceed the
+selected role. For example, a writer token with only `kb:ingest` can ingest but
+cannot search, record feedback, or run admin jobs.
+
 Use the Access page to create a user or service-account token. The token is
 shown once; Citadel stores only its hash, prefix, role, scopes, expiry, and
 last-used timestamp. Existing env keys remain the bootstrap/local fallback.
@@ -272,7 +288,9 @@ Admin APIs:
 - `GET /api/access`
 - `POST /api/access/tokens`
 - `POST /api/access/tokens/{token_id}/revoke`
-- `GET /api/audit`
+- `GET /api/audit?view=all|mcp|access|failures&limit=50`
+- `GET /api/backup-mirror`
+- `POST /api/backup-mirror/run`
 
 ## CLI
 
@@ -346,6 +364,47 @@ the web service as the default mode and switches to the learning-agent command
 when `CITADEL_RUN_MODE=learning-agent`. The older `github-sync` run mode still
 works for compatibility.
 
+## Vault Backup Mirror
+
+Citadel includes a manifest-only Vault Backup Mirror exporter for the private
+`masumi-network/Vault-Backup-Mirror` repository path. The first implementation
+tracks state files by path, size, timestamp, and SHA-256 hash; it does not copy
+raw source bodies, token stores, embeddings, vector indexes, graph databases, or
+large binaries into the mirror.
+
+```bash
+CITADEL_BACKUP_MIRROR_REPO=masumi-network/Vault-Backup-Mirror
+CITADEL_BACKUP_MIRROR_BRANCH=main
+CITADEL_BACKUP_MIRROR_ROOT_PATH=/data/.citadel/backup_mirror
+CITADEL_BACKUP_MIRROR_ENABLED=false
+CITADEL_BACKUP_MIRROR_PUSH_ENABLED=false
+```
+
+Admin APIs:
+
+- `GET /api/backup-mirror` shows tracked state files and latest manifest status.
+- `POST /api/backup-mirror/run` accepts `{"dry_run": true}` by default.
+- Non-dry-run local writes require `CITADEL_BACKUP_MIRROR_ENABLED=true`.
+- GitHub publishing also requires `CITADEL_BACKUP_MIRROR_PUSH_ENABLED=true`
+  and `CITADEL_BACKUP_MIRROR_TOKEN` with `contents: write` access to the private
+  mirror repo.
+
+Cron wrapper:
+
+```bash
+CITADEL_RUN_MODE=backup-mirror
+CITADEL_BACKUP_MIRROR_TARGET_URL=https://citadel-archive-production.up.railway.app
+CITADEL_BACKUP_MIRROR_ACCESS_KEY=ctdl_...
+CITADEL_BACKUP_MIRROR_DRY_RUN=true
+CITADEL_BACKUP_MIRROR_TOKEN=github_pat_... # only needed when push is enabled
+uv run python scripts/run_railway.py
+```
+
+The current exporter writes local `manifests/latest.json` and dated
+`snapshots/<date>/<snapshot_id>/manifest.json` files under
+`CITADEL_BACKUP_MIRROR_ROOT_PATH`. When push is enabled, it commits those same
+manifest files to the private mirror repository through the GitHub Contents API.
+
 ## MCP Server
 
 Citadel serves a **hosted MCP endpoint** so agents connect with a URL and a
@@ -360,6 +419,12 @@ It is a streamable-HTTP server mounted into the same FastAPI process
 (`kb/server.py` mounts `kb/mcp_server.py` at `/mcp`). Each request is
 authenticated by the caller's `ctdl_` bearer token — the same reader/writer/admin
 tokens as the UI — and dispatched against the in-process API.
+
+Forwarded MCP calls include `X-Citadel-MCP-Tool`, and Citadel records persistent
+audit events for MCP-originated reads, writes, and admin jobs. Audit entries
+capture actor, role, tool, path, required scope, dataset when known, status, and
+safe counts or hashes. They do not store raw tokens, search queries, note bodies,
+or feedback text.
 
 Claude Code project `.mcp.json`:
 
@@ -402,7 +467,10 @@ Recommended token roles:
 
 - Reader tokens: search, mesh, source status, resources.
 - Writer tokens: reader tools plus `citadel_ingest` and feedback.
-- Admin tokens: writer tools plus learning-agent runs and Cognee improvement.
+- Admin tokens: writer tools plus learning-agent runs, backup-mirror exports,
+  and Cognee improvement.
+- Custom-scoped tokens are least-privilege subsets of those roles and are
+  enforced server-side on API and MCP-forwarded calls.
 
 Safe defaults:
 
@@ -410,12 +478,16 @@ Safe defaults:
 - Configure the client to require approval for `citadel_ingest` and
   `citadel_record_feedback`.
 - Configure the client to require approval, or keep disabled by default, for
-  `citadel_run_learning_agent` and `citadel_improve`.
+  `citadel_run_learning_agent`, `citadel_run_backup_mirror`, and
+  `citadel_improve`.
 - Use `https://` for hosted Citadel URLs. The MCP wrapper only allows plain
   `http://` for localhost unless `CITADEL_MCP_ALLOW_INSECURE_HTTP=true` is set
   for a trusted development network.
 - Keep `CITADEL_MCP_MAX_INGEST_BYTES` low enough that agents cannot accidentally
   push large logs or secrets into durable memory.
+- Review `/api/audit` from an admin session when validating an agent rollout.
+  MCP events appear as `mcp.<tool_name>` actions; admin MCP clients can also use
+  `citadel_audit_events`.
 
 Example Claude/Codex MCP command:
 
@@ -431,11 +503,16 @@ Example Claude/Codex MCP command:
 }
 ```
 
-Exposed tools include `citadel_session`, `citadel_search`,
-`citadel_get_document`, `citadel_get_mesh`, `citadel_list_sources`,
-`citadel_ingest`, `citadel_record_feedback`, `citadel_run_learning_agent`, and
-`citadel_improve`. `citadel_get_document` takes the `id` returned on a search hit
-and fetches the full source document.
+Exposed tools include `citadel_discovery`, `citadel_session`,
+`citadel_search`, `citadel_get_document`, `citadel_get_mesh`,
+`citadel_list_sources`, `citadel_ingest`, `citadel_record_feedback`,
+`citadel_run_learning_agent`, `citadel_backup_mirror_status`,
+`citadel_run_backup_mirror`, `citadel_audit_events`, and `citadel_improve`.
+`citadel_discovery` returns the safe public manifest for connected agents;
+`citadel_search` returns each hit with an additive `_citadel` provenance envelope
+(`rank`, `dataset`, `result_id`, `content_sha256`, `provenance`, and
+`retrieval`); `citadel_get_document` takes the `id` returned on a search hit when
+`_citadel.retrieval.document_drilldown_available` is true.
 
 The plugin is intentionally thin. It does not run a second Citadel backend. It
 bundles `.mcp.json` and a small agent skill so Codex can launch the stdio MCP
@@ -485,6 +562,7 @@ Recommended first deployment shape:
 
 - One Railway web service for this repository.
 - One Railway cron service for daily GitHub syncs.
+- One Railway cron service for Vault Backup Mirror manifest export.
 - One Railway Postgres service dedicated to Citadel.
 - `pgvector` enabled in that Postgres database for the vector index.
 - One Railway volume mounted at `/data` for Cognee's local Kuzu graph files.
@@ -506,8 +584,10 @@ SYSTEM_ROOT_DIRECTORY=/data/.cognee_system
 DATA_ROOT_DIRECTORY=/data/.data_storage
 ```
 
-The GitHub sync cron service should also have a Railway volume mounted at
-`/data` so `/data/.citadel/github_sync_state.json` persists between daily runs.
+The GitHub sync and backup mirror cron services should also have a Railway
+volume mounted at `/data` so `/data/.citadel/github_sync_state.json` and
+`/data/.citadel/backup_mirror/` persist between runs. Set `CITADEL_RUN_MODE` to
+`learning-agent` for source sync or `backup-mirror` for mirror manifest export.
 
 For later team use, move the graph store to Neo4j or Memgraph without changing
 Citadel's wrapper code.

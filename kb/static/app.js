@@ -12,6 +12,7 @@ const state = {
   obsidianSources: null,
   accessSnapshot: null,
   settingsSnapshot: null,
+  auditFilter: "all",
 };
 
 const canvas = document.getElementById("graphCanvas");
@@ -73,12 +74,18 @@ const agentsTokenList = document.getElementById("agentsTokenList");
 const auditStatus = document.getElementById("auditStatus");
 const auditAccessList = document.getElementById("auditAccessList");
 const auditRuntimeList = document.getElementById("auditRuntimeList");
+const auditFilterButtons = Array.from(document.querySelectorAll("[data-audit-filter]"));
+const auditMcpSummary = document.getElementById("auditMcpSummary");
+const auditAccessTitle = document.getElementById("auditAccessTitle");
+const auditAccessSubtitle = document.getElementById("auditAccessSubtitle");
 const settingsStatus = document.getElementById("settingsStatus");
 const settingsHealthGrid = document.getElementById("settingsHealthGrid");
+const settingsMirrorList = document.getElementById("settingsMirrorList");
 const pageButtons = Array.from(document.querySelectorAll("[data-page-target]"));
 const pages = Array.from(document.querySelectorAll("[data-page]"));
 const roleOrder = { reader: 1, writer: 2, admin: 3 };
 const reducedMotionQuery = window.matchMedia("(prefers-reduced-motion: reduce)");
+const sensitiveDetailPattern = /(token|secret|password|authorization|body|content|text|query)$/i;
 
 const graph = {
   scene: null,
@@ -533,14 +540,19 @@ function emptyListItem(title, body) {
 
 function eventListItem(event) {
   const item = document.createElement("li");
-  item.className = "event-item";
+  const isMcp = isMcpAuditEvent(event);
+  item.className = `event-item${isMcp ? " mcp-event" : ""}`;
+  const detail = event.detail || event.details || {};
+  const eventLabel = event.action || event.type || "event";
+  const status = event.success === false ? "failed" : event.success === true ? "ok" : detail.status || "";
   item.innerHTML = `
     <div class="event-row">
-      <span class="event-type">${escapeHtml(event.action || event.type || "event")}</span>
+      <span class="event-type">${escapeHtml(eventLabel)}</span>
       <time class="event-time">${escapeHtml(formatDate(event.created_at))}</time>
     </div>
+    ${status ? `<span class="status-chip ${event.success === false ? "status-error" : "status-enabled"}">${escapeHtml(status)}</span>` : ""}
     <div class="event-message">${escapeHtml(event.actor_name || event.message || "System")}</div>
-    <div class="event-details">${escapeHtml(formatDetails(event.detail || event.details || {}))}</div>
+    <div class="event-details">${escapeHtml(formatDetails(detail))}</div>
   `;
   if (event.success === false) {
     item.classList.add("issue-card");
@@ -551,8 +563,61 @@ function eventListItem(event) {
 function formatDetails(details = {}) {
   return Object.entries(details)
     .filter(([, value]) => value !== null && value !== undefined && value !== "")
-    .map(([key, value]) => `${key}: ${Array.isArray(value) ? value.join(", ") : value}`)
+    .map(([key, value]) => {
+      const rendered = sensitiveDetailPattern.test(key)
+        ? "[redacted]"
+        : Array.isArray(value)
+          ? value.join(", ")
+          : value;
+      return `${key}: ${rendered}`;
+    })
     .join(" | ");
+}
+
+function isMcpAuditEvent(event) {
+  return Boolean(event?.action?.startsWith("mcp.") || event?.detail?.surface === "mcp");
+}
+
+function filteredAuditEvents(events = []) {
+  if (state.auditFilter === "mcp") return events.filter(isMcpAuditEvent);
+  if (state.auditFilter === "access") return events.filter((event) => !isMcpAuditEvent(event));
+  if (state.auditFilter === "failures") return events.filter((event) => event.success === false);
+  return events;
+}
+
+function renderAuditFilterState(events = []) {
+  const filtered = filteredAuditEvents(events);
+  const mcpEvents = events.filter(isMcpAuditEvent);
+  const mcpFailures = mcpEvents.filter((event) => event.success === false);
+  const mcpActors = new Set(mcpEvents.map((event) => event.actor_id || event.actor_name).filter(Boolean));
+
+  auditFilterButtons.forEach((button) => {
+    const active = button.dataset.auditFilter === state.auditFilter;
+    button.classList.toggle("active", active);
+    button.setAttribute("aria-pressed", active ? "true" : "false");
+  });
+
+  if (auditMcpSummary) {
+    auditMcpSummary.innerHTML = `
+      <div><dt>MCP events</dt><dd>${escapeHtml(mcpEvents.length)}</dd></div>
+      <div><dt>Failures</dt><dd>${escapeHtml(mcpFailures.length)}</dd></div>
+      <div><dt>Actors</dt><dd>${escapeHtml(mcpActors.size)}</dd></div>
+    `;
+  }
+
+  if (auditAccessTitle && auditAccessSubtitle) {
+    const labels = {
+      all: ["Agent And Access Actions", `${filtered.length} recent audit events`],
+      mcp: ["MCP Tool Calls", `${filtered.length} agent tool events`],
+      access: ["Access And Admin Actions", `${filtered.length} non-MCP audit events`],
+      failures: ["Failed Actions", `${filtered.length} failed audit events`],
+    };
+    const [title, subtitle] = labels[state.auditFilter] || labels.all;
+    auditAccessTitle.textContent = title;
+    auditAccessSubtitle.textContent = subtitle;
+  }
+
+  return filtered;
 }
 
 function findFeedbackId(value) {
@@ -574,6 +639,72 @@ function findFeedbackId(value) {
   for (const key of ["metadata", "payload", "result"]) {
     const candidate = findFeedbackId(value[key]);
     if (candidate) return candidate;
+  }
+  return null;
+}
+
+function compactText(value, maxLength = 520) {
+  if (value === null || value === undefined || value === "") return "";
+  const text = typeof value === "string" ? value : JSON.stringify(value, null, 2);
+  const normalized = text.replace(/\s+/g, " ").trim();
+  if (normalized.length <= maxLength) return normalized;
+  return `${normalized.slice(0, maxLength - 1)}…`;
+}
+
+function resultEnvelope(result) {
+  return result && typeof result === "object" && result._citadel
+    ? result._citadel
+    : {};
+}
+
+function resultProvenance(result) {
+  const provenance = resultEnvelope(result).provenance;
+  return provenance && typeof provenance === "object" ? provenance : {};
+}
+
+function resultTitle(result, index) {
+  const provenance = resultProvenance(result);
+  return (
+    provenance.title ||
+    result?.title ||
+    result?.name ||
+    result?.id ||
+    `Result ${index + 1}`
+  );
+}
+
+function resultSummary(result) {
+  const body =
+    result?.content ??
+    result?.body ??
+    result?.text ??
+    result?.summary ??
+    result?.answer ??
+    result?.result;
+  return compactText(body || result);
+}
+
+function resultMetaRows(result) {
+  const envelope = resultEnvelope(result);
+  const provenance = resultProvenance(result);
+  return [
+    ["Dataset", envelope.dataset || result?.dataset],
+    ["Source", provenance.source || result?.source],
+    ["Path", provenance.path],
+    ["Session", provenance.session_id],
+    ["Hash", envelope.content_sha256 ? envelope.content_sha256.slice(0, 12) : null],
+  ].filter(([, value]) => value !== null && value !== undefined && value !== "");
+}
+
+function safeDocumentEndpoint(result) {
+  const envelope = resultEnvelope(result);
+  const endpoint = envelope.document_endpoint;
+  if (
+    envelope.retrieval?.document_drilldown_available === true &&
+    typeof endpoint === "string" &&
+    endpoint.startsWith("/api/documents/")
+  ) {
+    return endpoint;
   }
   return null;
 }
@@ -607,6 +738,13 @@ function formatDate(value) {
     hour: "2-digit",
     minute: "2-digit",
   }).format(date);
+}
+
+function formatBytes(value) {
+  const bytes = Number(value || 0);
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
 }
 
 function initializeGraph() {
@@ -1500,11 +1638,12 @@ function renderAgents(snapshot) {
 function renderAuditAccessEvents(events = []) {
   if (!auditAccessList) return;
   auditAccessList.innerHTML = "";
-  if (!events.length) {
-    auditAccessList.append(emptyListItem("No access events", "Admin and agent actions will appear here."));
+  const filtered = renderAuditFilterState(events);
+  if (!filtered.length) {
+    auditAccessList.append(emptyListItem("No matching events", "Change the audit filter or run an agent action."));
     return;
   }
-  events.slice(-30).reverse().forEach((event) => {
+  filtered.slice(-30).reverse().forEach((event) => {
     auditAccessList.append(eventListItem(event));
   });
 }
@@ -1519,8 +1658,12 @@ async function loadSettings() {
     <div class="skeleton index-skeleton"></div>
   `;
   try {
-    const [ready, learning] = await Promise.all([api("/readyz"), api("/api/learning-agent")]);
-    state.settingsSnapshot = { ready, learning };
+    const [ready, learning, mirror] = await Promise.all([
+      api("/readyz"),
+      api("/api/learning-agent"),
+      api("/api/backup-mirror").catch((error) => ({ ok: false, error: error.message })),
+    ]);
+    state.settingsSnapshot = { ready, learning, mirror };
     renderSettings(state.settingsSnapshot);
     settingsStatus.textContent = "Ready";
     settingsStatus.className = "status-chip status-enabled";
@@ -1537,6 +1680,7 @@ function renderSettings(snapshot) {
   const ready = snapshot.ready || {};
   const learning = snapshot.learning || {};
   const github = learning.sources?.github || {};
+  renderSettingsMirror(snapshot.mirror);
   const rows = [
     {
       name: "HTTP service",
@@ -1588,6 +1732,58 @@ function renderSettings(snapshot) {
       <span class="status-chip ${row.error ? "status-error" : "status-enabled"}">${escapeHtml(row.status)}</span>
     `;
     settingsHealthGrid.append(item);
+  });
+}
+
+function renderSettingsMirror(mirror) {
+  if (!settingsMirrorList) return;
+  settingsMirrorList.innerHTML = "";
+  if (!mirror || mirror.ok === false) {
+    settingsMirrorList.append(
+      emptyState(
+        "Mirror status unavailable",
+        mirror?.error || "The server did not return mirror status.",
+      ),
+    );
+    return;
+  }
+
+  const summary = mirror.summary || {};
+  const latest = mirror.latest_export || null;
+  const rows = [
+    {
+      name: "Manifest exporter",
+      body: `${mirror.repo || "Vault-Backup-Mirror"} on ${mirror.branch || "main"}`,
+      status: mirror.enabled ? "enabled" : "dry-run",
+      error: false,
+    },
+    {
+      name: "Tracked state files",
+      body: `${summary.available_files || 0}/${summary.tracked_files || 0} available - ${formatBytes(summary.total_bytes)}`,
+      status: summary.missing_files ? "partial" : "tracked",
+      error: false,
+    },
+    {
+      name: "Latest manifest",
+      body: latest
+        ? `${latest.snapshot_id || "snapshot"} - ${formatDate(latest.exported_at)}`
+        : "No manifest written yet.",
+      status: latest ? "ready" : "pending",
+      error: false,
+    },
+  ];
+
+  rows.forEach((row) => {
+    const item = document.createElement("div");
+    item.className = "entity-item";
+    item.innerHTML = `
+      <div>
+        <strong>${escapeHtml(row.name)}</strong>
+        <p>${escapeHtml(row.body)}</p>
+      </div>
+      <span class="status-chip ${row.error ? "status-error" : "status-enabled"}">${escapeHtml(row.status)}</span>
+    `;
+    settingsMirrorList.append(item);
   });
 }
 
@@ -1673,6 +1869,13 @@ document.getElementById("pauseButton").addEventListener("click", (event) => {
   state.paused = !state.paused;
   event.currentTarget.textContent = state.paused ? "Resume" : "Pause";
   canvas.classList.toggle("is-paused", state.paused);
+});
+
+auditFilterButtons.forEach((button) => {
+  button.addEventListener("click", () => {
+    state.auditFilter = button.dataset.auditFilter || "all";
+    renderAuditAccessEvents(state.accessSnapshot?.audit_events || []);
+  });
 });
 
 canvas.addEventListener("pointerdown", (event) => {
@@ -2024,17 +2227,68 @@ function renderSearchResults(results) {
     const item = document.createElement("div");
     item.className = "result-item";
     const feedbackId = findFeedbackId(result);
+    const envelope = resultEnvelope(result);
+    const provenance = resultProvenance(result);
+    const metaRows = resultMetaRows(result);
+    const documentEndpoint = safeDocumentEndpoint(result);
+    const drilldown = envelope.retrieval?.document_drilldown_available === true;
     item.innerHTML = `
-      <div class="result-meta">Result ${index + 1}</div>
-      <pre class="result-body">${escapeHtml(JSON.stringify(result, null, 2))}</pre>
+      <div class="result-header">
+        <div>
+          <div class="result-meta">Result ${escapeHtml(envelope.rank || index + 1)}</div>
+          <strong>${escapeHtml(resultTitle(result, index))}</strong>
+        </div>
+        <span class="status-chip status-standby">Untrusted context</span>
+      </div>
+      <p class="result-summary">${escapeHtml(resultSummary(result))}</p>
+      ${
+        metaRows.length
+          ? `<dl class="result-provenance">${metaRows
+              .map(
+                ([label, value]) => `
+                  <div>
+                    <dt>${escapeHtml(label)}</dt>
+                    <dd>${escapeHtml(value)}</dd>
+                  </div>
+                `
+              )
+              .join("")}</dl>`
+          : ""
+      }
+      <div class="result-retrieval">
+        <span class="status-chip ${drilldown ? "status-enabled" : ""}">
+          ${drilldown ? "Full document available" : "Chunk only"}
+        </span>
+        ${
+          provenance.source_url
+            ? `<span class="result-source-url">${escapeHtml(provenance.source_url)}</span>`
+            : ""
+        }
+      </div>
+      <details class="result-raw">
+        <summary>Raw result</summary>
+        <pre class="result-body">${escapeHtml(JSON.stringify(result, null, 2))}</pre>
+      </details>
     `;
+    const actions = document.createElement("div");
+    actions.className = "result-actions";
+    if (documentEndpoint) {
+      const link = document.createElement("a");
+      link.className = "secondary-button result-document-link";
+      link.href = documentEndpoint;
+      link.textContent = "Open source";
+      actions.append(link);
+    }
     if (feedbackId) {
       const action = document.createElement("button");
       action.className = "secondary-button result-feedback-button";
       action.type = "button";
       action.textContent = "Use for feedback";
       action.addEventListener("click", () => fillFeedbackForm(feedbackId));
-      item.append(action);
+      actions.append(action);
+    }
+    if (actions.children.length) {
+      item.append(actions);
     }
     container.append(item);
   });

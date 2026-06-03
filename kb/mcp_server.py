@@ -7,7 +7,7 @@ import os
 import re
 from typing import Any
 from urllib.error import HTTPError, URLError
-from urllib.parse import quote, urljoin, urlparse
+from urllib.parse import quote, urlencode, urljoin, urlparse
 from urllib.request import Request, urlopen
 
 from mcp.server.fastmcp import Context, FastMCP
@@ -17,9 +17,12 @@ from mcp.types import ToolAnnotations
 
 
 MAX_SEARCH_TOP_K = 25
+MAX_AUDIT_LIMIT = 100
 DEFAULT_MAX_INGEST_BYTES = 200_000
 LOCAL_MCP_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
 TRUTHY = frozenset({"1", "true", "yes", "on"})
+AUDIT_VIEWS = frozenset({"all", "mcp", "access", "failures"})
+PUBLIC_HOST_RE = re.compile(r"^(?:[A-Za-z0-9.-]+|\[[0-9A-Fa-f:.]+\])(?::[0-9]{1,5})?$")
 SECRET_PATTERNS = (
     re.compile(r"ctdl_[A-Za-z0-9_-]+"),
     re.compile(r"(?i)(bearer\s+)[A-Za-z0-9._~+/=-]+"),
@@ -41,6 +44,17 @@ class ToolPolicy:
 
 
 TOOL_POLICIES: dict[str, ToolPolicy] = {
+    "citadel_discovery": ToolPolicy(
+        role="reader",
+        scope="kb:read",
+        risk="public_metadata",
+        annotations=ToolAnnotations(
+            readOnlyHint=True,
+            destructiveHint=False,
+            idempotentHint=True,
+            openWorldHint=False,
+        ),
+    ),
     "citadel_session": ToolPolicy(
         role="reader",
         scope="kb:read",
@@ -127,6 +141,39 @@ TOOL_POLICIES: dict[str, ToolPolicy] = {
             destructiveHint=False,
             idempotentHint=False,
             openWorldHint=True,
+        ),
+    ),
+    "citadel_backup_mirror_status": ToolPolicy(
+        role="admin",
+        scope="sources:sync",
+        risk="admin_status",
+        annotations=ToolAnnotations(
+            readOnlyHint=True,
+            destructiveHint=False,
+            idempotentHint=True,
+            openWorldHint=False,
+        ),
+    ),
+    "citadel_run_backup_mirror": ToolPolicy(
+        role="admin",
+        scope="sources:sync",
+        risk="admin_job",
+        annotations=ToolAnnotations(
+            readOnlyHint=False,
+            destructiveHint=False,
+            idempotentHint=False,
+            openWorldHint=False,
+        ),
+    ),
+    "citadel_audit_events": ToolPolicy(
+        role="admin",
+        scope="audit:read",
+        risk="admin_status",
+        annotations=ToolAnnotations(
+            readOnlyHint=True,
+            destructiveHint=False,
+            idempotentHint=True,
+            openWorldHint=False,
         ),
     ),
     "citadel_improve": ToolPolicy(
@@ -254,6 +301,31 @@ def _bearer_from_context(ctx: Context | None) -> str | None:
     return None
 
 
+def _public_url_headers_from_context(ctx: Context | None) -> dict[str, str]:
+    if ctx is None:
+        return {}
+    try:
+        request = ctx.request_context.request
+    except Exception:
+        return {}
+    if request is None:
+        return {}
+    try:
+        host = (
+            request.headers.get("x-forwarded-host")
+            or request.headers.get("host")
+            or ""
+        )
+        proto = request.headers.get("x-forwarded-proto") or urlparse(str(request.url)).scheme
+    except Exception:
+        return {}
+    host = host.split(",", 1)[0].strip()
+    proto = proto.split(",", 1)[0].strip().lower()
+    if host and PUBLIC_HOST_RE.fullmatch(host) and proto in {"http", "https"}:
+        return {"X-Forwarded-Host": host, "X-Forwarded-Proto": proto}
+    return {}
+
+
 def _require_non_empty(value: str, field_name: str) -> str:
     normalized = value.strip()
     if not normalized:
@@ -263,6 +335,16 @@ def _require_non_empty(value: str, field_name: str) -> str:
 
 def _clamp_top_k(top_k: int) -> int:
     return min(max(int(top_k), 1), MAX_SEARCH_TOP_K)
+
+
+def _audit_query(view: str, limit: int) -> str:
+    normalized_view = view.strip().lower() or "mcp"
+    if normalized_view not in AUDIT_VIEWS:
+        raise CitadelMcpError(
+            f"view must be one of: {', '.join(sorted(AUDIT_VIEWS))}."
+        )
+    normalized_limit = min(max(int(limit), 1), MAX_AUDIT_LIMIT)
+    return f"/api/audit?{urlencode({'view': normalized_view, 'limit': normalized_limit})}"
 
 
 def _validate_ingest_size(data: str) -> None:
@@ -292,8 +374,17 @@ class CitadelHttpClient:
         )
         self.timeout = timeout
 
-    def get(self, path: str, *, tool_name: str | None = None) -> dict[str, Any]:
-        return self._request("GET", path, tool_name=tool_name)
+    def get(
+        self,
+        path: str,
+        *,
+        tool_name: str | None = None,
+        extra_headers: dict[str, str] | None = None,
+    ) -> dict[str, Any]:
+        return self._request("GET", path, tool_name=tool_name, extra_headers=extra_headers)
+
+    def get_public(self, path: str) -> dict[str, Any]:
+        return self._request("GET", path, require_token=False)
 
     def post(
         self,
@@ -311,17 +402,22 @@ class CitadelHttpClient:
         payload: dict[str, Any] | None = None,
         *,
         tool_name: str | None = None,
+        require_token: bool = True,
+        extra_headers: dict[str, str] | None = None,
     ) -> dict[str, Any]:
-        if not self.access_token:
+        if require_token and not self.access_token:
             raise CitadelMcpError("Set CITADEL_MCP_ACCESS_TOKEN to a Citadel access token.")
         body = json.dumps(payload or {}).encode("utf-8") if payload is not None else None
         headers = {
             "Accept": "application/json",
-            "Authorization": f"Bearer {self.access_token}",
             **({"Content-Type": "application/json"} if body is not None else {}),
         }
+        if self.access_token and require_token:
+            headers["Authorization"] = f"Bearer {self.access_token}"
         if tool_name:
             headers["X-Citadel-MCP-Tool"] = tool_name
+        if extra_headers:
+            headers.update(extra_headers)
         request = Request(
             urljoin(f"{self.base_url}/", path.lstrip("/")),
             data=body,
@@ -394,6 +490,29 @@ def create_mcp_server(
             "No Citadel access token. Send 'Authorization: Bearer <ctdl_token>' with the "
             "MCP request, or set CITADEL_MCP_ACCESS_TOKEN for stdio transport."
         )
+
+    def resolve_public_client() -> CitadelHttpClient:
+        base_url = getattr(fallback, "base_url", None) if fallback is not None else None
+        return CitadelHttpClient(base_url=base_url, access_token="")
+
+    def public_manifest() -> dict[str, Any]:
+        if fallback is not None and hasattr(fallback, "get_public"):
+            return fallback.get_public("/.well-known/citadel.json")
+        return resolve_public_client().get_public("/.well-known/citadel.json")
+
+    @mcp.tool(annotations=TOOL_POLICIES["citadel_discovery"].annotations)
+    async def citadel_discovery(ctx: Context) -> dict[str, Any]:
+        """Return safe Citadel agent discovery metadata. Requires reader access."""
+
+        def discover() -> dict[str, Any]:
+            http = resolve_client(ctx)
+            http.get("/api/session", tool_name="citadel_discovery")
+            return http.get(
+                "/.well-known/citadel.json",
+                extra_headers=_public_url_headers_from_context(ctx),
+            )
+
+        return await _call_async("citadel_discovery", discover)
 
     @mcp.tool(annotations=TOOL_POLICIES["citadel_session"].annotations)
     async def citadel_session(ctx: Context) -> dict[str, Any]:
@@ -533,6 +652,47 @@ def create_mcp_server(
             ),
         )
 
+    @mcp.tool(annotations=TOOL_POLICIES["citadel_backup_mirror_status"].annotations)
+    async def citadel_backup_mirror_status(ctx: Context) -> dict[str, Any]:
+        """Return Vault Backup Mirror manifest status. Requires admin access."""
+        return await _call_async(
+            "citadel_backup_mirror_status",
+            lambda: resolve_client(ctx).get(
+                "/api/backup-mirror",
+                tool_name="citadel_backup_mirror_status",
+            ),
+        )
+
+    @mcp.tool(annotations=TOOL_POLICIES["citadel_run_backup_mirror"].annotations)
+    async def citadel_run_backup_mirror(
+        ctx: Context,
+        dry_run: bool = True,
+    ) -> dict[str, Any]:
+        """Run Vault Backup Mirror manifest export. Defaults to dry-run."""
+        return await _call_async(
+            "citadel_run_backup_mirror",
+            lambda: resolve_client(ctx).post(
+                "/api/backup-mirror/run",
+                {"dry_run": dry_run},
+                tool_name="citadel_run_backup_mirror",
+            ),
+        )
+
+    @mcp.tool(annotations=TOOL_POLICIES["citadel_audit_events"].annotations)
+    async def citadel_audit_events(
+        ctx: Context,
+        view: str = "mcp",
+        limit: int = 50,
+    ) -> dict[str, Any]:
+        """Return bounded audit events. Requires admin audit access."""
+        return await _call_async(
+            "citadel_audit_events",
+            lambda: resolve_client(ctx).get(
+                _audit_query(view, limit),
+                tool_name="citadel_audit_events",
+            ),
+        )
+
     @mcp.tool(annotations=TOOL_POLICIES["citadel_improve"].annotations)
     async def citadel_improve(
         ctx: Context,
@@ -553,6 +713,11 @@ def create_mcp_server(
     def session_resource() -> str:
         """Current Citadel role, actor, and capabilities."""
         return json.dumps(resolve_client(None).get("/api/session"), indent=2, default=str)
+
+    @mcp.resource("citadel://discovery")
+    def discovery_resource() -> str:
+        """Safe public Citadel agent discovery metadata."""
+        return json.dumps(public_manifest(), indent=2, default=str)
 
     @mcp.resource("citadel://sources")
     def sources_resource() -> str:

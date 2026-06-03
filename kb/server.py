@@ -7,6 +7,7 @@ import hmac
 import json
 import os
 from pathlib import Path
+import re
 import secrets
 from typing import Any
 
@@ -16,15 +17,16 @@ from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, Stre
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from kb.access import AccessIdentity, AccessStore, ROLE_ORDER, hash_api_token
+from kb.access import AccessIdentity, AccessStore, ROLE_ORDER, default_scopes, hash_api_token
+from kb.backup_mirror import BackupMirror, BackupMirrorDisabled, BackupMirrorPublishError
 from kb.github_sync import GitHubOrgSyncer
 from kb.learning_agent import LearningAgent
-from kb.mcp_server import create_mcp_server
+from kb.mcp_server import TOOL_POLICIES, create_mcp_server
 from kb.mesh import MeshState
 from kb.models import FeedbackRequest
 from kb.obsidian_sync import ObsidianSyncStore, SyncPushDocument, normalize_path
 from kb.service import Citadel
-from kb.skills import skill_catalog, skill_path
+from kb.skills import skill_catalog, skill_integrity, skill_path
 from kb.source_search import GITHUB_DOC_ID_PREFIX, github_section_document
 
 # Hosted MCP: one streamable-HTTP endpoint at /mcp, authenticated per request by
@@ -50,6 +52,35 @@ STATIC_DIR = Path(__file__).with_name("static")
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 app.mount("/mcp", mcp_app)
 ADMIN_COOKIE = "citadel_admin"
+MCP_TOOL_HEADER = "x-citadel-mcp-tool"
+AUDIT_VIEWS = frozenset({"all", "mcp", "access", "failures"})
+AUDIT_LIMIT_MAX = 500
+PUBLIC_CACHE_HEADERS = {"Cache-Control": "public, max-age=300"}
+PRIVATE_CACHE_HEADERS = {"Cache-Control": "no-store", "Pragma": "no-cache"}
+PUBLIC_CACHE_PATHS = frozenset({"/.well-known/citadel.json", "/skills"})
+PUBLIC_CACHE_PREFIXES = ("/skills/", "/static/")
+PUBLIC_HOST_RE = re.compile(r"^(?:[A-Za-z0-9.-]+|\[[0-9A-Fa-f:.]+\])(?::[0-9]{1,5})?$")
+CONTENT_SECURITY_POLICY = (
+    "default-src 'self'; "
+    "script-src 'self'; "
+    "style-src 'self'; "
+    "img-src 'self' data:; "
+    "font-src 'self'; "
+    "connect-src 'self'; "
+    "base-uri 'self'; "
+    "form-action 'self'; "
+    "frame-ancestors 'none'; "
+    "object-src 'none'"
+)
+SECURITY_HEADERS = {
+    "Content-Security-Policy": CONTENT_SECURITY_POLICY,
+    "X-Content-Type-Options": "nosniff",
+    "X-Frame-Options": "DENY",
+    "Referrer-Policy": "no-referrer",
+    "Permissions-Policy": "camera=(), microphone=(), geolocation=(), payment=()",
+    "Cross-Origin-Opener-Policy": "same-origin",
+    "Cross-Origin-Resource-Policy": "same-origin",
+}
 
 LOGIN_HTML = """<!doctype html>
 <html lang="en">
@@ -86,37 +117,7 @@ LOGIN_HTML = """<!doctype html>
         </form>
       </section>
     </main>
-    <script>
-      const form = document.getElementById("loginForm");
-      const error = document.getElementById("loginError");
-      const button = document.getElementById("loginSubmit");
-      form.addEventListener("submit", async (event) => {
-        event.preventDefault();
-        error.textContent = "";
-        button.disabled = true;
-        button.setAttribute("aria-busy", "true");
-        button.textContent = "Checking";
-        const access_key = new FormData(form).get("accessKey");
-        try {
-          const response = await fetch("/admin/session", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ access_key }),
-          });
-          if (!response.ok) {
-            const body = await response.json().catch(() => ({}));
-            throw new Error(body.detail || "Admin key was rejected.");
-          }
-          window.location.assign("/");
-        } catch (err) {
-          error.textContent = err.message;
-        } finally {
-          button.disabled = false;
-          button.setAttribute("aria-busy", "false");
-          button.textContent = "Open workspace";
-        }
-      });
-    </script>
+    <script src="/static/login.js" type="module"></script>
   </body>
 </html>
 """
@@ -161,6 +162,10 @@ class GitHubSyncBody(BaseModel):
 class LearningAgentRunBody(BaseModel):
     force: bool = False
     dry_run: bool = False
+
+
+class BackupMirrorRunBody(BaseModel):
+    dry_run: bool = True
 
 
 class AccessTokenBody(BaseModel):
@@ -225,6 +230,10 @@ def get_learning_agent() -> LearningAgent:
     return LearningAgent(get_citadel(), github_syncer=get_github_syncer())
 
 
+def get_backup_mirror() -> BackupMirror:
+    return BackupMirror(get_citadel().config)
+
+
 def get_access_store() -> AccessStore:
     existing = getattr(app.state, "access_store", None)
     if isinstance(existing, AccessStore):
@@ -267,7 +276,7 @@ def env_identity(role: str) -> AccessIdentity:
         actor_kind="bootstrap_key",
         actor_name=f"{role.title()} bootstrap key",
         source="env",
-        scopes=(),
+        scopes=default_scopes(role),
     )
 
 
@@ -357,13 +366,32 @@ def require_role(request: Request, minimum_role: str) -> AccessIdentity:
     return identity
 
 
+def effective_scopes(identity: AccessIdentity) -> tuple[str, ...]:
+    if identity.scopes:
+        return identity.scopes
+    if identity.source == "env":
+        return default_scopes(identity.role)
+    return ()
+
+
+def require_access(request: Request, minimum_role: str, scope: str) -> AccessIdentity:
+    identity = require_role(request, minimum_role)
+    if scope not in effective_scopes(identity):
+        raise HTTPException(status_code=403, detail=f"Scope required: {scope}.")
+    return identity
+
+
 def role_payload(role: str, identity: AccessIdentity | None = None) -> dict[str, Any]:
+    scopes = set(effective_scopes(identity)) if identity else set(default_scopes(role))
     return {
         "role": role,
         "capabilities": {
-            "read": ROLE_ORDER[role] >= ROLE_ORDER["reader"],
-            "write": ROLE_ORDER[role] >= ROLE_ORDER["writer"],
-            "admin": ROLE_ORDER[role] >= ROLE_ORDER["admin"],
+            "read": ROLE_ORDER[role] >= ROLE_ORDER["reader"]
+            and bool({"kb:read", "kb:search", "sources:read", "obsidian:sync:pull"} & scopes),
+            "write": ROLE_ORDER[role] >= ROLE_ORDER["writer"]
+            and bool({"kb:ingest", "kb:feedback", "obsidian:sync:push"} & scopes),
+            "admin": ROLE_ORDER[role] >= ROLE_ORDER["admin"]
+            and bool({"sources:sync", "access:manage", "audit:read"} & scopes),
         },
         "actor": None
         if identity is None
@@ -373,9 +401,105 @@ def role_payload(role: str, identity: AccessIdentity | None = None) -> dict[str,
             "name": identity.actor_name,
             "source": identity.source,
             "token_id": identity.token_id,
-            "scopes": list(identity.scopes),
+            "scopes": list(effective_scopes(identity)),
         },
     }
+
+
+def mcp_tool_name(request: Request) -> str | None:
+    tool_name = (request.headers.get(MCP_TOOL_HEADER) or "").strip()
+    if tool_name not in TOOL_POLICIES:
+        return None
+    return tool_name
+
+
+def record_mcp_audit(
+    request: Request,
+    *,
+    actor: AccessIdentity | None,
+    success: bool,
+    dataset: str | None = None,
+    detail: dict[str, Any] | None = None,
+) -> None:
+    tool_name = mcp_tool_name(request)
+    if not tool_name:
+        return
+    policy = TOOL_POLICIES[tool_name]
+    event_detail: dict[str, Any] = {
+        "surface": "mcp",
+        "tool": tool_name,
+        "method": request.method,
+        "path": request.url.path,
+        "required_role": policy.role,
+        "required_scope": policy.scope,
+        "risk": policy.risk,
+    }
+    if detail:
+        event_detail.update(detail)
+    get_access_store().record_event(
+        action=f"mcp.{tool_name}",
+        actor=actor,
+        success=success,
+        dataset=dataset,
+        detail=event_detail,
+    )
+    request.state.mcp_audit_recorded = True
+
+
+def is_mcp_audit_event(event: dict[str, Any]) -> bool:
+    detail = event.get("detail") if isinstance(event.get("detail"), dict) else {}
+    return str(event.get("action") or "").startswith("mcp.") or detail.get("surface") == "mcp"
+
+
+def audit_events_for_view(events: list[dict[str, Any]], view: str) -> list[dict[str, Any]]:
+    if view == "all":
+        return list(events)
+    if view == "mcp":
+        return [event for event in events if is_mcp_audit_event(event)]
+    if view == "access":
+        return [event for event in events if not is_mcp_audit_event(event)]
+    if view == "failures":
+        return [event for event in events if event.get("success") is False]
+    raise HTTPException(status_code=422, detail=f"Unsupported audit view: {view}.")
+
+
+def audit_actor_key(event: dict[str, Any]) -> str | None:
+    for key in ("actor_id", "actor_name"):
+        value = event.get(key)
+        if value:
+            return str(value)
+    return None
+
+
+def audit_summary(
+    *,
+    all_events: list[dict[str, Any]],
+    returned_events: list[dict[str, Any]],
+) -> dict[str, int]:
+    mcp_events = [event for event in all_events if is_mcp_audit_event(event)]
+    failure_events = [event for event in all_events if event.get("success") is False]
+    mcp_failures = [event for event in mcp_events if event.get("success") is False]
+    mcp_actors = {actor for event in mcp_events if (actor := audit_actor_key(event))}
+    return {
+        "total_events": len(all_events),
+        "returned_events": len(returned_events),
+        "mcp_events": len(mcp_events),
+        "access_events": len(all_events) - len(mcp_events),
+        "failure_events": len(failure_events),
+        "mcp_failures": len(mcp_failures),
+        "mcp_actors": len(mcp_actors),
+    }
+
+
+def audit_limit_value(limit: int | None) -> int | None:
+    if limit is None:
+        return None
+    if limit < 1 or limit > AUDIT_LIMIT_MAX:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Audit limit must be between 1 and {AUDIT_LIMIT_MAX}.",
+        )
+    return limit
 
 
 def known_datasets(config: Any) -> list[str]:
@@ -387,20 +511,97 @@ def known_datasets(config: Any) -> list[str]:
     return ordered
 
 
-def with_result_id(result: Any, index: int) -> Any:
+def string_value(value: Any) -> str | None:
+    if isinstance(value, str):
+        normalized = value.strip()
+        return normalized or None
+    return None
+
+
+def first_string(*values: Any) -> str | None:
+    for value in values:
+        normalized = string_value(value)
+        if normalized:
+            return normalized
+    return None
+
+
+def result_provenance(result: dict[str, Any]) -> dict[str, str]:
+    metadata = result.get("metadata") if isinstance(result.get("metadata"), dict) else {}
+    provenance = {
+        "source": first_string(
+            result.get("source"),
+            result.get("source_type"),
+            metadata.get("source"),
+            metadata.get("source_type"),
+        ),
+        "source_url": first_string(
+            result.get("source_url"),
+            result.get("url"),
+            result.get("uri"),
+            metadata.get("source_url"),
+            metadata.get("url"),
+            metadata.get("uri"),
+        ),
+        "path": first_string(
+            result.get("path"),
+            result.get("normalized_path"),
+            metadata.get("path"),
+            metadata.get("normalized_path"),
+        ),
+        "title": first_string(result.get("title"), metadata.get("title")),
+        "session_id": first_string(result.get("session_id"), metadata.get("session_id")),
+    }
+    return {key: value for key, value in provenance.items() if value}
+
+
+def document_endpoint_for_result(result_id: str) -> str | None:
+    if result_id.startswith(f"{GITHUB_DOC_ID_PREFIX}:") or result_id.startswith("doc_"):
+        return f"/api/documents/{result_id}"
+    return None
+
+
+def result_content_sha256(result: dict[str, Any]) -> str:
+    content_basis = {key: value for key, value in result.items() if key != "_citadel"}
+    encoded = json.dumps(content_basis, sort_keys=True, default=str).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def with_result_id(result: dict[str, Any]) -> dict[str, Any]:
     """Ensure a search result dict carries a stable ``id`` for drill-down.
 
     Results that already supply an id (e.g. the GitHub digest fallback) are left
-    untouched. Other dict results get a content-derived id so a hit can be
-    re-fetched via ``GET /api/documents/{id}``. Non-dict results pass through.
+    untouched. Other dict results get a content-derived id for traceability.
     """
-    if not isinstance(result, dict):
-        return result
     if result.get("id"):
         return result
     basis = json.dumps(result, sort_keys=True, default=str)
     derived = hashlib.sha256(basis.encode("utf-8")).hexdigest()[:16]
     return {"id": f"chunk:{derived}", **result}
+
+
+def with_result_metadata(result: Any, index: int, dataset: str) -> Any:
+    """Attach a reserved Citadel provenance envelope to dict search results."""
+    if not isinstance(result, dict):
+        return result
+    normalized = with_result_id(result)
+    result_id = str(normalized["id"])
+    document_endpoint = document_endpoint_for_result(result_id)
+    metadata: dict[str, Any] = {
+        "rank": index + 1,
+        "dataset": dataset,
+        "result_id": result_id,
+        "content_sha256": result_content_sha256(normalized),
+        "provenance": result_provenance(normalized),
+        "retrieval": {
+            "untrusted_context": True,
+            "citation_required": True,
+            "document_drilldown_available": bool(document_endpoint),
+        },
+    }
+    if document_endpoint:
+        metadata["document_endpoint"] = document_endpoint
+    return {**normalized, "_citadel": metadata}
 
 
 def public_base_url(request: Request) -> str:
@@ -412,11 +613,89 @@ def public_base_url(request: Request) -> str:
     forwarded_proto = request.headers.get("x-forwarded-proto")
     if forwarded_host and forwarded_proto:
         host = forwarded_host.split(",", 1)[0].strip()
-        proto = forwarded_proto.split(",", 1)[0].strip()
-        if host and proto:
+        proto = forwarded_proto.split(",", 1)[0].strip().lower()
+        if host and PUBLIC_HOST_RE.fullmatch(host) and proto in {"http", "https"}:
             return f"{proto}://{host}".rstrip("/")
 
     return str(request.base_url).rstrip("/")
+
+
+def request_is_https(request: Request) -> bool:
+    forwarded_proto = request.headers.get("x-forwarded-proto")
+    if forwarded_proto:
+        return forwarded_proto.split(",", 1)[0].strip().lower() == "https"
+    return request.url.scheme == "https"
+
+
+def public_cacheable_path(path: str) -> bool:
+    return path in PUBLIC_CACHE_PATHS or any(path.startswith(prefix) for prefix in PUBLIC_CACHE_PREFIXES)
+
+
+def public_skill_rows(request: Request) -> list[dict[str, Any]]:
+    base = public_base_url(request)
+    return [
+        {
+            **entry,
+            "url": f"{base}/skills/{entry['slug']}",
+        }
+        for entry in skill_catalog()
+    ]
+
+
+def public_mcp_tool_rows() -> list[dict[str, str]]:
+    return [
+        {
+            "name": name,
+            "role": policy.role,
+            "scope": policy.scope,
+            "risk": policy.risk,
+        }
+        for name, policy in sorted(TOOL_POLICIES.items())
+    ]
+
+
+@app.middleware("http")
+async def add_security_headers(request: Request, call_next: Any) -> Response:
+    response = await call_next(request)
+    for header, value in SECURITY_HEADERS.items():
+        response.headers.setdefault(header, value)
+    if "cache-control" not in response.headers:
+        cache_headers = PUBLIC_CACHE_HEADERS if public_cacheable_path(request.url.path) else PRIVATE_CACHE_HEADERS
+        for header, value in cache_headers.items():
+            response.headers.setdefault(header, value)
+    if request_is_https(request):
+        response.headers.setdefault(
+            "Strict-Transport-Security",
+            "max-age=31536000; includeSubDomains",
+        )
+    return response
+
+
+@app.middleware("http")
+async def audit_forwarded_mcp_call(request: Request, call_next: Any) -> Response:
+    if not mcp_tool_name(request):
+        return await call_next(request)
+
+    try:
+        response = await call_next(request)
+    except Exception as exc:
+        if not getattr(request.state, "mcp_audit_recorded", False):
+            record_mcp_audit(
+                request,
+                actor=request_identity(request),
+                success=False,
+                detail={"error_type": exc.__class__.__name__},
+            )
+        raise
+
+    if not getattr(request.state, "mcp_audit_recorded", False):
+        record_mcp_audit(
+            request,
+            actor=request_identity(request),
+            success=response.status_code < 400,
+            detail={"status_code": response.status_code},
+        )
+    return response
 
 
 @app.get("/", include_in_schema=False)
@@ -461,13 +740,19 @@ async def logout(response: Response) -> dict[str, bool]:
 
 @app.get("/api/session")
 async def current_session(request: Request) -> dict[str, Any]:
-    identity = require_role(request, "reader")
+    identity = require_access(request, "reader", "kb:read")
+    record_mcp_audit(
+        request,
+        actor=identity,
+        success=True,
+        detail={"role": identity.role},
+    )
     return {"ok": True, **role_payload(identity.role, identity)}
 
 
 @app.get("/api/access")
 async def access_snapshot(request: Request) -> dict[str, Any]:
-    require_role(request, "admin")
+    require_access(request, "admin", "access:manage")
     bootstrap_counts = {"reader": 0, "writer": 0, "admin": 0}
     for role, _ in configured_access_keys():
         bootstrap_counts[role] += 1
@@ -479,14 +764,29 @@ async def access_snapshot(request: Request) -> dict[str, Any]:
 
 
 @app.get("/api/audit")
-async def audit_snapshot(request: Request) -> dict[str, Any]:
-    require_role(request, "admin")
-    return {"ok": True, "audit_events": get_access_store().snapshot()["audit_events"]}
+async def audit_snapshot(
+    request: Request,
+    view: str = "all",
+    limit: int | None = None,
+) -> dict[str, Any]:
+    require_access(request, "admin", "audit:read")
+    if view not in AUDIT_VIEWS:
+        raise HTTPException(status_code=422, detail=f"Unsupported audit view: {view}.")
+    limit = audit_limit_value(limit)
+    events = get_access_store().snapshot()["audit_events"]
+    filtered_events = audit_events_for_view(events, view)
+    returned_events = filtered_events[-limit:] if limit is not None else filtered_events
+    return {
+        "ok": True,
+        "view": view,
+        "audit_events": returned_events,
+        "summary": audit_summary(all_events=events, returned_events=returned_events),
+    }
 
 
 @app.post("/api/access/tokens")
 async def create_access_token(body: AccessTokenBody, request: Request) -> dict[str, Any]:
-    actor = require_role(request, "admin")
+    actor = require_access(request, "admin", "access:manage")
     try:
         created = get_access_store().create_principal_token(
             name=body.name,
@@ -522,7 +822,7 @@ async def create_access_token(body: AccessTokenBody, request: Request) -> dict[s
 
 @app.post("/api/access/tokens/{token_id}/revoke")
 async def revoke_access_token(token_id: str, request: Request) -> dict[str, Any]:
-    actor = require_role(request, "admin")
+    actor = require_access(request, "admin", "access:manage")
     revoked = get_access_store().revoke_token(token_id)
     if not revoked:
         get_access_store().record_event(
@@ -547,18 +847,75 @@ async def healthz() -> dict[str, str | bool]:
     return {"ok": True, "service": "citadel"}
 
 
+@app.get("/.well-known/citadel.json")
+async def citadel_discovery_manifest(request: Request, response: Response) -> dict[str, Any]:
+    """Public agent discovery document with no vault content or secrets."""
+    response.headers.update(PUBLIC_CACHE_HEADERS)
+    base = public_base_url(request)
+    tools = public_mcp_tool_rows()
+    return {
+        "ok": True,
+        "service": {
+            "name": "Citadel Archive",
+            "kind": "organization_vault",
+            "version": app.version,
+            "base_url": base,
+        },
+        "public_endpoints": {
+            "health": f"{base}/healthz",
+            "skills": f"{base}/skills",
+            "discovery": f"{base}/.well-known/citadel.json",
+        },
+        "mcp": {
+            "endpoint": f"{base}/mcp",
+            "transport": "streamable_http",
+            "authentication": {
+                "required": True,
+                "scheme": "bearer",
+                "token_prefix": "ctdl_",
+                "header": "Authorization",
+            },
+            "tools": tools,
+            "approval_recommended_for": [
+                row["name"]
+                for row in tools
+                if row["risk"] in {"additive_write", "admin_job"}
+            ],
+            "audit": {
+                "event_action": "mcp.<tool_name>",
+                "admin_tool": "citadel_audit_events",
+            },
+        },
+        "skills": public_skill_rows(request),
+        "security": {
+            "public_data": [
+                "application code and documentation",
+                "hosted skill markdown and content hashes",
+                "MCP endpoint URL and tool policy metadata",
+            ],
+            "private_data": [
+                "ctdl_ access tokens",
+                "vault search results and source documents",
+                "Obsidian sync contents",
+                "backup mirror repository contents",
+            ],
+            "token_handling": [
+                "give each human or agent a distinct token",
+                "store tokens only in local secret stores or environment variables",
+                "rotate any token pasted into chat, logs, issues, pull requests, or public repos",
+            ],
+            "scope_model": {
+                "roles": ["reader", "writer", "admin"],
+                "custom_scopes": "Custom scopes can only reduce permissions within the selected role.",
+            },
+        },
+    }
+
+
 @app.get("/skills")
 async def list_skills(request: Request) -> dict[str, Any]:
     """Public index of shareable agent skill URLs (no auth)."""
-    base = public_base_url(request)
-    skills = [
-        {
-            **entry,
-            "url": f"{base}/skills/{entry['slug']}",
-        }
-        for entry in skill_catalog()
-    ]
-    return {"ok": True, "skills": skills}
+    return {"ok": True, "skills": public_skill_rows(request)}
 
 
 @app.get("/skills/{slug}")
@@ -567,12 +924,19 @@ async def get_skill(slug: str) -> FileResponse:
     path = skill_path(slug)
     if path is None:
         raise HTTPException(status_code=404, detail="Unknown skill")
-    return FileResponse(path, media_type="text/markdown; charset=utf-8")
+    integrity = skill_integrity(path)
+    headers = {
+        **PUBLIC_CACHE_HEADERS,
+        "ETag": f"\"sha256-{integrity['sha256']}\"",
+        "X-Citadel-Skill-SHA256": str(integrity["sha256"]),
+        "X-Citadel-Skill-Integrity": str(integrity["integrity"]),
+    }
+    return FileResponse(path, media_type="text/markdown; charset=utf-8", headers=headers)
 
 
 @app.get("/readyz")
 async def readyz(request: Request) -> dict[str, Any]:
-    require_role(request, "reader")
+    require_access(request, "reader", "kb:read")
     config = get_citadel().config
     return {
         "ok": True,
@@ -586,14 +950,14 @@ async def readyz(request: Request) -> dict[str, Any]:
 
 @app.get("/api/mesh")
 async def mesh(request: Request) -> Any:
-    require_role(request, "reader")
+    require_access(request, "reader", "kb:read")
     citadel = get_citadel()
     return jsonable_encoder(await get_mesh().snapshot(citadel.config))
 
 
 @app.get("/api/indexes")
 async def indexes(request: Request) -> Any:
-    require_role(request, "reader")
+    require_access(request, "reader", "kb:read")
     citadel = get_citadel()
     snapshot = await get_mesh().snapshot(citadel.config)
     return jsonable_encoder({"indexes": snapshot["indexes"], "stats": snapshot["stats"]})
@@ -601,13 +965,13 @@ async def indexes(request: Request) -> Any:
 
 @app.get("/api/github-sync")
 async def github_sync_status(request: Request) -> Any:
-    require_role(request, "reader")
+    require_access(request, "reader", "sources:read")
     return jsonable_encoder(await get_github_syncer().status())
 
 
 @app.get("/api/sources")
 async def sources(request: Request, type: str | None = None) -> Any:
-    require_role(request, "reader")
+    require_access(request, "reader", "sources:read")
     sources_payload: list[dict[str, Any]] = []
     summary: dict[str, Any] = {}
 
@@ -641,7 +1005,7 @@ async def sources(request: Request, type: str | None = None) -> Any:
 
 @app.post("/api/github-sync/run")
 async def run_github_sync(body: GitHubSyncBody, request: Request) -> Any:
-    require_role(request, "admin")
+    require_access(request, "admin", "sources:sync")
     citadel = get_citadel()
     mesh_state = get_mesh()
     try:
@@ -655,7 +1019,7 @@ async def run_github_sync(body: GitHubSyncBody, request: Request) -> Any:
 
 @app.post("/api/obsidian/vaults")
 async def register_obsidian_vault(body: ObsidianVaultBody, request: Request) -> Any:
-    actor = require_role(request, "writer")
+    actor = require_access(request, "writer", "obsidian:sync:push")
     vault_name = body.vault_name or body.name
     if not vault_name:
         raise HTTPException(status_code=422, detail="Vault name is required.")
@@ -679,7 +1043,7 @@ async def register_obsidian_vault(body: ObsidianVaultBody, request: Request) -> 
 
 @app.get("/api/obsidian/manifest")
 async def obsidian_manifest(request: Request, vault_id: str, cursor: int | None = None) -> Any:
-    require_role(request, "reader")
+    require_access(request, "reader", "obsidian:sync:pull")
     try:
         manifest = get_obsidian_sync().manifest(vault_id=vault_id, cursor=cursor)
     except KeyError as exc:
@@ -689,7 +1053,7 @@ async def obsidian_manifest(request: Request, vault_id: str, cursor: int | None 
 
 @app.post("/api/obsidian/sync/push")
 async def push_obsidian_sync(body: ObsidianPushBody, request: Request) -> Any:
-    actor = require_role(request, "writer")
+    actor = require_access(request, "writer", "obsidian:sync:push")
     citadel = get_citadel()
     mesh_state = get_mesh()
     push_documents = [
@@ -782,7 +1146,7 @@ async def push_obsidian_sync(body: ObsidianPushBody, request: Request) -> Any:
 
 @app.get("/api/obsidian/sync/pull")
 async def pull_obsidian_sync(request: Request, vault_id: str, cursor: int | None = None) -> Any:
-    require_role(request, "reader")
+    require_access(request, "reader", "obsidian:sync:pull")
     try:
         result = get_obsidian_sync().pull(vault_id=vault_id, cursor=cursor)
     except KeyError as exc:
@@ -796,7 +1160,7 @@ async def resolve_obsidian_conflict(
     body: ObsidianConflictResolveBody,
     request: Request,
 ) -> Any:
-    actor = require_role(request, "writer")
+    actor = require_access(request, "writer", "obsidian:sync:push")
     try:
         result = get_obsidian_sync().resolve_conflict(
             conflict_id=conflict_id,
@@ -819,7 +1183,7 @@ async def resolve_obsidian_conflict(
 
 @app.get("/api/documents/{document_id}")
 async def source_document(document_id: str, request: Request) -> Any:
-    require_role(request, "reader")
+    require_access(request, "reader", "kb:read")
     if document_id.startswith(f"{GITHUB_DOC_ID_PREFIX}:"):
         github_document = github_section_document(document_id, get_citadel().config)
         if github_document is None:
@@ -834,13 +1198,59 @@ async def source_document(document_id: str, request: Request) -> Any:
 
 @app.get("/api/learning-agent")
 async def learning_agent_status(request: Request) -> Any:
-    require_role(request, "reader")
+    require_access(request, "reader", "sources:read")
     return jsonable_encoder(await get_learning_agent().status())
+
+
+@app.get("/api/backup-mirror")
+async def backup_mirror_status(request: Request) -> Any:
+    require_access(request, "admin", "sources:sync")
+    return jsonable_encoder(get_backup_mirror().status())
+
+
+@app.post("/api/backup-mirror/run")
+async def run_backup_mirror(body: BackupMirrorRunBody, request: Request) -> Any:
+    actor = require_access(request, "admin", "sources:sync")
+    try:
+        result = get_backup_mirror().run(dry_run=body.dry_run)
+    except BackupMirrorDisabled as exc:
+        get_access_store().record_event(
+            action="backup_mirror.run",
+            actor=actor,
+            success=False,
+            detail={"dry_run": body.dry_run, "reason": "disabled"},
+        )
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except BackupMirrorPublishError as exc:
+        get_access_store().record_event(
+            action="backup_mirror.run",
+            actor=actor,
+            success=False,
+            detail={"dry_run": body.dry_run, "reason": "publish_failed"},
+        )
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    manifest = result.get("manifest") if isinstance(result, dict) else {}
+    summary = manifest.get("summary") if isinstance(manifest, dict) else {}
+    get_access_store().record_event(
+        action="backup_mirror.run",
+        actor=actor,
+        success=True,
+        detail={
+            "dry_run": body.dry_run,
+            "written": result.get("written"),
+            "published": result.get("published"),
+            "snapshot_id": result.get("snapshot_id"),
+            "tracked_files": summary.get("tracked_files"),
+            "available_files": summary.get("available_files"),
+            "missing_files": summary.get("missing_files"),
+        },
+    )
+    return jsonable_encoder(result)
 
 
 @app.post("/api/learning-agent/run")
 async def run_learning_agent(body: LearningAgentRunBody, request: Request) -> Any:
-    actor = require_role(request, "admin")
+    actor = require_access(request, "admin", "sources:sync")
     citadel = get_citadel()
     mesh_state = get_mesh()
     try:
@@ -852,6 +1262,18 @@ async def run_learning_agent(body: LearningAgentRunBody, request: Request) -> An
             actor=actor,
             success=False,
             detail={"force": body.force, "dry_run": body.dry_run, "error": str(exc)},
+        )
+        record_mcp_audit(
+            request,
+            actor=actor,
+            success=False,
+            dataset=get_citadel().config.github_sync_dataset,
+            detail={
+                "operation": "learning_agent.run",
+                "force": body.force,
+                "dry_run": body.dry_run,
+                "error_type": exc.__class__.__name__,
+            },
         )
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
@@ -869,12 +1291,25 @@ async def run_learning_agent(body: LearningAgentRunBody, request: Request) -> An
             "improved": result.get("improved"),
         },
     )
+    record_mcp_audit(
+        request,
+        actor=actor,
+        success=True,
+        dataset=citadel.config.github_sync_dataset,
+        detail={
+            "operation": "learning_agent.run",
+            "force": body.force,
+            "dry_run": body.dry_run,
+            "ingested": result.get("ingested"),
+            "improved": result.get("improved"),
+        },
+    )
     return jsonable_encoder(result)
 
 
 @app.get("/events")
 async def events(request: Request) -> StreamingResponse:
-    require_role(request, "reader")
+    require_access(request, "reader", "kb:read")
     mesh_state = get_mesh()
     queue = mesh_state.subscribe()
 
@@ -897,7 +1332,7 @@ async def events(request: Request) -> StreamingResponse:
 
 @app.post("/ingest")
 async def ingest(body: IngestBody, request: Request) -> Any:
-    require_role(request, "writer")
+    actor = require_access(request, "writer", "kb:ingest")
     citadel = get_citadel()
     mesh_state = get_mesh()
     dataset = body.dataset or citadel.config.default_dataset
@@ -910,6 +1345,13 @@ async def ingest(body: IngestBody, request: Request) -> Any:
         )
     except Exception as exc:  # pragma: no cover - depends on runtime Cognee configuration.
         await mesh_state.record_error(citadel.config, operation="ingest", error=str(exc))
+        record_mcp_audit(
+            request,
+            actor=actor,
+            success=False,
+            dataset=dataset,
+            detail={"operation": "ingest", "error_type": exc.__class__.__name__},
+        )
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
     await mesh_state.record_ingest(
@@ -919,12 +1361,25 @@ async def ingest(body: IngestBody, request: Request) -> Any:
         dataset=dataset,
         tags=body.tags,
     )
+    record_mcp_audit(
+        request,
+        actor=actor,
+        success=True,
+        dataset=dataset,
+        detail={
+            "operation": "ingest",
+            "accepted": result.accepted,
+            "reason": result.reason,
+            "data_bytes": len(body.data.encode("utf-8")),
+            "tag_count": len(body.tags),
+        },
+    )
     return jsonable_encoder(result)
 
 
 @app.post("/search")
 async def search(body: SearchBody, request: Request) -> Any:
-    require_role(request, "reader")
+    actor = require_access(request, "reader", "kb:search")
     citadel = get_citadel()
     mesh_state = get_mesh()
     dataset = (
@@ -941,6 +1396,18 @@ async def search(body: SearchBody, request: Request) -> Any:
         )
     except Exception as exc:  # pragma: no cover - depends on runtime Cognee configuration.
         await mesh_state.record_error(citadel.config, operation="search", error=str(exc))
+        record_mcp_audit(
+            request,
+            actor=actor,
+            success=False,
+            dataset=dataset,
+            detail={
+                "operation": "search",
+                "query_sha256": hashlib.sha256(body.query.encode("utf-8")).hexdigest(),
+                "query_length": len(body.query),
+                "error_type": exc.__class__.__name__,
+            },
+        )
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
     await mesh_state.record_search(
@@ -949,7 +1416,23 @@ async def search(body: SearchBody, request: Request) -> Any:
         dataset=dataset,
         result_count=len(results),
     )
-    normalized = [with_result_id(result, index) for index, result in enumerate(results)]
+    record_mcp_audit(
+        request,
+        actor=actor,
+        success=True,
+        dataset=dataset,
+        detail={
+            "operation": "search",
+            "query_sha256": hashlib.sha256(body.query.encode("utf-8")).hexdigest(),
+            "query_length": len(body.query),
+            "result_count": len(results),
+            "top_k": body.top_k,
+        },
+    )
+    normalized = [
+        with_result_metadata(result, index, dataset)
+        for index, result in enumerate(results)
+    ]
     payload: dict[str, Any] = {"results": normalized, "dataset": dataset}
     if not normalized and body.dataset is None:
         payload["note"] = (
@@ -962,7 +1445,7 @@ async def search(body: SearchBody, request: Request) -> Any:
 
 @app.post("/feedback")
 async def feedback(body: FeedbackBody, request: Request) -> Any:
-    require_role(request, "writer")
+    actor = require_access(request, "writer", "kb:feedback")
     citadel = get_citadel()
     mesh_state = get_mesh()
     dataset = body.dataset or citadel.config.default_dataset
@@ -978,6 +1461,13 @@ async def feedback(body: FeedbackBody, request: Request) -> Any:
         )
     except Exception as exc:  # pragma: no cover - depends on runtime Cognee configuration.
         await mesh_state.record_error(citadel.config, operation="feedback", error=str(exc))
+        record_mcp_audit(
+            request,
+            actor=actor,
+            success=False,
+            dataset=dataset,
+            detail={"operation": "feedback", "error_type": exc.__class__.__name__},
+        )
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
     await mesh_state.record_feedback(
@@ -986,22 +1476,41 @@ async def feedback(body: FeedbackBody, request: Request) -> Any:
         dataset=dataset,
         result=result,
     )
+    record_mcp_audit(
+        request,
+        actor=actor,
+        success=True,
+        dataset=dataset,
+        detail={
+            "operation": "feedback",
+            "qa_id_sha256": hashlib.sha256(body.qa_id.encode("utf-8")).hexdigest(),
+            "score": body.score,
+            "has_text": bool(body.text),
+            "recorded": result.recorded,
+            "improved": result.improved,
+        },
+    )
     return jsonable_encoder(result)
 
 
 @app.post("/improve")
 async def improve(body: ImproveBody, request: Request) -> Any:
-    require_role(request, "admin")
-    return await run_improve(body)
+    actor = require_access(request, "admin", "sources:sync")
+    return await run_improve(body, request=request, actor=actor)
 
 
 @app.post("/api/self-upgrade")
 async def self_upgrade(body: ImproveBody, request: Request) -> Any:
-    require_role(request, "admin")
-    return await run_improve(body)
+    actor = require_access(request, "admin", "sources:sync")
+    return await run_improve(body, request=request, actor=actor)
 
 
-async def run_improve(body: ImproveBody) -> Any:
+async def run_improve(
+    body: ImproveBody,
+    *,
+    request: Request | None = None,
+    actor: AccessIdentity | None = None,
+) -> Any:
     citadel = get_citadel()
     mesh_state = get_mesh()
     dataset = body.dataset or citadel.config.default_dataset
@@ -1012,6 +1521,14 @@ async def run_improve(body: ImproveBody) -> Any:
         )
     except Exception as exc:  # pragma: no cover - depends on runtime Cognee configuration.
         await mesh_state.record_error(citadel.config, operation="improve", error=str(exc))
+        if request:
+            record_mcp_audit(
+                request,
+                actor=actor,
+                success=False,
+                dataset=dataset,
+                detail={"operation": "improve", "error_type": exc.__class__.__name__},
+            )
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
     await mesh_state.record_upgrade(
@@ -1019,4 +1536,15 @@ async def run_improve(body: ImproveBody) -> Any:
         dataset=dataset,
         session_ids=body.session_ids,
     )
+    if request:
+        record_mcp_audit(
+            request,
+            actor=actor,
+            success=True,
+            dataset=dataset,
+            detail={
+                "operation": "improve",
+                "session_count": len(body.session_ids or []),
+            },
+        )
     return jsonable_encoder({"result": result})
