@@ -11,7 +11,7 @@ def test_railway_toml_uses_testable_dispatcher() -> None:
     with open("railway.toml", "rb") as file:
         config = tomllib.load(file)
 
-    assert config["deploy"]["startCommand"] == "python scripts/run_railway.py"
+    assert config["deploy"]["startCommand"] == "python -m scripts.run_railway"
 
 
 def test_web_mode_execs_uvicorn(monkeypatch: Any) -> None:
