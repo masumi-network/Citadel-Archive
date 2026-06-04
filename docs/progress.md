@@ -1,6 +1,35 @@
 # Citadel Progress
 
-Last updated: 2026-06-03.
+Last updated: 2026-06-04.
+
+## 2026-06-04
+
+- Committed and pushed private GitHub sync privacy/security hardening:
+  - Commit `f95486f` (`feat(github): harden private sync digests`) is on
+    `main`.
+  - Verified before push with `.venv/bin/python -m pytest`,
+    `.venv/bin/python -m ruff check .`, and `git diff --check`.
+  - Added summary-only cron output so scheduled logs expose counts and scan
+    status rather than raw private repository payloads.
+- Verified Railway post-deployment state for commit `f95486f`:
+  - `Citadel-Archive` deployment `4081a3ad-c8cc-4913-90f6-bb194b3d00f1`
+    reached `SUCCESS`.
+  - `Citadel-GitHub-Sync` deployment
+    `027df285-2a4f-4499-a193-40d64d6c32d2` reached `SUCCESS`.
+  - `Postgres` remained `SUCCESS`.
+  - Live `/healthz` returned `{"ok":true,"service":"citadel"}`.
+- Ran the GitHub sync cron path manually through Railway production variables:
+  - `railway run --service Citadel-GitHub-Sync --environment production ...`
+    called the hosted `/api/learning-agent/run` endpoint with summary-only
+    output.
+  - The run completed with `ok=true`, `dry_run=false`, `ingested=true`, and
+    `improved=false`.
+  - It scanned 42 repositories, saw 1 changed repository, 1 organization event,
+    1 commit, 5 open PRs, and 4 merged PRs.
+  - The security scanner returned `ok=true`, `blocked=false`, and
+    `finding_count=0`.
+  - Google Chat delivery was not attempted because production returned
+    `google_chat_disabled`.
 
 ## 2026-06-03
 
