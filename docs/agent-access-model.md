@@ -142,6 +142,7 @@ Future scopes:
 - `kb:feedback`
 - `sources:read`
 - `sources:sync`
+- `agents:message`
 - `agents:manage`
 - `access:manage`
 - `audit:read`

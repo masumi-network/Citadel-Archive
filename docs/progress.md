@@ -31,6 +31,17 @@ Last updated: 2026-06-08.
     path.
 - Fixed a time-sensitive GitHub sync PR test whose hard-coded June 3 PR
   timestamps had fallen outside its 48-hour window by June 8, 2026.
+- Added the Citadel Agent Messenger bridge:
+  - `kb/agent_messenger.py` wraps the
+    `masumi-agent-messenger` CLI in JSON mode, preserving Messenger-owned auth,
+    encryption, signing, and local key storage.
+  - Added `CITADEL_AGENT_MESSENGER_*` config and `.env.example` entries.
+  - Added admin `agents:message` scope plus status, thread-send, and
+    channel-send API routes under `/api/agent-messenger`.
+  - Send routes audit target metadata and success/failure without storing raw
+    message bodies.
+  - Documented setup, access, audit behavior, and failure modes in
+    `docs/agent-messenger-integration.md`.
 - Verified Citadel with `uv run pytest` and focused `uv run ruff check`.
 
 ## 2026-06-04

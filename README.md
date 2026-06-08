@@ -448,6 +448,24 @@ curl -fsS -X POST "$CITADEL_BASE_URL/api/learning-agent/gateways/google_chat/tes
   --data '{"message":"Citadel gateway delivery test"}'
 ```
 
+## Agent Messenger Bridge
+
+Citadel can send explicit outbound messages through
+[`masumi-agent-messenger`](https://github.com/masumi-network/masumi-agent-messenger)
+without treating messenger traffic as Organization Vault source material. The
+bridge shells out to the existing JSON-mode CLI so Messenger auth, local keys,
+encryption, and signing remain in the Messenger client.
+
+See [`docs/agent-messenger-integration.md`](docs/agent-messenger-integration.md).
+
+```bash
+CITADEL_AGENT_MESSENGER_ENABLED=false
+CITADEL_AGENT_MESSENGER_COMMAND=masumi-agent-messenger
+CITADEL_AGENT_MESSENGER_PROFILE=citadel
+CITADEL_AGENT_MESSENGER_AGENT_SLUG=citadel-scout
+CITADEL_AGENT_MESSENGER_TIMEOUT_SECONDS=30
+```
+
 ## Vault Backup Mirror
 
 Citadel includes a manifest-only Vault Backup Mirror exporter for the private
