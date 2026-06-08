@@ -147,7 +147,9 @@ def _log_result(result: dict[str, Any]) -> None:
 
 def _public_summary(result: dict[str, Any]) -> dict[str, Any]:
     github = _github_result(result)
-    google_chat = (result.get("notifications") or {}).get("google_chat") or {}
+    notifications = result.get("notifications") or {}
+    google_chat = notifications.get("google_chat") or {}
+    gateways = notifications.get("gateways") or {}
     security_scan = github.get("security_scan") or {}
     return {
         "ok": result.get("ok"),
@@ -172,6 +174,15 @@ def _public_summary(result: dict[str, Any]) -> dict[str, Any]:
             "sent": google_chat.get("sent"),
             "reason": google_chat.get("reason"),
             "status_category": google_chat.get("status_category"),
+        },
+        "gateways": {
+            name: {
+                "sent": status.get("sent"),
+                "reason": status.get("reason"),
+                "status_category": status.get("status_category"),
+            }
+            for name, status in sorted(gateways.items())
+            if isinstance(status, dict)
         },
     }
 

@@ -1,6 +1,37 @@
 # Citadel Progress
 
-Last updated: 2026-06-04.
+Last updated: 2026-06-08.
+
+## 2026-06-08
+
+- Created and pushed the separate Scout update-agent repository:
+  - Repository: `https://github.com/masumi-network/Scout.git`.
+  - Commit `5bc78d9` (`Scaffold Scout update agent`) is on Scout `main`.
+  - Scout owns update-agent orchestration and delivery gateways while Citadel
+    remains the Organization Vault/source contract.
+  - Added a Citadel client, modular gateway registry, Google Chat gateway,
+    CLI entrypoint (`uv run scout status`, `uv run scout run --post`), config
+    example, and focused tests.
+  - Added Scout's gateway guide at `docs/gateway-guide.md` with Google Chat
+    setup, local smoke tests, deployment rules, failure modes, and the adapter
+    contract for future gateways.
+  - Verified Scout with `uv run pytest` and `uv run ruff check .`.
+- Added Citadel-side modular gateway support for the external-agent split:
+  - Added `kb/notification_gateways.py` with a small `NotificationGateway`
+    protocol and configured gateway registry.
+  - Refactored `LearningAgent` to emit `notifications.gateways` while preserving
+    the existing `notifications.google_chat` compatibility key.
+  - Added generic admin-only gateway smoke testing at
+    `/api/learning-agent/gateways/{gateway_name}/test`.
+  - Updated cron summary output to include sanitized gateway delivery status.
+  - Documented the repo boundary and migration path in
+    `docs/internal-update-agent-architecture.md`.
+  - Updated the Google Chat rollout plan and README to describe Scout as the
+    long-term poster and Citadel's built-in Chat delivery as a compatibility
+    path.
+- Fixed a time-sensitive GitHub sync PR test whose hard-coded June 3 PR
+  timestamps had fallen outside its 48-hour window by June 8, 2026.
+- Verified Citadel with `uv run pytest` and focused `uv run ruff check`.
 
 ## 2026-06-04
 

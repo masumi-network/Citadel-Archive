@@ -283,7 +283,7 @@ async def test_github_sync_returns_open_and_merged_pull_requests(tmp_path: Any) 
 
     config = CitadelConfig(
         github_sync_state_path=str(tmp_path / "github_state.json"),
-        organization_digest_window_hours=48,
+        organization_digest_window_hours=24 * 14,
     )
     citadel = FakeCitadel(config)
     syncer = GitHubOrgSyncer(

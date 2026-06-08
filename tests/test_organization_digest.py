@@ -255,3 +255,40 @@ async def test_learning_agent_posts_when_explicitly_requested(monkeypatch: Any) 
     assert "preview" not in result["organization_digest"]
     assert result["notifications"]["google_chat"]["sent"] is True
     assert "Ship organization digest" in posted[0]
+
+
+@pytest.mark.asyncio
+async def test_learning_agent_posts_to_configured_gateways(monkeypatch: Any) -> None:
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    monkeypatch.delenv("LLM_API_KEY", raising=False)
+    posted: list[str] = []
+
+    class FakeCitadel:
+        config = CitadelConfig(organization_digest_llm_enabled=False)
+
+    class FakeSyncer:
+        async def status(self) -> dict[str, Any]:
+            return {"ok": True}
+
+        async def run(self, *, force: bool = False, dry_run: bool = False) -> dict[str, Any]:
+            return _learning_result()["sources"]["github"]
+
+    class FakeGateway:
+        def status(self) -> dict[str, Any]:
+            return {"enabled": True, "kind": "test"}
+
+        def post_digest(self, text: str, *, message_id: str | None = None) -> dict[str, Any]:
+            posted.append(text)
+            return {"ok": True, "sent": True, "status_category": "success"}
+
+    agent = LearningAgent(
+        FakeCitadel(),
+        github_syncer=FakeSyncer(),
+        gateways={"internal_webhook": FakeGateway()},
+    )
+
+    result = await agent.run(post_to_chat=True, include_digest_preview=False)
+
+    assert result["notifications"]["gateways"]["internal_webhook"]["sent"] is True
+    assert result["notifications"]["google_chat"]["reason"] == "google_chat_disabled"
+    assert "Ship organization digest" in posted[0]

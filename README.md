@@ -390,6 +390,13 @@ dedicated Google Chat space after the learning-agent cron runs. See
 [`docs/google-chat-organization-update-digest-plan.md`](docs/google-chat-organization-update-digest-plan.md)
 and [ADR 0002](docs/adr/0002-google-chat-app-auth-for-update-digests.md).
 
+The long-term modular shape is a separate internal update-agent repository that
+uses Citadel for source-linked vault context and owns scheduling plus delivery
+gateways. The repo boundary and first contract are documented in
+[`docs/internal-update-agent-architecture.md`](docs/internal-update-agent-architecture.md).
+Keep only one production poster enabled at a time: either the Citadel cron
+compatibility path below or the separate update-agent repo.
+
 Phase 1 uses Google Chat API app authentication, not incoming webhooks. Configure
 these only on the Railway learning-agent service unless manual posting from the
 web service is needed. If `CITADEL_GITHUB_SYNC_TARGET_URL` points the cron at
@@ -431,6 +438,15 @@ curl -fsS -X POST "$CITADEL_BASE_URL/api/learning-agent/google-chat/test" \
 
 The test endpoint is admin-only and stores only sanitized delivery status in the
 audit log.
+
+For future gateway adapters, use the generic admin-only smoke-test endpoint:
+
+```bash
+curl -fsS -X POST "$CITADEL_BASE_URL/api/learning-agent/gateways/google_chat/test" \
+  -H "Authorization: Bearer $CITADEL_ADMIN_KEY" \
+  -H "Content-Type: application/json" \
+  --data '{"message":"Citadel gateway delivery test"}'
+```
 
 ## Vault Backup Mirror
 

@@ -96,11 +96,16 @@ Phase 1 adds:
 - An LLM summarizer that generates the source-linked Agent read using existing
   OpenRouter/Citadel model configuration.
 - A deterministic fallback digest when the model is unavailable.
-- A Google Chat delivery adapter using Chat API app authentication.
+- A delivery gateway interface with Google Chat as the first adapter, using Chat
+  API app authentication.
 - A Railway cron entry/service configured for `10:00 Europe/Berlin`.
 
-The Google Chat adapter is a delivery channel, not source learning. It should
-not fetch GitHub data, mutate the Organization Vault, or ingest Chat messages.
+Gateway adapters are delivery channels, not source learning. They should not
+fetch GitHub data, mutate the Organization Vault, or ingest Chat messages.
+
+The target modular shape is a separate internal update-agent repository that
+owns scheduling and gateways while Citadel exposes source-linked context. See
+[`internal-update-agent-architecture.md`](internal-update-agent-architecture.md).
 
 ## Operational Rules
 

@@ -1374,6 +1374,44 @@ async def test_learning_agent_google_chat(body: GoogleChatTestBody, request: Req
     return jsonable_encoder(result)
 
 
+@app.post("/api/learning-agent/gateways/{gateway_name}/test")
+async def test_learning_agent_gateway(
+    gateway_name: str,
+    body: GoogleChatTestBody,
+    request: Request,
+) -> Any:
+    actor = require_access(request, "admin", "sources:sync")
+    if not re.fullmatch(r"[a-z0-9_-]{1,80}", gateway_name):
+        raise HTTPException(status_code=400, detail="Gateway names may contain a-z, 0-9, _, and -.")
+    result = await get_learning_agent().test_gateway_delivery(gateway_name, message=body.message)
+    detail = {
+        "gateway": gateway_name,
+        "sent": result.get("sent"),
+        "reason": result.get("reason"),
+        "status_category": result.get("status_category"),
+        "status_code": result.get("status_code"),
+        "message_name": result.get("message_name"),
+        "thread_name": result.get("thread_name"),
+    }
+    get_access_store().record_event(
+        action="learning_agent.gateway_test",
+        actor=actor,
+        success=bool(result.get("sent")),
+        detail={key: value for key, value in detail.items() if value is not None},
+    )
+    record_mcp_audit(
+        request,
+        actor=actor,
+        success=bool(result.get("sent")),
+        dataset=get_citadel().config.github_sync_dataset,
+        detail={
+            "operation": "learning_agent.gateway_test",
+            **{key: value for key, value in detail.items() if value is not None},
+        },
+    )
+    return jsonable_encoder(result)
+
+
 @app.get("/events")
 async def events(request: Request) -> StreamingResponse:
     require_access(request, "reader", "kb:read")

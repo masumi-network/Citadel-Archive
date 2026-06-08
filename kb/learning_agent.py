@@ -4,10 +4,11 @@ import argparse
 import asyncio
 from datetime import datetime, timezone
 import json
-from typing import Any
+from typing import Any, Mapping
 
 from kb.google_chat import GoogleChatDelivery
 from kb.github_sync import GitHubOrgSyncer
+from kb.notification_gateways import NotificationGateway, configured_gateways, gateway_statuses
 from kb.organization_digest import build_organization_digest
 from kb.service import Citadel
 
@@ -21,12 +22,15 @@ class LearningAgent:
         *,
         github_syncer: GitHubOrgSyncer | None = None,
         google_chat: GoogleChatDelivery | None = None,
+        gateways: Mapping[str, NotificationGateway] | None = None,
     ) -> None:
         self.citadel = citadel
         self.github_syncer = github_syncer or GitHubOrgSyncer(citadel)
-        self.google_chat = google_chat if google_chat is not None else GoogleChatDelivery.from_config(
-            citadel.config
-        )
+        configured = dict(gateways) if gateways is not None else configured_gateways(citadel.config)
+        if google_chat is not None:
+            configured["google_chat"] = google_chat
+        self.gateways = configured
+        self.google_chat = configured.get("google_chat")
 
     @classmethod
     def from_env(cls) -> "LearningAgent":
@@ -47,9 +51,8 @@ class LearningAgent:
                 "max_items": self.citadel.config.organization_digest_max_items,
             },
             "notifications": {
-                "google_chat": self.google_chat.status()
-                if self.google_chat
-                else {"enabled": False},
+                "gateways": self._gateway_statuses(),
+                "google_chat": self._gateway_status("google_chat"),
             },
             "capabilities": [
                 "scan_github_repositories",
@@ -60,6 +63,7 @@ class LearningAgent:
                 "ingest_source_digest",
                 "run_cognee_improvement",
                 "build_organization_update_digest",
+                "post_gateway_digest",
                 "post_google_chat_digest",
             ],
         }
@@ -93,14 +97,16 @@ class LearningAgent:
         )
         digest_text = digest.pop("_text", "")
         result["organization_digest"] = digest
+        gateway_results = await self._maybe_post_gateways(
+            digest,
+            digest_text,
+            post_to_gateways=post_to_chat,
+            dry_run=dry_run,
+            checked_at=github_result.get("checked_at"),
+        )
         result["notifications"] = {
-            "google_chat": await self._maybe_post_google_chat(
-                digest,
-                digest_text,
-                post_to_chat=post_to_chat,
-                dry_run=dry_run,
-                checked_at=github_result.get("checked_at"),
-            )
+            "gateways": gateway_results,
+            "google_chat": gateway_results.get("google_chat", {"enabled": False}),
         }
         return result
 
@@ -130,30 +136,69 @@ class LearningAgent:
             ],
         }
 
-    async def _maybe_post_google_chat(
+    def _gateway_statuses(self) -> dict[str, dict[str, Any]]:
+        statuses = gateway_statuses(self.gateways)
+        statuses.setdefault("google_chat", {"enabled": False})
+        return statuses
+
+    def _gateway_status(self, name: str) -> dict[str, Any]:
+        return self._gateway_statuses().get(name, {"enabled": False})
+
+    def _known_gateway_names(self) -> set[str]:
+        return set(self.gateways) | {"google_chat"}
+
+    def _skip_gateway_results(self, reason: str) -> dict[str, dict[str, Any]]:
+        return {
+            name: {"enabled": name in self.gateways, "sent": False, "reason": reason}
+            for name in sorted(self._known_gateway_names())
+        }
+
+    async def _maybe_post_gateways(
         self,
         digest: dict[str, Any],
         digest_text: str,
         *,
-        post_to_chat: bool,
+        post_to_gateways: bool,
         dry_run: bool,
         checked_at: str | None,
-    ) -> dict[str, Any]:
-        if not post_to_chat:
-            return {"enabled": bool(self.google_chat), "sent": False, "reason": "preview_only"}
+    ) -> dict[str, dict[str, Any]]:
+        if not post_to_gateways:
+            return self._skip_gateway_results("preview_only")
         if dry_run:
-            return {"enabled": bool(self.google_chat), "sent": False, "reason": "dry_run"}
+            return self._skip_gateway_results("dry_run")
         if not digest.get("enabled"):
-            return {"enabled": bool(self.google_chat), "sent": False, "reason": "digest_disabled"}
+            return self._skip_gateway_results("digest_disabled")
         if not digest.get("meaningful") and not self.citadel.config.organization_digest_post_on_no_updates:
-            return {"enabled": bool(self.google_chat), "sent": False, "reason": "no_meaningful_updates"}
-        if not self.google_chat:
-            return {"enabled": False, "sent": False, "reason": "google_chat_disabled"}
-        try:
-            return await asyncio.to_thread(
-                self.google_chat.post_digest,
+            return self._skip_gateway_results("no_meaningful_updates")
+
+        results: dict[str, dict[str, Any]] = {}
+        for name, gateway in sorted(self.gateways.items()):
+            results[name] = await self._post_gateway(
+                gateway,
                 digest_text,
                 message_id=str(checked_at or "latest"),
+            )
+
+        if "google_chat" not in results:
+            results["google_chat"] = {
+                "enabled": False,
+                "sent": False,
+                "reason": "google_chat_disabled",
+            }
+        return results
+
+    async def _post_gateway(
+        self,
+        gateway: NotificationGateway,
+        digest_text: str,
+        *,
+        message_id: str,
+    ) -> dict[str, Any]:
+        try:
+            return await asyncio.to_thread(
+                gateway.post_digest,
+                digest_text,
+                message_id=message_id,
             )
         except Exception as exc:
             return {
@@ -166,29 +211,50 @@ class LearningAgent:
 
     async def test_google_chat_delivery(self, message: str | None = None) -> dict[str, Any]:
         """Send one controlled test message to the configured Google Chat space."""
-        if not self.google_chat:
-            return {"ok": False, "enabled": False, "sent": False, "reason": "google_chat_disabled"}
-        text = (
-            "Citadel Google Chat delivery test - configuration check only."
-            if not message
-            else message
+        return await self.test_gateway_delivery(
+            "google_chat",
+            message=message,
+            default_message="Citadel Google Chat delivery test - configuration check only.",
         )
-        message_id = f"google-chat-test-{datetime.now(timezone.utc).isoformat()}"
+
+    async def test_gateway_delivery(
+        self,
+        gateway_name: str,
+        *,
+        message: str | None = None,
+        default_message: str | None = None,
+    ) -> dict[str, Any]:
+        """Send one controlled test message to a configured delivery gateway."""
+        gateway = self.gateways.get(gateway_name)
+        if not gateway:
+            reason = "google_chat_disabled" if gateway_name == "google_chat" else "gateway_disabled"
+            return {
+                "ok": False,
+                "enabled": False,
+                "sent": False,
+                "gateway": gateway_name,
+                "reason": reason,
+            }
+        text = message or default_message or (
+            f"Citadel {gateway_name} delivery gateway test - configuration check only."
+        )
+        message_id = f"{gateway_name}-test-{datetime.now(timezone.utc).isoformat()}"
         try:
             result = await asyncio.to_thread(
-                self.google_chat.post_digest,
+                gateway.post_digest,
                 text,
                 message_id=message_id,
             )
         except Exception as exc:
             return {
                 "enabled": True,
+                "gateway": gateway_name,
                 "ok": False,
                 "sent": False,
                 "status_category": "delivery_exception",
                 "error_type": exc.__class__.__name__,
             }
-        return {"enabled": True, **result}
+        return {"enabled": True, "gateway": gateway_name, **result}
 
 
 async def _run_agent(args: argparse.Namespace) -> None:

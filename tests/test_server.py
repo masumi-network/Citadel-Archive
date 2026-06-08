@@ -136,9 +136,25 @@ class FakeLearningAgent:
             "ok": True,
             "enabled": True,
             "sent": True,
+            "gateway": "google_chat",
             "status_category": "success",
             "message_name": "spaces/AAA/messages/BBB",
             "thread_name": "spaces/AAA/threads/T",
+        }
+
+    async def test_gateway_delivery(
+        self,
+        gateway_name: str,
+        *,
+        message: str | None = None,
+    ) -> dict[str, Any]:
+        return {
+            "ok": True,
+            "enabled": True,
+            "sent": True,
+            "gateway": gateway_name,
+            "status_category": "success",
+            "message_name": f"{gateway_name}/messages/BBB",
         }
 
 
@@ -444,6 +460,30 @@ def test_google_chat_test_delivery_is_admin_only_and_redacted(tmp_path: Any) -> 
     assert event["detail"]["status_category"] == "success"
     assert event["detail"]["message_name"] == "spaces/AAA/messages/BBB"
     assert "custom rollout smoke test" not in serialized
+
+
+def test_gateway_test_delivery_is_admin_only_and_redacted(tmp_path: Any) -> None:
+    app.state.access_store = AccessStore(tmp_path / "access.json")
+    admin = authed_client()
+    reader = authed_client("test-reader")
+
+    denied = reader.post("/api/learning-agent/gateways/google_chat/test", json={})
+    response = admin.post(
+        "/api/learning-agent/gateways/google_chat/test",
+        json={"message": "gateway rollout smoke test"},
+    )
+
+    assert denied.status_code == 403
+    assert response.status_code == 200
+    assert response.json()["sent"] is True
+    events = app.state.access_store.snapshot()["audit_events"]
+    event = events[-1]
+    serialized = str(event)
+    assert event["action"] == "learning_agent.gateway_test"
+    assert event["success"] is True
+    assert event["detail"]["gateway"] == "google_chat"
+    assert event["detail"]["status_category"] == "success"
+    assert "gateway rollout smoke test" not in serialized
 
 
 def test_custom_token_scopes_are_enforced(tmp_path: Any) -> None:
