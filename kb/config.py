@@ -132,6 +132,11 @@ class CitadelConfig:
     google_chat_max_message_bytes: int = 30000
     google_chat_timeout_seconds: int = 20
     google_chat_retry_count: int = 2
+    agent_messenger_enabled: bool = False
+    agent_messenger_command: str = "masumi-agent-messenger"
+    agent_messenger_profile: str | None = None
+    agent_messenger_agent_slug: str | None = None
+    agent_messenger_timeout_seconds: int = 30
     backup_mirror_repo: str = "masumi-network/Vault-Backup-Mirror"
     backup_mirror_enabled: bool = False
     backup_mirror_push_enabled: bool = False
@@ -259,6 +264,22 @@ class CitadelConfig:
             google_chat_retry_count=_int(
                 os.getenv("CITADEL_GOOGLE_CHAT_RETRY_COUNT"),
                 default=2,
+            ),
+            agent_messenger_enabled=_bool(
+                os.getenv("CITADEL_AGENT_MESSENGER_ENABLED"),
+                default=False,
+            ),
+            agent_messenger_command=os.getenv(
+                "CITADEL_AGENT_MESSENGER_COMMAND",
+                "masumi-agent-messenger",
+            ),
+            agent_messenger_profile=os.getenv("CITADEL_AGENT_MESSENGER_PROFILE") or None,
+            agent_messenger_agent_slug=(
+                os.getenv("CITADEL_AGENT_MESSENGER_AGENT_SLUG") or None
+            ),
+            agent_messenger_timeout_seconds=_int(
+                os.getenv("CITADEL_AGENT_MESSENGER_TIMEOUT_SECONDS"),
+                default=30,
             ),
             backup_mirror_repo=os.getenv(
                 "CITADEL_BACKUP_MIRROR_REPO",

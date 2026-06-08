@@ -33,6 +33,7 @@ DEFAULT_SCOPES = {
         "sources:sync",
         "obsidian:sync:pull",
         "obsidian:sync:push",
+        "agents:message",
         "agents:manage",
         "access:manage",
         "audit:read",
