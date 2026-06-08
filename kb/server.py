@@ -18,7 +18,6 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from kb.access import AccessIdentity, AccessStore, ROLE_ORDER, default_scopes, hash_api_token
-from kb.agent_messenger import AgentMessengerClient, AgentMessengerError
 from kb.backup_mirror import BackupMirror, BackupMirrorDisabled, BackupMirrorPublishError
 from kb.github_sync import GitHubOrgSyncer
 from kb.learning_agent import LearningAgent
@@ -180,20 +179,6 @@ class GoogleChatTestBody(BaseModel):
     message: str | None = Field(default=None, min_length=1, max_length=400)
 
 
-class AgentMessengerThreadSendBody(BaseModel):
-    to: str = Field(min_length=1, max_length=160, pattern=r"^[A-Za-z0-9._@-]+$")
-    message: str = Field(min_length=1, max_length=8000)
-    agent_slug: str | None = Field(default=None, min_length=1, max_length=160)
-    content_type: str = Field(default="text/plain", min_length=1, max_length=120)
-    headers: list[str] = Field(default_factory=list, max_length=20)
-
-
-class AgentMessengerChannelSendBody(BaseModel):
-    channel: str = Field(min_length=1, max_length=160, pattern=r"^[A-Za-z0-9._-]+$")
-    message: str = Field(min_length=1, max_length=8000)
-    agent_slug: str | None = Field(default=None, min_length=1, max_length=160)
-
-
 class BackupMirrorRunBody(BaseModel):
     dry_run: bool = True
 
@@ -258,13 +243,6 @@ def get_learning_agent() -> LearningAgent:
     if hasattr(app.state, "learning_agent"):
         return app.state.learning_agent
     return LearningAgent(get_citadel(), github_syncer=get_github_syncer())
-
-
-def get_agent_messenger() -> AgentMessengerClient | None:
-    existing = getattr(app.state, "agent_messenger", None)
-    if existing is not None:
-        return existing
-    return AgentMessengerClient.from_config(get_citadel().config)
 
 
 def get_backup_mirror() -> BackupMirror:
@@ -1237,106 +1215,6 @@ async def source_document(document_id: str, request: Request) -> Any:
 async def learning_agent_status(request: Request) -> Any:
     require_access(request, "reader", "sources:read")
     return jsonable_encoder(await get_learning_agent().status())
-
-
-@app.get("/api/agent-messenger")
-async def agent_messenger_status(request: Request) -> Any:
-    require_access(request, "admin", "agents:message")
-    messenger = get_agent_messenger()
-    if not messenger:
-        return {"ok": True, "enabled": False}
-    return jsonable_encoder(messenger.status())
-
-
-@app.post("/api/agent-messenger/thread/send")
-async def send_agent_messenger_thread(
-    body: AgentMessengerThreadSendBody,
-    request: Request,
-) -> Any:
-    actor = require_access(request, "admin", "agents:message")
-    messenger = get_agent_messenger()
-    if not messenger:
-        get_access_store().record_event(
-            action="agent_messenger.thread_send",
-            actor=actor,
-            success=False,
-            detail={"to": body.to, "reason": "disabled"},
-        )
-        raise HTTPException(status_code=409, detail="Agent Messenger is disabled.")
-    try:
-        result = messenger.send_thread(
-            to=body.to,
-            message=body.message,
-            agent_slug=body.agent_slug,
-            content_type=body.content_type,
-            headers=body.headers,
-        )
-    except AgentMessengerError as exc:
-        get_access_store().record_event(
-            action="agent_messenger.thread_send",
-            actor=actor,
-            success=False,
-            detail={"to": body.to, "reason": "send_failed", "error_type": exc.__class__.__name__},
-        )
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
-    get_access_store().record_event(
-        action="agent_messenger.thread_send",
-        actor=actor,
-        success=True,
-        detail={
-            "to": body.to,
-            "agent": result.get("agent"),
-            "content_type": result.get("content_type"),
-            "sent": result.get("sent"),
-        },
-    )
-    return jsonable_encoder(result)
-
-
-@app.post("/api/agent-messenger/channel/send")
-async def send_agent_messenger_channel(
-    body: AgentMessengerChannelSendBody,
-    request: Request,
-) -> Any:
-    actor = require_access(request, "admin", "agents:message")
-    messenger = get_agent_messenger()
-    if not messenger:
-        get_access_store().record_event(
-            action="agent_messenger.channel_send",
-            actor=actor,
-            success=False,
-            detail={"channel": body.channel, "reason": "disabled"},
-        )
-        raise HTTPException(status_code=409, detail="Agent Messenger is disabled.")
-    try:
-        result = messenger.send_channel(
-            channel=body.channel,
-            message=body.message,
-            agent_slug=body.agent_slug,
-        )
-    except AgentMessengerError as exc:
-        get_access_store().record_event(
-            action="agent_messenger.channel_send",
-            actor=actor,
-            success=False,
-            detail={
-                "channel": body.channel,
-                "reason": "send_failed",
-                "error_type": exc.__class__.__name__,
-            },
-        )
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
-    get_access_store().record_event(
-        action="agent_messenger.channel_send",
-        actor=actor,
-        success=True,
-        detail={
-            "channel": body.channel,
-            "agent": result.get("agent"),
-            "sent": result.get("sent"),
-        },
-    )
-    return jsonable_encoder(result)
 
 
 @app.get("/api/backup-mirror")

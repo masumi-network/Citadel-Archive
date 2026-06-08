@@ -158,57 +158,11 @@ class FakeLearningAgent:
         }
 
 
-class FakeAgentMessenger:
-    def status(self) -> dict[str, Any]:
-        return {
-            "ok": True,
-            "enabled": True,
-            "available": True,
-            "agent": "citadel-scout",
-        }
-
-    def send_thread(
-        self,
-        *,
-        to: str,
-        message: str,
-        agent_slug: str | None = None,
-        content_type: str = "text/plain",
-        headers: list[str] | None = None,
-    ) -> dict[str, Any]:
-        return {
-            "ok": True,
-            "sent": True,
-            "surface": "thread",
-            "to": to,
-            "agent": agent_slug or "citadel-scout",
-            "content_type": content_type,
-            "result": {"ok": True, "message_id": "thread-message-1"},
-        }
-
-    def send_channel(
-        self,
-        *,
-        channel: str,
-        message: str,
-        agent_slug: str | None = None,
-    ) -> dict[str, Any]:
-        return {
-            "ok": True,
-            "sent": True,
-            "surface": "channel",
-            "channel": channel,
-            "agent": agent_slug or "citadel-scout",
-            "result": {"ok": True, "message_id": "channel-message-1"},
-        }
-
-
 def authed_client(access_key: str = "test-admin") -> TestClient:
     app.state.citadel = FakeCitadel()
     app.state.mesh = MeshState()
     app.state.github_syncer = FakeGitHubSyncer()
     app.state.learning_agent = FakeLearningAgent()
-    app.state.agent_messenger = FakeAgentMessenger()
     client = TestClient(app, base_url="https://testserver")
     response = client.post("/admin/session", json={"access_key": access_key})
     assert response.status_code == 200
@@ -530,94 +484,6 @@ def test_gateway_test_delivery_is_admin_only_and_redacted(tmp_path: Any) -> None
     assert event["detail"]["gateway"] == "google_chat"
     assert event["detail"]["status_category"] == "success"
     assert "gateway rollout smoke test" not in serialized
-
-
-def test_agent_messenger_status_is_admin_message_scope_only(tmp_path: Any) -> None:
-    app.state.access_store = AccessStore(tmp_path / "access.json")
-    admin = authed_client()
-    reader = authed_client("test-reader")
-
-    denied = reader.get("/api/agent-messenger")
-    response = admin.get("/api/agent-messenger")
-
-    assert denied.status_code == 403
-    assert response.status_code == 200
-    assert response.json()["enabled"] is True
-    assert response.json()["agent"] == "citadel-scout"
-
-
-def test_agent_messenger_thread_send_is_audited_without_message_body(tmp_path: Any) -> None:
-    app.state.access_store = AccessStore(tmp_path / "access.json")
-    client = authed_client()
-
-    response = client.post(
-        "/api/agent-messenger/thread/send",
-        json={
-            "to": "research-agent",
-            "message": "private coordination text should not be audited",
-            "content_type": "text/plain",
-        },
-    )
-
-    assert response.status_code == 200
-    assert response.json()["sent"] is True
-    assert response.json()["to"] == "research-agent"
-    events = app.state.access_store.snapshot()["audit_events"]
-    event = events[-1]
-    serialized = str(event)
-    assert event["action"] == "agent_messenger.thread_send"
-    assert event["success"] is True
-    assert event["detail"]["to"] == "research-agent"
-    assert "private coordination text" not in serialized
-
-
-def test_agent_messenger_channel_send_is_audited_without_message_body(tmp_path: Any) -> None:
-    app.state.access_store = AccessStore(tmp_path / "access.json")
-    client = authed_client()
-
-    response = client.post(
-        "/api/agent-messenger/channel/send",
-        json={
-            "channel": "public-discussion",
-            "message": "channel update text should not be audited",
-        },
-    )
-
-    assert response.status_code == 200
-    assert response.json()["sent"] is True
-    assert response.json()["channel"] == "public-discussion"
-    events = app.state.access_store.snapshot()["audit_events"]
-    event = events[-1]
-    serialized = str(event)
-    assert event["action"] == "agent_messenger.channel_send"
-    assert event["success"] is True
-    assert event["detail"]["channel"] == "public-discussion"
-    assert "channel update text" not in serialized
-
-
-def test_agent_messenger_requires_agents_message_scope(tmp_path: Any) -> None:
-    app.state.access_store = AccessStore(tmp_path / "access.json")
-    client = authed_client()
-    created = client.post(
-        "/api/access/tokens",
-        json={
-            "name": "access-manager",
-            "role": "admin",
-            "kind": "service_account",
-            "scopes": ["access:manage"],
-        },
-    )
-    token = created.json()["token"]
-    api_client = TestClient(app, base_url="https://testserver")
-
-    response = api_client.post(
-        "/api/agent-messenger/thread/send",
-        json={"to": "research-agent", "message": "hello"},
-        headers={"Authorization": f"Bearer {token}"},
-    )
-
-    assert response.status_code == 403
-    assert response.json()["detail"] == "Scope required: agents:message."
 
 
 def test_custom_token_scopes_are_enforced(tmp_path: Any) -> None:
