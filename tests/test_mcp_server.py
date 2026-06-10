@@ -275,3 +275,42 @@ def test_http_errors_are_redacted(monkeypatch: pytest.MonkeyPatch) -> None:
     assert "ctdl_other" not in message
     assert "sk-test" not in message
     assert "[REDACTED]" in message
+
+
+def test_contribute_tool_posts_through_the_contribute_endpoint() -> None:
+    client = FakeHttpClient()
+    server = create_mcp_server(client)
+
+    result = run_tool(
+        server,
+        "citadel_contribute",
+        " Decision: adopt deepseek ",
+        "We standardized on deepseek/deepseek-v4-flash for enrichment.",
+        None,
+        tags=["decision"],
+        source_url="https://github.com/masumi-network/Citadel-Archive",
+    )
+
+    assert result["path"] == "/api/contribute"
+    assert result["tool_name"] == "citadel_contribute"
+    assert result["payload"]["title"] == "Decision: adopt deepseek"
+    assert result["payload"]["tags"] == ["decision"]
+    assert result["payload"]["source_url"] == (
+        "https://github.com/masumi-network/Citadel-Archive"
+    )
+
+
+def test_contribute_tool_rejects_empty_or_oversized_payloads(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    server = create_mcp_server(FakeHttpClient())
+
+    with pytest.raises(ToolError, match="title must not be empty"):
+        run_tool(server, "citadel_contribute", "  ", "Body", None)
+
+    with pytest.raises(ToolError, match="content must not be empty"):
+        run_tool(server, "citadel_contribute", "Title", "   ", None)
+
+    monkeypatch.setenv("CITADEL_MCP_MAX_INGEST_BYTES", "4")
+    with pytest.raises(ToolError, match="payload is 5 bytes"):
+        run_tool(server, "citadel_contribute", "Title", "12345", None)

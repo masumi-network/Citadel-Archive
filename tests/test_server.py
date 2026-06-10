@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 import tempfile
 from typing import Any
@@ -1215,3 +1216,139 @@ def test_mesh_graph_serves_real_graph_through_injected_gateway() -> None:
     assert capped.json()["limit"] == 2
     assert invalid.status_code == 422
     assert unauthenticated.status_code == 401
+
+
+class KnowledgeCitadel(FakeCitadel):
+    async def search(self, query: str, **kwargs: Any) -> list[Any]:
+        return [
+            {
+                "text": "Rotate keys quarterly",
+                "source_url": "https://example.com/runbook",
+                "score": 0.92,
+                "metadata": {"citadel_tags": ["ops"]},
+            },
+            "bare string result",
+        ]
+
+
+def test_contribute_routes_through_learning_process_and_audits(tmp_path: Any) -> None:
+    client = authed_client("test-writer")
+    store = AccessStore(str(tmp_path / "access.json"))
+    app.state.access_store = store
+
+    response = client.post(
+        "/api/contribute",
+        json={
+            "title": "Decision: adopt deepseek for enrichment",
+            "content": "We standardized on deepseek/deepseek-v4-flash via OpenRouter.",
+            "tags": ["decision", "llm"],
+            "source_url": "https://github.com/masumi-network/Citadel-Archive",
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ok"] is True
+    assert payload["accepted"] is True
+    assert payload["chunks"] == 1
+    assert payload["conflict"] is None
+    assert payload["dataset"] == "notes"
+
+    events = store.snapshot()["audit_events"]
+    contribute_events = [event for event in events if event["action"] == "contribute"]
+    assert len(contribute_events) == 1
+    assert contribute_events[0]["success"] is True
+    assert contribute_events[0]["detail"]["chunks"] == 1
+    assert contribute_events[0]["detail"]["tag_count"] == 2
+    # Raw contribution content never lands in the audit trail.
+    assert "deepseek-v4-flash" not in json.dumps(contribute_events[0])
+
+
+def test_contribute_requires_writer_role() -> None:
+    reader = authed_client("test-reader")
+    body = {"title": "Note", "content": "Body"}
+
+    assert reader.post("/api/contribute", json=body).status_code == 403
+    assert (
+        TestClient(app, base_url="https://testserver")
+        .post("/api/contribute", json=body)
+        .status_code
+        == 401
+    )
+
+
+def test_contribute_validates_payload() -> None:
+    client = authed_client("test-writer")
+
+    assert client.post("/api/contribute", json={"title": "", "content": "x"}).status_code == 422
+    assert client.post("/api/contribute", json={"content": "x"}).status_code == 422
+    assert client.post("/api/contribute", json={"title": "t"}).status_code == 422
+
+
+def test_knowledge_alias_returns_flat_agent_friendly_results() -> None:
+    client = authed_client("test-reader")
+    app.state.citadel = KnowledgeCitadel()
+
+    response = client.get("/api/knowledge", params={"q": "rotate keys", "limit": 5})
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ok"] is True
+    assert payload["query"] == "rotate keys"
+    assert payload["results"][0] == {
+        "text": "Rotate keys quarterly",
+        "source": "https://example.com/runbook",
+        "score": 0.92,
+        "tags": ["ops"],
+    }
+    assert payload["results"][1]["text"] == "bare string result"
+    assert payload["results"][1]["source"] is None
+
+
+def test_knowledge_alias_validates_query_and_limit() -> None:
+    client = authed_client("test-reader")
+
+    assert client.get("/api/knowledge", params={"q": "   "}).status_code == 422
+    assert client.get("/api/knowledge", params={"q": "x", "limit": 0}).status_code == 422
+    assert client.get("/api/knowledge", params={"q": "x", "limit": 999}).status_code == 422
+    assert (
+        TestClient(app, base_url="https://testserver")
+        .get("/api/knowledge", params={"q": "x"})
+        .status_code
+        == 401
+    )
+
+
+def test_optimize_endpoint_is_admin_only_bounded_and_audited(
+    tmp_path: Any, monkeypatch: Any
+) -> None:
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    monkeypatch.delenv("LLM_API_KEY", raising=False)
+
+    writer = authed_client("test-writer")
+    assert writer.post("/api/learning-agent/optimize", json={}).status_code == 403
+
+    client = authed_client()
+    store = AccessStore(str(tmp_path / "access.json"))
+    app.state.access_store = store
+
+    response = client.post(
+        "/api/learning-agent/optimize",
+        json={"dry_run": True, "max_items": 5},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ok"] is True
+    assert payload["dry_run"] is True
+    assert payload["max_items"] == 5
+    assert payload["optimized"] == 0  # no LLM key -> deterministic no-op fallback
+    assert payload["llm_used"] is False
+
+    events = store.snapshot()["audit_events"]
+    optimize_events = [
+        event for event in events if event["action"] == "learning_agent.optimize"
+    ]
+    assert len(optimize_events) == 1
+    assert optimize_events[0]["success"] is True
+    assert optimize_events[0]["detail"]["dry_run"] is True

@@ -119,6 +119,17 @@ TOOL_POLICIES: dict[str, ToolPolicy] = {
             openWorldHint=False,
         ),
     ),
+    "citadel_contribute": ToolPolicy(
+        role="writer",
+        scope="kb:ingest",
+        risk="additive_write",
+        annotations=ToolAnnotations(
+            readOnlyHint=False,
+            destructiveHint=False,
+            idempotentHint=False,
+            openWorldHint=False,
+        ),
+    ),
     "citadel_record_feedback": ToolPolicy(
         role="writer",
         scope="kb:feedback",
@@ -603,6 +614,40 @@ def create_mcp_server(
             "citadel_ingest",
             post_ingest,
         )
+
+    @mcp.tool(annotations=TOOL_POLICIES["citadel_contribute"].annotations)
+    async def citadel_contribute(
+        title: str,
+        content: str,
+        ctx: Context,
+        tags: list[str] | None = None,
+        source_url: str | None = None,
+        dataset: str | None = None,
+    ) -> dict[str, Any]:
+        """Add a titled Vault Contribution through the Learning Process.
+
+        The easy write path for agents: same route as POST /api/contribute,
+        with enrichment (when enabled) and Knowledge Conflict detection on.
+        Requires writer access.
+        """
+
+        def post_contribute() -> dict[str, Any]:
+            normalized_title = _require_non_empty(title, "title")
+            normalized_content = _require_non_empty(content, "content")
+            _validate_ingest_size(normalized_content)
+            return resolve_client(ctx).post(
+                "/api/contribute",
+                {
+                    "title": normalized_title,
+                    "content": normalized_content,
+                    "tags": tags or [],
+                    "source_url": source_url,
+                    "dataset": dataset,
+                },
+                tool_name="citadel_contribute",
+            )
+
+        return await _call_async("citadel_contribute", post_contribute)
 
     @mcp.tool(annotations=TOOL_POLICIES["citadel_record_feedback"].annotations)
     async def citadel_record_feedback(

@@ -30,6 +30,7 @@ from kb.mcp_server import TOOL_POLICIES, create_mcp_server
 from kb.mesh import MeshState
 from kb.models import FeedbackRequest
 from kb.obsidian_sync import ObsidianSyncStore, SyncPushDocument, normalize_path
+from kb.self_improve import SelfImprovement
 from kb.service import Citadel
 from kb.skills import skill_catalog, skill_integrity, skill_path
 from kb.source_search import GITHUB_DOC_ID_PREFIX, github_section_document
@@ -231,6 +232,19 @@ class ObsidianConflictResolveBody(BaseModel):
 
 class KnowledgeConflictResolveBody(BaseModel):
     resolution_note: str = Field(min_length=1, max_length=400)
+
+
+class ContributeBody(BaseModel):
+    title: str = Field(min_length=1, max_length=300)
+    content: str = Field(min_length=1)
+    tags: list[str] = Field(default_factory=list)
+    source_url: str | None = Field(default=None, max_length=1000)
+    dataset: str | None = None
+
+
+class OptimizeBody(BaseModel):
+    dry_run: bool = False
+    max_items: int | None = Field(default=None, ge=1, le=50)
 
 
 def get_citadel() -> Citadel:
@@ -1599,6 +1613,206 @@ async def ingest(body: IngestBody, request: Request) -> Any:
             "reason": result.reason,
             "data_bytes": len(body.data.encode("utf-8")),
             "tag_count": len(body.tags),
+        },
+    )
+    return jsonable_encoder(result)
+
+
+@app.post("/api/contribute")
+async def contribute(body: ContributeBody, request: Request) -> Any:
+    """Simple write path for teammates and agents.
+
+    Routes through the Learning Process (with LLM enrichment when enabled)
+    and keeps conflict detection on, so a Vault Contribution behaves exactly
+    like any other accepted Source Material.
+    """
+    actor = require_access(request, "writer", "kb:ingest")
+    citadel = get_citadel()
+    learning = get_learning_process()
+    dataset = body.dataset or citadel.config.default_dataset
+    parts = [f"# {body.title.strip()}", "", body.content.strip()]
+    if body.source_url and body.source_url.strip():
+        parts.extend(["", f"Source: {body.source_url.strip()}"])
+    data = "\n".join(parts)
+    try:
+        outcome = await learning.learn(
+            data,
+            dataset=body.dataset,
+            tags=body.tags,
+            operation="contribute",
+            detect_conflicts=True,
+        )
+    except Exception as exc:  # pragma: no cover - depends on runtime Cognee configuration.
+        get_access_store().record_event(
+            action="contribute",
+            actor=actor,
+            success=False,
+            dataset=dataset,
+            detail={"error_type": exc.__class__.__name__},
+        )
+        record_mcp_audit(
+            request,
+            actor=actor,
+            success=False,
+            dataset=dataset,
+            detail={"operation": "contribute", "error_type": exc.__class__.__name__},
+        )
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    accepted = any(result.accepted for result in outcome.all_ingests)
+    get_access_store().record_event(
+        action="contribute",
+        actor=actor,
+        success=accepted,
+        dataset=outcome.dataset,
+        detail={
+            "accepted": accepted,
+            "chunks": outcome.accepted_chunks,
+            "conflict": bool(outcome.conflict),
+            "reason": outcome.ingest.reason,
+            "tag_count": len(body.tags),
+            "content_bytes": len(body.content.encode("utf-8")),
+        },
+    )
+    record_mcp_audit(
+        request,
+        actor=actor,
+        success=accepted,
+        dataset=outcome.dataset,
+        detail={
+            "operation": "contribute",
+            "accepted": accepted,
+            "chunks": outcome.accepted_chunks,
+            "conflict": bool(outcome.conflict),
+        },
+    )
+    return jsonable_encoder(
+        {
+            "ok": True,
+            "accepted": accepted,
+            "chunks": outcome.accepted_chunks,
+            "conflict": outcome.conflict,
+            "dataset": outcome.dataset,
+            "reason": outcome.ingest.reason,
+            "enrichment": outcome.enrichment,
+        }
+    )
+
+
+def flat_knowledge_result(result: Any) -> dict[str, Any]:
+    """Flatten one search hit into the agent-friendly knowledge shape."""
+    if not isinstance(result, dict):
+        return {"text": str(result), "source": None}
+    provenance = result_provenance(result)
+    text = first_string(
+        result.get("text"),
+        result.get("content"),
+        result.get("chunk"),
+        result.get("body"),
+        result.get("summary"),
+        result.get("title"),
+    )
+    if not text:
+        text = json.dumps(
+            {key: value for key, value in result.items() if key != "_citadel"},
+            sort_keys=True,
+            default=str,
+        )[:500]
+    payload: dict[str, Any] = {
+        "text": text,
+        "source": provenance.get("source_url")
+        or provenance.get("source")
+        or provenance.get("path"),
+    }
+    score = result.get("score")
+    if isinstance(score, (int, float)) and not isinstance(score, bool):
+        payload["score"] = score
+    metadata = result.get("metadata") if isinstance(result.get("metadata"), dict) else {}
+    tags = result.get("tags") or metadata.get("citadel_tags") or metadata.get("tags")
+    if isinstance(tags, list):
+        payload["tags"] = [str(tag) for tag in tags if isinstance(tag, (str, int, float))]
+    return payload
+
+
+@app.get("/api/knowledge")
+async def knowledge(
+    request: Request,
+    q: str,
+    limit: int = 10,
+    dataset: str | None = None,
+) -> Any:
+    """Thin reader alias over /search with a flat, agent-friendly shape."""
+    require_access(request, "reader", "kb:search")
+    query = q.strip()
+    if not query:
+        raise HTTPException(status_code=422, detail="Query q must not be empty.")
+    if not 1 <= limit <= 50:
+        raise HTTPException(status_code=422, detail="Limit must be between 1 and 50.")
+    citadel = get_citadel()
+    mesh_state = get_mesh()
+    target_dataset = (
+        dataset
+        or citadel.config.search_default_dataset
+        or citadel.config.default_dataset
+    )
+    try:
+        results = await citadel.search(query, dataset=target_dataset, top_k=limit)
+    except Exception as exc:  # pragma: no cover - depends on runtime Cognee configuration.
+        await mesh_state.record_error(citadel.config, operation="search", error=str(exc))
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    await mesh_state.record_search(
+        citadel.config,
+        query=query,
+        dataset=target_dataset,
+        result_count=len(results),
+    )
+    return jsonable_encoder(
+        {
+            "ok": True,
+            "query": query,
+            "dataset": target_dataset,
+            "results": [flat_knowledge_result(result) for result in results],
+        }
+    )
+
+
+@app.post("/api/learning-agent/optimize")
+async def optimize_learning_agent(body: OptimizeBody, request: Request) -> Any:
+    """Bounded self-improvement pass. Admin only; never deletes knowledge."""
+    actor = require_access(request, "admin", "sources:sync")
+    citadel = get_citadel()
+    mesh_state = get_mesh()
+    optimizer = SelfImprovement(
+        citadel,
+        mesh=mesh_state,
+        learning=get_learning_process(),
+        access_store=get_access_store(),
+    )
+    try:
+        result = await optimizer.run(
+            dry_run=body.dry_run,
+            max_items=body.max_items,
+            actor=actor,
+        )
+    except Exception as exc:  # pragma: no cover - depends on runtime Cognee configuration.
+        await mesh_state.record_error(citadel.config, operation="self_improve", error=str(exc))
+        get_access_store().record_event(
+            action="learning_agent.optimize",
+            actor=actor,
+            success=False,
+            detail={"dry_run": body.dry_run, "error_type": exc.__class__.__name__},
+        )
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    record_mcp_audit(
+        request,
+        actor=actor,
+        success=True,
+        dataset=result.get("dataset"),
+        detail={
+            "operation": "learning_agent.optimize",
+            "reviewed": result.get("reviewed"),
+            "optimized": result.get("optimized"),
+            "dry_run": body.dry_run,
         },
     )
     return jsonable_encoder(result)
