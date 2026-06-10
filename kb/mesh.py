@@ -5,10 +5,14 @@ from collections import deque
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from hashlib import sha1
+import logging
 from typing import Any
 
 from kb.config import CitadelConfig
 from kb.models import FeedbackResult, IngestResult
+from kb.security_scan import redact_secrets
+
+logger = logging.getLogger(__name__)
 
 
 def utc_now() -> str:
@@ -305,10 +309,26 @@ class MeshState:
                 },
             )
 
+    async def record_conflict(self, config: CitadelConfig, *, conflict: dict[str, Any]) -> None:
+        """Surface a detected Knowledge Conflict in the activity stream."""
+        async with self._lock:
+            self._ensure_base_graph(config)
+            await self._record_event(
+                "conflict",
+                "Knowledge conflict detected",
+                {
+                    "conflict_id": conflict.get("id"),
+                    "kind": conflict.get("kind"),
+                    "status": conflict.get("status"),
+                    "summary": str(conflict.get("summary") or "")[:280],
+                },
+            )
+
     async def record_error(self, config: CitadelConfig, *, operation: str, error: str) -> None:
         async with self._lock:
             self._ensure_base_graph(config)
             self.errors += 1
+            logger.error("Mesh recorded %s failure: %s", operation, redact_secrets(error[:280]))
             await self._record_event(
                 "error",
                 "Operation failed",

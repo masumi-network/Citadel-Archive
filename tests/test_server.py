@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+from pathlib import Path
+import tempfile
 from typing import Any
 
 from fastapi.testclient import TestClient
 
 from kb.access import AccessStore
 from kb.config import CitadelConfig
+from kb.conflicts import KnowledgeConflictStore
+from kb.knowledge_mesh import KnowledgeMesh
 from kb.mesh import MeshState
 from kb.models import FeedbackResult, IngestResult
 from kb.obsidian_sync import ObsidianSyncStore
@@ -163,6 +167,10 @@ def authed_client(access_key: str = "test-admin") -> TestClient:
     app.state.mesh = MeshState()
     app.state.github_syncer = FakeGitHubSyncer()
     app.state.learning_agent = FakeLearningAgent()
+    # Keep knowledge-conflict state out of the repo-local .citadel directory.
+    app.state.conflict_store = KnowledgeConflictStore(
+        Path(tempfile.mkdtemp()) / "conflicts.json"
+    )
     client = TestClient(app, base_url="https://testserver")
     response = client.post("/admin/session", json={"access_key": access_key})
     assert response.status_code == 200
@@ -853,6 +861,7 @@ def test_obsidian_vault_sync_registers_pushes_pulls_and_lists_sources(tmp_path: 
 def test_obsidian_vault_sync_detects_and_resolves_conflicts(tmp_path: Any) -> None:
     app.state.access_store = AccessStore(tmp_path / "access.json")
     app.state.obsidian_sync = ObsidianSyncStore(tmp_path / "obsidian.json")
+    app.state.conflict_store = KnowledgeConflictStore(tmp_path / "conflicts.json")
     client = authed_client("test-writer")
     vault_id = client.post("/api/obsidian/vaults", json={"vault_name": "Team Vault"}).json()[
         "vault"
@@ -919,6 +928,38 @@ def test_access_tokens_are_hashed_and_revocable(tmp_path: Any) -> None:
         json={"access_key": token},
     )
     assert rejected.status_code == 401
+
+
+def test_expired_bearer_tokens_are_rejected_with_audit_event(tmp_path: Any) -> None:
+    app.state.access_store = AccessStore(tmp_path / "access.json")
+    admin = authed_client()
+    created = admin.post(
+        "/api/access/tokens",
+        json={
+            "name": "short-lived",
+            "role": "reader",
+            "kind": "service_account",
+            "expires_at": "2020-01-01T00:00:00+00:00",
+        },
+    )
+    token = created.json()["token"]
+    token_id = created.json()["api_token"]["id"]
+
+    rejected = TestClient(app, base_url="https://testserver").get(
+        "/api/session",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert rejected.status_code == 401
+
+    audit = admin.get("/api/audit?view=failures")
+    assert audit.status_code == 200
+    rejections = [
+        event
+        for event in audit.json()["audit_events"]
+        if event["action"] == "access.token.rejected"
+    ]
+    assert rejections[0]["detail"]["reason"] == "expired"
+    assert rejections[0]["detail"]["token_id"] == token_id
 
 
 class EmptyCitadel(FakeCitadel):
@@ -1031,3 +1072,146 @@ def test_github_digest_search_hit_drills_down_to_document(tmp_path: Any) -> None
     assert document.status_code == 200
     assert document.json()["document"]["title"] == hit["title"]
     assert "teach the archive about commits" in document.json()["document"]["body"]
+
+
+def test_knowledge_conflict_listing_and_resolution_are_role_gated(tmp_path: Any) -> None:
+    app.state.access_store = AccessStore(tmp_path / "access.json")
+    app.state.obsidian_sync = ObsidianSyncStore(tmp_path / "obsidian.json")
+    writer = authed_client("test-writer")
+    app.state.conflict_store = KnowledgeConflictStore(tmp_path / "conflicts.json")
+    vault_id = writer.post("/api/obsidian/vaults", json={"vault_name": "Team Vault"}).json()[
+        "vault"
+    ]["id"]
+    writer.post(
+        "/api/obsidian/sync/push",
+        json={
+            "vault_id": vault_id,
+            "documents": [{"path": "Team/Roadmap.md", "content": "Server copy."}],
+        },
+    )
+    writer.post(
+        "/api/obsidian/sync/push",
+        json={
+            "vault_id": vault_id,
+            "documents": [
+                {"path": "Team/Roadmap.md", "content": "Stale local edit.", "base_rev": 0}
+            ],
+        },
+    )
+
+    listed = writer.get("/api/conflicts?status=open")
+    assert listed.status_code == 200
+    conflicts = listed.json()["conflicts"]
+    assert listed.json()["open_count"] == 1
+    assert conflicts[0]["kind"] == "obsidian_push"
+    assert conflicts[0]["side_a"]["excerpt"] == "Stale local edit."
+    assert conflicts[0]["side_b"]["excerpt"] == "Server copy."
+    conflict_id = conflicts[0]["id"]
+
+    mesh = writer.get("/api/mesh")
+    conflict_events = [
+        event for event in mesh.json()["events"] if event["type"] == "conflict"
+    ]
+    assert conflict_events[0]["details"]["conflict_id"] == conflict_id
+
+    reader_store = app.state.conflict_store
+    reader = authed_client("test-reader")
+    app.state.conflict_store = reader_store
+    reader_list = reader.get("/api/conflicts")
+    reader_resolve = reader.post(
+        f"/api/conflicts/{conflict_id}/resolve",
+        json={"resolution_note": "reader cannot resolve"},
+    )
+    assert reader_list.status_code == 200
+    assert reader_resolve.status_code == 403
+
+    writer_store = app.state.conflict_store
+    writer = authed_client("test-writer")
+    app.state.conflict_store = writer_store
+    resolved = writer.post(
+        f"/api/conflicts/{conflict_id}/resolve",
+        json={"resolution_note": "Kept the newer server revision."},
+    )
+    assert resolved.status_code == 200
+    assert resolved.json()["conflict"]["status"] == "resolved"
+    assert resolved.json()["conflict"]["resolution_note"] == "Kept the newer server revision."
+    assert writer.get("/api/conflicts?status=open").json()["conflicts"] == []
+
+    invalid_status = writer.get("/api/conflicts?status=bogus")
+    missing = writer.post(
+        "/api/conflicts/kconflict_missing/resolve",
+        json={"resolution_note": "nothing here"},
+    )
+    assert invalid_status.status_code == 422
+    assert missing.status_code == 404
+
+    actions = [event["action"] for event in app.state.access_store.snapshot()["audit_events"]]
+    assert "conflicts.list" in actions
+    assert "conflicts.resolve" in actions
+
+
+def test_knowledge_conflicts_require_authentication() -> None:
+    client = TestClient(app, base_url="https://testserver")
+
+    assert client.get("/api/conflicts").status_code == 401
+    assert (
+        client.post(
+            "/api/conflicts/kconflict_x/resolve",
+            json={"resolution_note": "no"},
+        ).status_code
+        == 401
+    )
+
+
+def test_mesh_graph_returns_fallback_without_cognee_graph_access() -> None:
+    client = authed_client("test-reader")
+    app.state.knowledge_mesh = None  # force rebuild from FakeCitadel (no gateway)
+
+    response = client.get("/api/mesh/graph")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["ok"] is True
+    assert body["fallback"] is True
+    assert body["fallback_reason"] == "graph_access_unavailable"
+    assert body["nodes"] == []
+    assert body["edges"] == []
+    assert body["limit"] == 200
+
+
+def test_mesh_graph_serves_real_graph_through_injected_gateway() -> None:
+    class FakeGraphGateway:
+        async def graph_data(self) -> tuple[list[Any], list[Any]]:
+            return (
+                [
+                    ("n1", {"name": "Citadel", "type": "Entity"}),
+                    ("n2", {"name": "Cognee", "type": "Tool"}),
+                    ("n3", {"name": "Kuzu", "type": "Tool"}),
+                ],
+                [("n1", "n2", "uses", {}), ("n2", "n3", "embeds", {})],
+            )
+
+    client = authed_client("test-reader")
+    app.state.knowledge_mesh = KnowledgeMesh(FakeGraphGateway())
+    try:
+        full = client.get("/api/mesh/graph")
+        capped = client.get("/api/mesh/graph?limit=2")
+        invalid = client.get("/api/mesh/graph?limit=0")
+        unauthenticated = TestClient(app, base_url="https://testserver").get("/api/mesh/graph")
+    finally:
+        app.state.knowledge_mesh = None
+
+    assert full.status_code == 200
+    assert full.json()["fallback"] is False
+    assert [node["id"] for node in full.json()["nodes"]] == ["n1", "n2", "n3"]
+    assert {
+        "source": "n2",
+        "target": "n3",
+        "relationship": "embeds",
+    } in full.json()["edges"]
+    assert capped.status_code == 200
+    assert capped.json()["truncated"] is True
+    assert len(capped.json()["nodes"]) == 2
+    assert capped.json()["limit"] == 2
+    assert invalid.status_code == 422
+    assert unauthenticated.status_code == 401

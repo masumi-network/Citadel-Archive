@@ -66,6 +66,17 @@ def _obsidian_sync_state_path(value: str | None) -> str:
     return str(Path(root) / "obsidian_sync_state.json")
 
 
+def _conflicts_store_path(value: str | None) -> str:
+    if value:
+        return value
+    root = (
+        os.getenv("CITADEL_STATE_DIRECTORY")
+        or os.getenv("SYSTEM_ROOT_DIRECTORY")
+        or ("/data/.citadel" if Path("/data").exists() else ".citadel")
+    )
+    return str(Path(root) / "conflicts.json")
+
+
 def _backup_mirror_root_path(value: str | None) -> str:
     if value:
         return value
@@ -86,6 +97,9 @@ class CitadelConfig:
     writer_keys: tuple[str, ...] = field(default_factory=tuple)
     access_store_path: str = ".citadel/access.json"
     obsidian_sync_state_path: str = ".citadel/obsidian_sync_state.json"
+    conflicts_store_path: str = ".citadel/conflicts.json"
+    conflicts_max_records: int = 500
+    mesh_graph_max_nodes: int = 200
     audit_max_events: int = 1000
     default_dataset: str = "personal"
     search_default_dataset: str | None = None
@@ -153,6 +167,17 @@ class CitadelConfig:
             access_store_path=_access_store_path(os.getenv("CITADEL_ACCESS_STORE_PATH")),
             obsidian_sync_state_path=_obsidian_sync_state_path(
                 os.getenv("CITADEL_OBSIDIAN_SYNC_STATE_PATH")
+            ),
+            conflicts_store_path=_conflicts_store_path(
+                os.getenv("CITADEL_CONFLICTS_STORE_PATH")
+            ),
+            conflicts_max_records=_int(
+                os.getenv("CITADEL_CONFLICTS_MAX_RECORDS"),
+                default=500,
+            ),
+            mesh_graph_max_nodes=_int(
+                os.getenv("CITADEL_MESH_GRAPH_MAX_NODES"),
+                default=200,
             ),
             audit_max_events=_int(os.getenv("CITADEL_AUDIT_MAX_EVENTS"), default=1000),
             default_dataset=os.getenv("CITADEL_DEFAULT_DATASET", "personal"),

@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import logging
 import os
 from typing import Any, Protocol
 from urllib.parse import unquote, urlparse
+
+logger = logging.getLogger(__name__)
 
 
 class CogneeGateway(Protocol):
@@ -151,10 +154,15 @@ class CogneePublicClient:
         if run_startup_migrations is not None:
             try:
                 await run_startup_migrations()
-            except Exception:
+            except Exception as exc:
+                logger.warning(
+                    "Cognee startup migrations failed with %s; creating database and retrying",
+                    exc.__class__.__name__,
+                )
                 await self._create_cognee_database()
                 await run_startup_migrations()
         self._startup_migrations_done = True
+        logger.info("Cognee startup migrations completed")
 
     async def remember(
         self,
@@ -246,6 +254,23 @@ class CogneePublicClient:
             if self._is_no_data_error(exc):
                 return []
             raise
+
+    async def graph_data(self) -> tuple[list[Any], list[Any]]:
+        """Return raw nodes and edges from Cognee's graph engine.
+
+        Nodes arrive as ``(node_id, properties)`` tuples and edges as
+        ``(source_id, target_id, relationship_name, properties)`` tuples, per
+        ``cognee.infrastructure.databases.graph.graph_db_interface``.
+        """
+        self._prepare_cognee_environment()
+        import cognee
+
+        await self._ensure_cognee_ready(cognee)
+        from cognee.infrastructure.databases.graph import get_graph_engine
+
+        engine = await get_graph_engine()
+        nodes, edges = await engine.get_graph_data()
+        return list(nodes), list(edges)
 
     async def add_feedback(
         self,

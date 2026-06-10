@@ -4,10 +4,13 @@ from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from hashlib import sha1, sha256
 import json
+import logging
 from pathlib import Path
 from typing import Any
 
 from kb.access import AccessIdentity
+
+logger = logging.getLogger(__name__)
 
 
 def now_iso() -> str:
@@ -307,6 +310,17 @@ class ObsidianSyncStore:
             "last_push_at": now if accepted or conflicts or skipped else vault.get("last_push_at"),
         }
         self._save(data)
+        if conflicts:
+            logger.warning(
+                "Obsidian push to vault %s produced %d conflict(s)", vault_id, len(conflicts)
+            )
+        logger.info(
+            "Obsidian push to vault %s finished: %d accepted, %d skipped, %d conflicts",
+            vault_id,
+            len(accepted),
+            len(skipped),
+            len(conflicts),
+        )
         return {
             "vault_id": vault_id,
             "accepted": accepted,
@@ -407,6 +421,7 @@ class ObsidianSyncStore:
         data = self._load()
         data.setdefault("conflicts", {})[conflict_id] = updated
         self._save(data)
+        logger.info("Obsidian conflict %s resolved with %s", conflict_id, resolution)
         return updated
 
     def _load(self) -> dict[str, Any]:

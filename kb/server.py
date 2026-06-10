@@ -5,6 +5,7 @@ from contextlib import asynccontextmanager
 import hashlib
 import hmac
 import json
+import logging
 import os
 from pathlib import Path
 import re
@@ -19,8 +20,12 @@ from pydantic import BaseModel, Field
 
 from kb.access import AccessIdentity, AccessStore, ROLE_ORDER, default_scopes, hash_api_token
 from kb.backup_mirror import BackupMirror, BackupMirrorDisabled, BackupMirrorPublishError
+from kb.conflicts import KnowledgeConflictStore, obsidian_push_conflict_candidate
 from kb.github_sync import GitHubOrgSyncer
+from kb.knowledge_mesh import KnowledgeMesh
+from kb.learning import LearningProcess
 from kb.learning_agent import LearningAgent
+from kb.logging_utils import configure_logging
 from kb.mcp_server import TOOL_POLICIES, create_mcp_server
 from kb.mesh import MeshState
 from kb.models import FeedbackRequest
@@ -28,6 +33,9 @@ from kb.obsidian_sync import ObsidianSyncStore, SyncPushDocument, normalize_path
 from kb.service import Citadel
 from kb.skills import skill_catalog, skill_integrity, skill_path
 from kb.source_search import GITHUB_DOC_ID_PREFIX, github_section_document
+
+configure_logging()
+logger = logging.getLogger(__name__)
 
 # Hosted MCP: one streamable-HTTP endpoint at /mcp/, authenticated per request by
 # the caller's ctdl_ bearer token. No clone, no local Python — agents point their
@@ -221,6 +229,10 @@ class ObsidianConflictResolveBody(BaseModel):
     body: str | None = None
 
 
+class KnowledgeConflictResolveBody(BaseModel):
+    resolution_note: str = Field(min_length=1, max_length=400)
+
+
 def get_citadel() -> Citadel:
     if not hasattr(app.state, "citadel"):
         app.state.citadel = Citadel.from_env()
@@ -267,6 +279,33 @@ def get_obsidian_sync() -> ObsidianSyncStore:
         return existing
     app.state.obsidian_sync = ObsidianSyncStore(get_citadel().config.obsidian_sync_state_path)
     return app.state.obsidian_sync
+
+
+def get_conflict_store() -> KnowledgeConflictStore:
+    existing = getattr(app.state, "conflict_store", None)
+    if isinstance(existing, KnowledgeConflictStore):
+        return existing
+    config = get_citadel().config
+    app.state.conflict_store = KnowledgeConflictStore(
+        config.conflicts_store_path,
+        max_records=config.conflicts_max_records,
+    )
+    return app.state.conflict_store
+
+
+def get_learning_process() -> LearningProcess:
+    return LearningProcess(
+        get_citadel(),
+        mesh=get_mesh(),
+        conflicts=get_conflict_store(),
+    )
+
+
+def get_knowledge_mesh() -> KnowledgeMesh:
+    existing = getattr(app.state, "knowledge_mesh", None)
+    if isinstance(existing, KnowledgeMesh):
+        return existing
+    return KnowledgeMesh(getattr(get_citadel(), "cognee", None))
 
 
 def sse(event: str, data: dict[str, Any]) -> str:
@@ -375,8 +414,19 @@ def session_role(request: Request) -> str | None:
 def require_role(request: Request, minimum_role: str) -> AccessIdentity:
     identity = request_identity(request)
     if not identity:
+        logger.warning(
+            "Rejected unauthenticated request: %s %s", request.method, request.url.path
+        )
         raise HTTPException(status_code=401, detail="Access key required.")
     if ROLE_ORDER[identity.role] < ROLE_ORDER[minimum_role]:
+        logger.warning(
+            "Denied %s %s for actor %s: role %s below required %s",
+            request.method,
+            request.url.path,
+            identity.actor_id,
+            identity.role,
+            minimum_role,
+        )
         raise HTTPException(status_code=403, detail=f"{minimum_role.title()} access required.")
     return identity
 
@@ -734,6 +784,7 @@ async def create_admin_session(body: AdminSessionBody, response: Response) -> di
         raise HTTPException(status_code=422, detail="Access key is required.")
     identity_with_cookie = access_key_identity(access_key)
     if not identity_with_cookie:
+        logger.warning("Admin session login rejected: access key did not match any credential")
         raise HTTPException(status_code=401, detail="Access key was rejected.")
     identity, session_cookie = identity_with_cookie
     response.set_cookie(
@@ -970,6 +1021,72 @@ async def mesh(request: Request) -> Any:
     return jsonable_encoder(await get_mesh().snapshot(citadel.config))
 
 
+@app.get("/api/mesh/graph")
+async def mesh_graph(request: Request, limit: int | None = None) -> Any:
+    """The real Knowledge Mesh graph from Cognee (not the dashboard projection).
+
+    Never fails hard: returns an empty graph with ``fallback: true`` when
+    Cognee has no data or graph access is unavailable.
+    """
+    require_access(request, "reader", "kb:search")
+    if limit is not None and not 1 <= limit <= 1000:
+        raise HTTPException(status_code=422, detail="Graph limit must be between 1 and 1000.")
+    effective_limit = limit or get_citadel().config.mesh_graph_max_nodes
+    graph = await get_knowledge_mesh().graph(limit=effective_limit)
+    return jsonable_encoder({**graph, "limit": effective_limit})
+
+
+@app.get("/api/conflicts")
+async def list_knowledge_conflicts(request: Request, status: str | None = None) -> Any:
+    actor = require_access(request, "reader", "kb:read")
+    if status not in {None, "open", "resolved"}:
+        raise HTTPException(status_code=422, detail="Unsupported conflict status filter.")
+    store = get_conflict_store()
+    conflicts = store.list(status=status)
+    get_access_store().record_event(
+        action="conflicts.list",
+        actor=actor,
+        success=True,
+        detail={"status": status or "all", "returned": len(conflicts)},
+    )
+    return {
+        "ok": True,
+        "status": status or "all",
+        "conflicts": jsonable_encoder(conflicts),
+        "open_count": store.open_count(),
+    }
+
+
+@app.post("/api/conflicts/{conflict_id}/resolve")
+async def resolve_knowledge_conflict(
+    conflict_id: str,
+    body: KnowledgeConflictResolveBody,
+    request: Request,
+) -> Any:
+    actor = require_access(request, "writer", "kb:ingest")
+    try:
+        resolved = get_conflict_store().resolve(
+            conflict_id,
+            resolution_note=body.resolution_note,
+            resolved_by=actor.actor_id,
+        )
+    except KeyError as exc:
+        get_access_store().record_event(
+            action="conflicts.resolve",
+            actor=actor,
+            success=False,
+            detail={"conflict_id": conflict_id, "reason": "not_found"},
+        )
+        raise HTTPException(status_code=404, detail="Conflict not found.") from exc
+    get_access_store().record_event(
+        action="conflicts.resolve",
+        actor=actor,
+        success=True,
+        detail={"conflict_id": conflict_id, "kind": resolved.get("kind")},
+    )
+    return {"ok": True, "conflict": jsonable_encoder(resolved)}
+
+
 @app.get("/api/indexes")
 async def indexes(request: Request) -> Any:
     require_access(request, "reader", "kb:read")
@@ -1026,6 +1143,7 @@ async def run_github_sync(body: GitHubSyncBody, request: Request) -> Any:
     try:
         result = await get_github_syncer().run(force=body.force)
     except Exception as exc:  # pragma: no cover - depends on GitHub and runtime Cognee config.
+        logger.error("GitHub sync run failed: %s", exc.__class__.__name__)
         await mesh_state.record_error(citadel.config, operation="github_sync", error=str(exc))
         raise HTTPException(status_code=500, detail=str(exc)) from exc
     await mesh_state.record_github_sync(citadel.config, result)
@@ -1102,6 +1220,7 @@ async def push_obsidian_sync(body: ObsidianPushBody, request: Request) -> Any:
         except ValueError:
             continue
 
+    learning = get_learning_process()
     ingest_results: list[dict[str, Any]] = []
     for accepted in result["accepted"]:
         if accepted.get("deleted"):
@@ -1112,22 +1231,17 @@ async def push_obsidian_sync(body: ObsidianPushBody, request: Request) -> Any:
         document_tags = [*body.tags, *source_document.tags, "obsidian", "obsidian_vault"]
         document_dataset = source_document.dataset or body.dataset or citadel.config.default_dataset
         try:
-            ingest_result = await citadel.ingest(
+            outcome = await learning.learn(
                 source_document.content,
                 dataset=document_dataset,
                 tags=document_tags,
                 session_id=body.session_id,
+                operation="obsidian_sync",
+                detect_conflicts=False,
             )
         except Exception as exc:  # pragma: no cover - depends on runtime Cognee configuration.
-            await mesh_state.record_error(citadel.config, operation="obsidian_sync", error=str(exc))
             raise HTTPException(status_code=500, detail=str(exc)) from exc
-        await mesh_state.record_ingest(
-            citadel.config,
-            ingest_result,
-            data=source_document.content,
-            dataset=document_dataset,
-            tags=document_tags,
-        )
+        ingest_result = outcome.ingest
         ingest_results.append(
             {
                 "document_id": accepted["document_id"],
@@ -1137,6 +1251,18 @@ async def push_obsidian_sync(body: ObsidianPushBody, request: Request) -> Any:
                 "tags": list(ingest_result.tags),
             }
         )
+
+    # Keep every push conflict visible as a Knowledge Conflict (never silently
+    # overwritten) and surface detection in the activity stream.
+    conflict_store = get_conflict_store()
+    for sync_conflict in result["conflicts"]:
+        conflict_record = conflict_store.record(
+            obsidian_push_conflict_candidate(
+                sync_conflict,
+                vault_name=manifest["vault"].get("name"),
+            )
+        )
+        await mesh_state.record_conflict(citadel.config, conflict=conflict_record)
 
     await mesh_state.record_obsidian_sync(
         citadel.config,
@@ -1237,6 +1363,7 @@ async def run_backup_mirror(body: BackupMirrorRunBody, request: Request) -> Any:
         )
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except BackupMirrorPublishError as exc:
+        logger.error("Backup mirror publish failed: %s", exc.__class__.__name__)
         get_access_store().record_event(
             action="backup_mirror.run",
             actor=actor,
@@ -1276,6 +1403,7 @@ async def run_learning_agent(body: LearningAgentRunBody, request: Request) -> An
             include_digest_preview=body.include_digest_preview,
         )
     except Exception as exc:  # pragma: no cover - depends on external sources and Cognee config.
+        logger.error("Learning agent run failed: %s", exc.__class__.__name__)
         await mesh_state.record_error(citadel.config, operation="learning_agent", error=str(exc))
         get_access_store().record_event(
             action="learning_agent.run",
@@ -1439,17 +1567,17 @@ async def events(request: Request) -> StreamingResponse:
 async def ingest(body: IngestBody, request: Request) -> Any:
     actor = require_access(request, "writer", "kb:ingest")
     citadel = get_citadel()
-    mesh_state = get_mesh()
+    learning = get_learning_process()
     dataset = body.dataset or citadel.config.default_dataset
     try:
-        result = await citadel.ingest(
+        outcome = await learning.learn(
             body.data,
             dataset=body.dataset,
             tags=body.tags,
             session_id=body.session_id,
+            operation="ingest",
         )
     except Exception as exc:  # pragma: no cover - depends on runtime Cognee configuration.
-        await mesh_state.record_error(citadel.config, operation="ingest", error=str(exc))
         record_mcp_audit(
             request,
             actor=actor,
@@ -1459,13 +1587,7 @@ async def ingest(body: IngestBody, request: Request) -> Any:
         )
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
-    await mesh_state.record_ingest(
-        citadel.config,
-        result,
-        data=body.data,
-        dataset=dataset,
-        tags=body.tags,
-    )
+    result = outcome.ingest
     record_mcp_audit(
         request,
         actor=actor,
