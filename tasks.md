@@ -312,3 +312,31 @@ CREATE EXTENSION IF NOT EXISTS vector;
   - pull real vector index stats
   - show failed pipeline jobs
   - show memify/self-upgrade history
+
+## Done (2026-06-10 improvement pass)
+
+- Production hardening:
+  - structured logging with secret redaction across `kb/` (`CITADEL_LOG_LEVEL`)
+  - shared retry helper with jitter + Retry-After (`kb/retry.py`) applied to GitHub sync, backup mirror, Google Chat, digest LLM
+  - expired/revoked tokens rejected centrally with `access.token.rejected` audit events
+  - tests for security_scan, google_chat, access, mesh, obsidian_sync, learning_agent
+- Knowledge Conflicts (per CONTEXT.md):
+  - `kb/conflicts.py` store + detection (Obsidian push conflicts, ingest content-hash mismatch)
+  - `GET /api/conflicts`, `POST /api/conflicts/{id}/resolve`, mesh `conflict` events
+  - Conflicts page in dashboard with resolve flow
+- Real Knowledge Mesh:
+  - `GET /api/mesh/graph` pulls actual Cognee/Kuzu nodes + edges (Later item "pull real Cognee graph nodes" done)
+  - dashboard Activity <-> Knowledge-graph toggle
+- Architecture deepening:
+  - Learning Process isolated into `kb/learning.py`
+  - Repository Daily Update rules isolated into `kb/repository_update.py`
+- Obsidian-style dashboard redesign (dark minimal theme, sidebar, design tokens).
+- LLM-assisted learning:
+  - `kb/llm_enrichment.py` semantic chunking + summaries/tags (default model `deepseek/deepseek-v4-flash`, deterministic fallback, secret-gated)
+  - `kb/self_improve.py` bounded self-improvement pass + `POST /api/learning-agent/optimize`
+- Cron pipeline mode (`CITADEL_RUN_MODE=pipeline`): github sync -> skills refresh -> self-improve -> backup mirror, per-stage toggles.
+- Teammate/agent access:
+  - `POST /api/contribute`, `GET /api/knowledge`, MCP `citadel_contribute` tool
+  - README "For Teammates & Agents" section
+- SKILL.md + skills/ updated for the current API surface.
+- Tests: 262 passing.

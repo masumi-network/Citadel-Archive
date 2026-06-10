@@ -128,6 +128,49 @@ uv run python -m kb.mcp_server
 Mirror manifest export is available, with opt-in GitHub push to the private
 mirror repo. See [`docs/vault-backup-mirror.md`](docs/vault-backup-mirror.md).
 
+## For Teammates & Agents
+
+The two easiest ways to read and write vault knowledge.
+
+**Get a token.** Ask a vault admin to create one on the Access page (or via
+`POST /api/access/tokens`). Tokens start with `ctdl_`, are shown once, and are
+role-scoped (`reader`, `writer`, `admin`). One token per person or agent
+identity; rotate anything that lands in chat or logs.
+
+**Read** — `GET /api/knowledge` is a flat, agent-friendly alias over search:
+
+```bash
+curl -fsS -H "Authorization: Bearer $CITADEL_MCP_ACCESS_TOKEN" \
+  "$CITADEL_BASE_URL/api/knowledge?q=payment+flow&limit=5" | python3 -m json.tool
+# -> {"results": [{"text": "...", "source": "...", "score": 0.9, "tags": ["..."]}]}
+```
+
+**Contribute** — `POST /api/contribute` (writer role) routes through the
+Learning Process with conflict detection on and LLM enrichment when enabled:
+
+```bash
+curl -fsS -X POST "$CITADEL_BASE_URL/api/contribute" \
+  -H "Authorization: Bearer $CITADEL_MCP_ACCESS_TOKEN" \
+  -H "Content-Type: application/json" \
+  --data '{"title":"Decision: use deepseek-v4-flash","content":"We standardized on deepseek/deepseek-v4-flash via OpenRouter for enrichment.","tags":["decision","llm"],"source_url":"https://github.com/masumi-network/Citadel-Archive"}'
+# -> {"accepted": true, "chunks": 1, "conflict": null, ...}
+```
+
+**MCP** — agents get the same paths through the hosted MCP endpoint
+(`citadel_search` to read, `citadel_contribute` to write):
+
+```json
+{
+  "mcpServers": {
+    "citadel": {
+      "type": "http",
+      "url": "https://citadel-archive-production.up.railway.app/mcp/",
+      "headers": { "Authorization": "Bearer ${CITADEL_MCP_ACCESS_TOKEN}" }
+    }
+  }
+}
+```
+
 ## What This Adds
 
 - Pre-ingest filtering for empty, tiny, ignored, or duplicate inputs.

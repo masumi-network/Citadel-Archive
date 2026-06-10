@@ -92,6 +92,7 @@ client at the hosted `/mcp/` URL and send the token in the `Authorization` heade
 | `citadel_get_mesh` | reader | Get the current knowledge mesh snapshot |
 | `citadel_list_sources` | reader | GitHub sync state, learning status, indexes |
 | `citadel_ingest` | writer | Add durable context to the vault |
+| `citadel_contribute` | writer | Add a titled Vault Contribution (enrichment + conflict detection on) |
 | `citadel_record_feedback` | writer | Record feedback for a QA result |
 | `citadel_run_learning_agent` | admin | Run the GitHub source-learning agent |
 | `citadel_backup_mirror_status` | admin | Inspect Vault Backup Mirror manifest status |
@@ -123,18 +124,24 @@ When MCP is not available, call the HTTP API directly with `Authorization: Beare
 GET  /healthz                          # health check
 GET  /readyz                           # readiness check
 GET  /api/session                      # current role + capabilities
-GET  /api/mesh                         # knowledge mesh snapshot
+GET  /api/mesh                         # knowledge mesh snapshot (dashboard projection)
+GET  /api/mesh/graph?limit=N           # real Cognee knowledge graph (never fails hard)
 GET  /api/indexes                      # index status
 GET  /api/sources                      # source-learning status
 GET  /api/github-sync                  # GitHub sync state
 GET  /api/learning-agent               # learning-agent status
 GET  /api/backup-mirror                # mirror manifest status (admin)
+GET  /api/conflicts?status=open        # Knowledge Conflicts (visible disagreements)
 GET  /events                           # SSE event stream
+GET  /api/knowledge?q=...&limit=N      # flat, agent-friendly search alias
 POST /search   {query, dataset, ...}   # search the vault
 POST /ingest   {data, dataset, tags}   # add context
+POST /api/contribute {title, content, tags?, source_url?}  # easy write path (writer)
 POST /feedback {qa_id, score, text}    # record QA feedback
 POST /improve  {dataset, session_ids}  # run improvement (admin)
+POST /api/conflicts/{id}/resolve       # resolve a Knowledge Conflict (writer)
 POST /api/learning-agent/run           # run learning agent (admin)
+POST /api/learning-agent/optimize      # bounded self-improvement pass (admin)
 POST /api/github-sync/run              # run GitHub sync (admin)
 POST /api/backup-mirror/run            # run mirror manifest export (admin)
 POST /api/access/tokens                # create token (admin)
@@ -256,7 +263,7 @@ Summary:
 2. **Choose the role.** Reader for search-only; writer if the agent should also ingest.
 3. **Write the config.** See `docs/mcp/README.md` or `.mcp.json.example` for Claude Code, Codex, and Cursor templates.
 4. **Set `CITADEL_MCP_MAX_INGEST_BYTES`** to limit ingest payload size (default 200KB).
-5. **Gate write/admin tools.** Configure the client to require approval for `citadel_ingest`, `citadel_record_feedback`, `citadel_run_learning_agent`, `citadel_run_backup_mirror`, and `citadel_improve`.
+5. **Gate write/admin tools.** Configure the client to require approval for `citadel_ingest`, `citadel_contribute`, `citadel_record_feedback`, `citadel_run_learning_agent`, `citadel_run_backup_mirror`, and `citadel_improve`.
 6. **Verify.** After writing config, restart the client and call
    `citadel_discovery`, then `citadel_session`. If both work, try a small
    `citadel_search`.
@@ -272,10 +279,25 @@ returned successfully with a writer token.
 - **Storage**: PostgreSQL + pgvector for vectors, Kuzu for graph/mesh
 - **Hosting**: Railway (web service + cron service + Postgres + volume)
 - **Source sync**: Daily GitHub org digest → Cognee ingest → improvement cycle
+- **Scheduled pipeline**: `CITADEL_RUN_MODE=pipeline` runs GitHub org sync, skills
+  catalog refresh, an optional self-improvement pass, and backup mirror export;
+  each stage is env-toggleable and a failed stage never blocks later stages
+- **LLM enrichment**: Optional OpenRouter-backed chunking/tagging in the Learning
+  Process (`CITADEL_LLM_ENRICHMENT_ENABLED`, model `CITADEL_LLM_MODEL`, default
+  `deepseek/deepseek-v4-flash`); ingestion always falls back deterministically
+- **Self-improvement**: `POST /api/learning-agent/optimize` — bounded
+  (`CITADEL_SELF_IMPROVE_MAX_ITEMS`), additive, never deletes knowledge
+- **Dashboard**: Obsidian-style web UI (mesh graph, sources, conflicts, access,
+  audit) backed by `GET /api/mesh/graph` and the conflicts endpoints
+- **Knowledge Conflicts**: `GET /api/conflicts`, resolve via
+  `POST /api/conflicts/{id}/resolve`; disagreements stay visible, never merged
 - **Obsidian plugin**: Explicit push sync; does not silently crawl vaults
 - **Backup mirror**: Manifest-only NAS-style tracking for state file hashes
 - **MCP server**: Hosted streamable HTTP endpoint mounted into the Citadel backend
 - **Access control**: Bootstrap env keys + persistent hashed tokens + audit trail
+- **Ops env vars**: `CITADEL_LOG_LEVEL`, `CITADEL_RETRY_*` (backoff + jitter),
+  `CITADEL_CONFLICTS_*`, `CITADEL_MESH_GRAPH_MAX_NODES`, `CITADEL_PIPELINE_*`,
+  `CITADEL_LLM_ENRICHMENT_*`, `CITADEL_SELF_IMPROVE_*` — see `.env.example`
 
 ## Domain Language
 

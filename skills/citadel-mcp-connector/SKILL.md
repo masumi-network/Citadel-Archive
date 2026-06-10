@@ -162,8 +162,8 @@ Production smoke status, last verified 2026-06-02 at commit `7a4a1d9`:
 - Cite from each hit's `_citadel.provenance` and `_citadel.content_sha256`.
 - To open a hit in full → `citadel_get_document` with the result `id`, but only
   when `_citadel.retrieval.document_drilldown_available` is true.
-- **When** the user asks to remember something durable → `citadel_ingest`
-  (writer token + approval).
+- **When** the user asks to remember something durable → `citadel_contribute`
+  for titled notes or `citadel_ingest` for raw context (writer token + approval).
 - Follow the **citadel-vault** skill for read/write/admin rules.
 
 ## Tools
@@ -177,6 +177,7 @@ Production smoke status, last verified 2026-06-02 at commit `7a4a1d9`:
 | `citadel_get_mesh` | reader | Knowledge-mesh snapshot |
 | `citadel_list_sources` | reader | GitHub sync, learning-agent, index status |
 | `citadel_ingest` | writer | Add durable context |
+| `citadel_contribute` | writer | Add a titled Vault Contribution (enrichment + conflict detection) |
 | `citadel_record_feedback` | writer | Record feedback on a QA result |
 | `citadel_run_learning_agent` | admin | Run source learning |
 | `citadel_backup_mirror_status` | admin | Inspect backup mirror manifest status |
@@ -189,7 +190,7 @@ Production smoke status, last verified 2026-06-02 at commit `7a4a1d9`:
 - Do not commit tokens to git or paste them into PRs/issues.
 - Do not echo tokens in chat, logs, or tool output.
 - Prefer **reader** tokens; use writer/admin only for explicit write/ops actions.
-- Approval-gate `citadel_ingest`, `citadel_record_feedback`,
+- Approval-gate `citadel_ingest`, `citadel_contribute`, `citadel_record_feedback`,
   `citadel_run_learning_agent`, `citadel_run_backup_mirror`, and
   `citadel_improve` when the client supports per-tool approval.
 
