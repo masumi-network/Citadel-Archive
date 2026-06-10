@@ -185,7 +185,10 @@ Core API endpoints:
 
 - `GET /api/session`
 - `GET /api/mesh`
+- `GET /api/mesh/graph`
 - `GET /api/indexes`
+- `GET /api/conflicts?status=open|resolved`
+- `POST /api/conflicts/{conflict_id}/resolve`
 - `GET /api/sources`
 - `GET /api/github-sync`
 - `GET /api/learning-agent`
@@ -232,9 +235,32 @@ Pages:
 - Sources: GitHub sync, indexes, and self-improvement controls.
 - Access: role setup, teammate tokens, service-account tokens, and audit trail.
 
-The first version visualizes Citadel's wrapper-level mesh activity. Deeper
-Cognee graph introspection can be added behind the same `/api/mesh` contract
-once the production Cognee database providers are finalized.
+The first version visualizes Citadel's wrapper-level mesh activity. The real
+Cognee knowledge graph is exposed separately at `GET /api/mesh/graph`
+(reader+), which returns `{nodes, edges}` read from Cognee's graph engine with
+a configurable node cap (`CITADEL_MESH_GRAPH_MAX_NODES`, default 200, or a
+`?limit=` query parameter). When Cognee has no data or graph access is
+unavailable, the endpoint returns an empty graph with `fallback: true` instead
+of an error.
+
+## Knowledge Conflicts
+
+A Knowledge Conflict is a visible disagreement between pieces of structured
+knowledge or their supporting source snapshots. Citadel prefers the newer
+source-linked repository truth but never silently overwrites: conflicts are
+recorded in a bounded store (`CITADEL_CONFLICTS_STORE_PATH`), surfaced as
+`conflict` events in the activity stream, and stay open until resolved.
+
+Detected today (cheap, deterministic signals only):
+
+- Obsidian push conflicts (stale base revision) recorded on
+  `POST /api/obsidian/sync/push`.
+- Ingest-time title matches against the latest GitHub sync digest sections or
+  synced Obsidian notes with a differing content hash.
+
+APIs: `GET /api/conflicts?status=open|resolved` (reader+) lists conflicts;
+`POST /api/conflicts/{conflict_id}/resolve` (writer+) records a resolution
+note. Both are audited.
 
 ## Access Roles
 
