@@ -4,11 +4,9 @@ import json
 import logging
 import os
 from typing import Any
-from urllib.error import HTTPError, URLError
-from urllib.request import Request, urlopen
 
 from kb.config import CitadelConfig
-from kb.retry import run_with_retries
+from kb.llm_enrichment import default_llm_model, openrouter_api_key, openrouter_chat
 
 logger = logging.getLogger(__name__)
 
@@ -149,17 +147,15 @@ def deterministic_agent_read(packet: dict[str, Any]) -> list[str]:
 
 
 def llm_agent_read(packet: dict[str, Any]) -> list[str] | None:
-    api_key = os.getenv("OPENROUTER_API_KEY") or os.getenv("LLM_API_KEY")
-    if not api_key:
+    if not openrouter_api_key():
         return None
-    endpoint = (os.getenv("LLM_ENDPOINT") or "https://openrouter.ai/api/v1").rstrip("/")
-    model = os.getenv("CITADEL_ORG_DIGEST_LLM_MODEL") or os.getenv("LLM_MODEL") or "openrouter/free"
-    url = f"{endpoint}/chat/completions"
-    payload = {
-        "model": model,
-        "temperature": 0.2,
-        "max_tokens": 420,
-        "messages": [
+    model = (
+        os.getenv("CITADEL_ORG_DIGEST_LLM_MODEL")
+        or os.getenv("LLM_MODEL")
+        or default_llm_model()
+    )
+    message = openrouter_chat(
+        [
             {
                 "role": "system",
                 "content": (
@@ -174,36 +170,15 @@ def llm_agent_read(packet: dict[str, Any]) -> list[str] | None:
                 "content": json.dumps(packet, sort_keys=True, default=str),
             },
         ],
-    }
-    request = Request(
-        url,
-        data=json.dumps(payload).encode("utf-8"),
-        headers={
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json",
-            "Accept": "application/json",
-            "User-Agent": "citadel-organization-digest",
-        },
-        method="POST",
+        model=model,
+        operation="organization_digest.llm_agent_read",
+        max_tokens=420,
+        timeout=30,
     )
-    def fetch() -> dict[str, Any]:
-        with urlopen(request, timeout=30) as response:
-            return json.loads(response.read().decode("utf-8") or "{}")
-
-    try:
-        body = run_with_retries(fetch, operation="organization_digest.llm_agent_read")
-    except (HTTPError, URLError, TimeoutError, json.JSONDecodeError) as exc:
+    if message is None:
         logger.warning(
-            "Organization digest LLM read failed with %s; falling back to deterministic read",
-            exc.__class__.__name__,
+            "Organization digest LLM read failed; falling back to deterministic read"
         )
-        return None
-
-    choices = body.get("choices") or []
-    if not choices:
-        return None
-    message = (choices[0].get("message") or {}).get("content")
-    if not isinstance(message, str) or not message.strip():
         return None
     lines = []
     for raw_line in message.splitlines():

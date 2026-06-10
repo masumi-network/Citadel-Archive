@@ -309,6 +309,56 @@ class MeshState:
                 },
             )
 
+    async def record_enrichment(
+        self,
+        config: CitadelConfig,
+        *,
+        dataset: str,
+        chunks: int,
+        used_llm: bool,
+        reason: str,
+        model: str | None = None,
+    ) -> None:
+        """Surface an LLM enrichment pass (or its fallback) in the activity stream."""
+        async with self._lock:
+            self._ensure_base_graph(config)
+            await self._record_event(
+                "enrichment",
+                "Source material enriched",
+                {
+                    "dataset": dataset,
+                    "chunks": chunks,
+                    "used_llm": used_llm,
+                    "reason": reason,
+                    "model": model,
+                },
+            )
+
+    async def record_optimization(
+        self,
+        config: CitadelConfig,
+        *,
+        dataset: str,
+        reviewed: int,
+        optimized: int,
+        used_llm: bool,
+        dry_run: bool,
+    ) -> None:
+        """Surface a self-improvement pass in the activity stream."""
+        async with self._lock:
+            self._ensure_base_graph(config)
+            await self._record_event(
+                "optimization",
+                "Self-improvement pass completed",
+                {
+                    "dataset": dataset,
+                    "reviewed": reviewed,
+                    "optimized": optimized,
+                    "used_llm": used_llm,
+                    "dry_run": dry_run,
+                },
+            )
+
     async def record_conflict(self, config: CitadelConfig, *, conflict: dict[str, Any]) -> None:
         """Surface a detected Knowledge Conflict in the activity stream."""
         async with self._lock:

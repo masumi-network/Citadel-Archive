@@ -16,6 +16,7 @@ import logging
 from typing import Any
 
 from kb.conflicts import KnowledgeConflictStore, detect_contribution_conflict
+from kb.llm_enrichment import EnrichedChunk, EnrichmentOutcome, enrich_source_material
 from kb.mesh import MeshState
 from kb.models import IngestResult
 from kb.service import Citadel
@@ -31,6 +32,16 @@ class LearningOutcome:
     dataset: str
     improve: Any | None = None
     conflict: dict[str, Any] | None = None
+    chunk_ingests: tuple[IngestResult, ...] = ()
+    enrichment: dict[str, Any] | None = None
+
+    @property
+    def all_ingests(self) -> tuple[IngestResult, ...]:
+        return self.chunk_ingests or (self.ingest,)
+
+    @property
+    def accepted_chunks(self) -> int:
+        return sum(1 for result in self.all_ingests if result.accepted)
 
     @property
     def improved(self) -> bool:
@@ -71,55 +82,112 @@ class LearningProcess:
         run_improve: bool = False,
         detect_conflicts: bool = True,
     ) -> LearningOutcome:
-        """Filter, ingest, record mesh activity, detect conflicts, and
-        optionally run improvement for one piece of Source Material.
+        """Filter, optionally enrich/chunk, ingest, record mesh activity,
+        detect conflicts, and optionally run improvement for one piece of
+        Source Material.
 
-        On ingest failure the error is recorded to the mesh projection (when
-        attached) and re-raised for the caller to translate.
+        LLM enrichment (``CITADEL_LLM_ENRICHMENT_ENABLED``) is a best-effort
+        pre-ingest step: any failure falls back to deterministic chunking and
+        ingestion proceeds. On ingest failure the error is recorded to the
+        mesh projection (when attached) and re-raised for the caller.
         """
         target_dataset = dataset or self.config.default_dataset
-        try:
-            result = await self.citadel.ingest(
-                data,
-                dataset=dataset,
-                tags=tags or [],
-                session_id=session_id,
-            )
-        except Exception as exc:
-            if self.mesh:
-                await self.mesh.record_error(
-                    self.config, operation=operation, error=str(exc)
-                )
-            raise
+        enrichment = self._enrich(data)
+        chunk_inputs = self._chunk_inputs(data, list(tags or []), enrichment)
 
-        if self.mesh:
-            await self.mesh.record_ingest(
+        results: list[IngestResult] = []
+        for chunk_data, chunk_tags in chunk_inputs:
+            try:
+                result = await self.citadel.ingest(
+                    chunk_data,
+                    dataset=dataset,
+                    tags=chunk_tags,
+                    session_id=session_id,
+                )
+            except Exception as exc:
+                if self.mesh:
+                    await self.mesh.record_error(
+                        self.config, operation=operation, error=str(exc)
+                    )
+                raise
+            results.append(result)
+            if self.mesh:
+                await self.mesh.record_ingest(
+                    self.config,
+                    result,
+                    data=chunk_data,
+                    dataset=target_dataset,
+                    tags=list(chunk_tags),
+                )
+
+        if enrichment is not None and self.mesh:
+            await self.mesh.record_enrichment(
                 self.config,
-                result,
-                data=data,
                 dataset=target_dataset,
-                tags=list(tags or []),
+                chunks=len(results),
+                used_llm=enrichment.used_llm,
+                reason=enrichment.reason,
+                model=enrichment.model,
             )
+
+        primary = next((result for result in results if result.accepted), results[0])
+        accepted_any = any(result.accepted for result in results)
 
         conflict = None
-        if detect_conflicts and result.accepted:
+        if detect_conflicts and accepted_any:
             conflict = self._detect_conflict(data)
             if conflict and self.mesh:
                 await self.mesh.record_conflict(self.config, conflict=conflict)
 
         improve_result = None
-        if run_improve and result.accepted:
+        if run_improve and accepted_any:
             improve_result = await self._improve(
                 dataset=target_dataset,
                 session_ids=[session_id] if session_id else None,
             )
 
         return LearningOutcome(
-            ingest=result,
+            ingest=primary,
             dataset=target_dataset,
             improve=improve_result,
             conflict=conflict,
+            chunk_ingests=tuple(results) if len(results) > 1 else (),
+            enrichment=None
+            if enrichment is None
+            else {
+                "used_llm": enrichment.used_llm,
+                "reason": enrichment.reason,
+                "chunks": len(results),
+                "model": enrichment.model,
+            },
         )
+
+    def _enrich(self, data: str) -> EnrichmentOutcome | None:
+        """Best-effort enrichment; ``None`` means plain single-piece ingestion."""
+        try:
+            outcome = enrich_source_material(data)
+        except Exception as exc:  # pragma: no cover - enrichment must never break ingestion.
+            logger.warning(
+                "LLM enrichment failed with %s; ingesting without enrichment",
+                exc.__class__.__name__,
+            )
+            return None
+        if outcome.reason in {"disabled", "below_threshold"} and not outcome.chunked:
+            return None
+        return outcome
+
+    @staticmethod
+    def _chunk_inputs(
+        data: str,
+        tags: list[str],
+        enrichment: EnrichmentOutcome | None,
+    ) -> list[tuple[str, list[str]]]:
+        if enrichment is None or not enrichment.chunks:
+            return [(data, tags)]
+        inputs: list[tuple[str, list[str]]] = []
+        for chunk in enrichment.chunks:
+            inputs.append((_chunk_text(chunk), [*tags, *chunk.tags]))
+        return inputs
 
     async def record_failure(self, *, operation: str, error: str) -> None:
         """Record a learning-related failure on the mesh projection."""
@@ -155,3 +223,10 @@ class LearningProcess:
                 exc.__class__.__name__,
             )
             return {"ok": False, "error": str(exc)}
+
+
+def _chunk_text(chunk: EnrichedChunk) -> str:
+    """Merge the one-line summary into the chunk body so it is searchable."""
+    if chunk.summary:
+        return f"Summary: {chunk.summary}\n\n{chunk.text}"
+    return chunk.text
