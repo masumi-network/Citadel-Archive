@@ -992,6 +992,183 @@ pre {
   border-left: 2px solid var(--info);
 }
 
+.timeline-stats {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.timeline-stat {
+  min-height: 64px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-raised);
+}
+
+.timeline-stat span {
+  display: block;
+  color: var(--quiet);
+  font-size: 11px;
+  text-transform: uppercase;
+}
+
+.timeline-stat strong {
+  display: block;
+  margin-top: 4px;
+  overflow: hidden;
+  font-family: var(--mono);
+  font-size: 16px;
+  font-weight: 650;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.activity-workspace {
+  display: grid;
+  grid-template-columns: minmax(380px, 1fr) minmax(320px, 420px);
+  gap: 14px;
+  align-items: start;
+}
+
+.timeline-window,
+.event-inspector-window {
+  min-height: 540px;
+  padding: 14px;
+}
+
+.timeline-list {
+  max-height: 680px;
+  margin-top: 12px;
+  padding-left: 12px;
+  border-left: 1px solid var(--border);
+}
+
+.timeline-event {
+  position: relative;
+  list-style: none;
+}
+
+.timeline-event-button {
+  display: grid;
+  position: relative;
+  width: 100%;
+  min-height: 76px;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: start;
+  padding-left: 16px;
+  color: var(--text);
+  cursor: pointer;
+  text-align: left;
+  transition: background-color var(--speed) ease-out, border-color var(--speed) ease-out;
+}
+
+.timeline-event-button > .status-chip {
+  max-width: 104px;
+  white-space: nowrap;
+}
+
+.timeline-event-button:hover,
+.timeline-event-button:focus-visible,
+.timeline-event-button.is-selected {
+  border-color: var(--primary-border);
+  background: var(--surface-hover);
+}
+
+.timeline-event-main {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.timeline-dot {
+  position: absolute;
+  top: 18px;
+  left: -18px;
+  width: 11px;
+  height: 11px;
+  border: 2px solid var(--surface);
+  border-radius: 50%;
+  background: var(--info);
+}
+
+.timeline-dot.status-error {
+  background: var(--danger);
+}
+
+.timeline-dot.status-standby {
+  background: var(--warning);
+}
+
+.timeline-dot.status-enabled {
+  background: var(--success);
+}
+
+.event-inspector {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-top: 12px;
+}
+
+.inspector-summary {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--border);
+}
+
+.inspector-summary strong {
+  font-size: 16px;
+  font-weight: 650;
+}
+
+.inspector-summary p,
+.inspector-section p {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.inspector-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin: 0;
+}
+
+.inspector-grid div,
+.inspector-section {
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-raised);
+}
+
+.inspector-grid dt,
+.inspector-section h4 {
+  margin: 0 0 4px;
+  color: var(--quiet);
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+}
+
+.inspector-grid dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 12px;
+}
+
+.inspector-section p {
+  overflow-wrap: anywhere;
+}
+
 .empty-event p,
 .empty-state p {
   margin-top: 2px;
@@ -1857,6 +2034,7 @@ textarea[aria-invalid="true"] {
   .knowledge-grid,
   .agents-grid,
   .audit-grid,
+  .activity-workspace,
   .settings-grid,
   .access-grid {
     grid-template-columns: 1fr;
@@ -1910,6 +2088,7 @@ textarea[aria-invalid="true"] {
   }
 
   .stats,
+  .timeline-stats,
   .field-grid,
   .field-grid.compact,
   .result-grid,
@@ -1963,6 +2142,19 @@ textarea[aria-invalid="true"] {
 
   .conflict-resolve {
     flex-direction: column;
+  }
+
+  .timeline-event-button {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .timeline-event-button > .status-chip {
+    width: fit-content;
+    max-width: 100%;
+  }
+
+  .inspector-grid {
+    grid-template-columns: 1fr;
   }
 
   .conflict-resolve button {

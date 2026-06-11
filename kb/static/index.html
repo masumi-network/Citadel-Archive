@@ -1120,13 +1120,55 @@ args = [
             <div class="page-heading">
               <div>
                 <p class="eyebrow">Activity</p>
-                <h2 id="eventsTitle">Vault Activity</h2>
+                <h2 id="eventsTitle">Live Knowledge Timeline</h2>
               </div>
               <span id="eventCount" class="status-chip">0</span>
             </div>
-            <section class="window event-window">
-              <ol id="eventList" class="event-list" aria-live="polite"></ol>
-            </section>
+            <div id="timelineStats" class="timeline-stats" aria-label="Knowledge timeline stats">
+              <div class="timeline-stat">
+                <span>Indexed chunks</span>
+                <strong data-timeline-stat="indexed">0</strong>
+              </div>
+              <div class="timeline-stat">
+                <span>Pending chunks</span>
+                <strong data-timeline-stat="pending">0</strong>
+              </div>
+              <div class="timeline-stat">
+                <span>Failed chunks</span>
+                <strong data-timeline-stat="failed">0</strong>
+              </div>
+              <div class="timeline-stat">
+                <span>Last indexed</span>
+                <strong data-timeline-stat="lastIndexed">waiting</strong>
+              </div>
+            </div>
+            <div class="activity-workspace">
+              <section class="window event-window timeline-window">
+                <div class="window-titlebar">
+                  <div>
+                    <p class="panel-kicker">Timeline</p>
+                    <h3>Knowledge events</h3>
+                  </div>
+                  <span id="timelineFreshness" class="status-chip status-standby">Waiting</span>
+                </div>
+                <ol id="eventList" class="event-list timeline-list" aria-live="polite"></ol>
+              </section>
+              <section class="window event-inspector-window" aria-labelledby="eventInspectorTitle">
+                <div class="window-titlebar">
+                  <div>
+                    <p class="panel-kicker">Inspector</p>
+                    <h3 id="eventInspectorTitle">Event detail</h3>
+                  </div>
+                  <span class="status-chip status-standby">Graph focus</span>
+                </div>
+                <div id="eventInspector" class="event-inspector">
+                  <div class="empty-state compact-empty">
+                    <strong>No event selected</strong>
+                    <p>New knowledge activity will appear here.</p>
+                  </div>
+                </div>
+              </section>
+            </div>
           </section>
 
           <section class="page" data-page="locked" hidden>

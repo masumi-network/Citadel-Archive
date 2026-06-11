@@ -5,6 +5,7 @@ const state = {
   nodes: new Map(),
   edges: [],
   selectedId: null,
+  selectedEventId: null,
   paused: false,
   eventSource: null,
   role: null,
@@ -32,6 +33,14 @@ const selectedNode = document.getElementById("selectedNode");
 const indexList = document.getElementById("indexList");
 const eventList = document.getElementById("eventList");
 const eventCount = document.getElementById("eventCount");
+const eventInspector = document.getElementById("eventInspector");
+const timelineFreshness = document.getElementById("timelineFreshness");
+const timelineStatValues = {
+  indexed: document.querySelector('[data-timeline-stat="indexed"]'),
+  pending: document.querySelector('[data-timeline-stat="pending"]'),
+  failed: document.querySelector('[data-timeline-stat="failed"]'),
+  lastIndexed: document.querySelector('[data-timeline-stat="lastIndexed"]'),
+};
 const upgradeStatus = document.getElementById("upgradeStatus");
 const meshAlert = document.getElementById("meshAlert");
 const meshAlertText = document.getElementById("meshAlertText");
@@ -388,6 +397,8 @@ function renderSnapshot(snapshot) {
   renderDashboardIndexes(snapshot.indexes);
   renderDashboardRecentEvent(snapshot.events);
   renderDashboardOpenIssue(snapshot);
+  renderTimelineStats(snapshot);
+  renderTimeline(snapshot);
 
   indexList.innerHTML = "";
   if (!snapshot.indexes.length) {
@@ -407,27 +418,202 @@ function renderSnapshot(snapshot) {
     });
   }
 
-  eventList.innerHTML = "";
-  snapshot.events.slice(0, 28).forEach((event) => {
-    const item = document.createElement("li");
-    item.className = "event-item";
-    item.innerHTML = `
-      <div class="event-row">
-        <span class="event-type">${escapeHtml(event.type)}</span>
-        <time class="event-time">${escapeHtml(formatDate(event.created_at))}</time>
-      </div>
-      <div class="event-message">${escapeHtml(event.message)}</div>
-      <div class="event-details">${escapeHtml(formatDetails(event.details))}</div>
-    `;
-    eventList.append(item);
-  });
+}
 
-  if (!snapshot.events.length) {
-    const empty = document.createElement("li");
-    empty.className = "event-item empty-event";
-    empty.innerHTML = "<strong>No events yet</strong><p>Run a sync or save a vault note.</p>";
-    eventList.append(empty);
+function renderTimelineStats(snapshot) {
+  const stats = snapshot.stats || {};
+  const events = snapshot.events || [];
+  if (eventCount) eventCount.textContent = String(events.length);
+  if (timelineStatValues.indexed) {
+    timelineStatValues.indexed.textContent = String(stats.indexed_chunks || 0);
   }
+  if (timelineStatValues.pending) {
+    timelineStatValues.pending.textContent = String(stats.pending_chunks || 0);
+  }
+  if (timelineStatValues.failed) {
+    timelineStatValues.failed.textContent = String(stats.failed_chunks || 0);
+  }
+  if (timelineStatValues.lastIndexed) {
+    timelineStatValues.lastIndexed.textContent = stats.last_indexed_at
+      ? formatDate(stats.last_indexed_at)
+      : "waiting";
+  }
+  if (timelineFreshness) {
+    const failed = Number(stats.failed_chunks || 0) + Number(stats.errors || 0);
+    timelineFreshness.textContent = failed ? "Review" : events.length ? "Live" : "Waiting";
+    timelineFreshness.className = `status-chip ${failed ? "status-error" : events.length ? "status-enabled" : "status-standby"}`;
+  }
+}
+
+function renderTimeline(snapshot) {
+  if (!eventList) return;
+  const events = snapshot.events || [];
+  const selectedExists = events.some((event) => event.id === state.selectedEventId);
+  if (!selectedExists) {
+    state.selectedEventId = events[0]?.id || null;
+  }
+
+  eventList.innerHTML = "";
+  if (!events.length) {
+    eventList.append(emptyListItem("No events yet", "Run a sync or save a vault note."));
+    renderEventInspector(null);
+    return;
+  }
+
+  events.slice(0, 40).forEach((event) => {
+    eventList.append(timelineEventItem(event));
+  });
+  renderEventInspector(events.find((event) => event.id === state.selectedEventId) || events[0]);
+}
+
+function timelineEventItem(event) {
+  const item = document.createElement("li");
+  item.className = "timeline-event";
+  const timeline = timelineEnvelope(event);
+  const selected = event.id === state.selectedEventId;
+  const statusClass = timelineStatusClass(event, timeline);
+  const metrics = formatMetrics(timeline.metrics);
+  const meta = [timeline.dataset, timeline.source, metrics].filter(Boolean).join(" - ");
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = `event-item timeline-event-button${selected ? " is-selected" : ""}`;
+  button.setAttribute("aria-pressed", selected ? "true" : "false");
+  button.innerHTML = `
+    <span class="timeline-dot ${statusClass}" aria-hidden="true"></span>
+    <span class="timeline-event-main">
+      <span class="event-row">
+        <span class="event-type">${escapeHtml(humanizeToken(timeline.kind))}</span>
+        <time class="event-time">${escapeHtml(formatDate(event.created_at))}</time>
+      </span>
+      <span class="event-message">${escapeHtml(event.message || humanizeToken(event.type))}</span>
+      <span class="event-details">${escapeHtml(meta || formatDetails(event.details || {}))}</span>
+    </span>
+    <span class="status-chip ${statusClass}">${escapeHtml(timeline.status || event.type)}</span>
+  `;
+  button.addEventListener("click", () => selectTimelineEvent(event));
+  item.append(button);
+  return item;
+}
+
+function selectTimelineEvent(event) {
+  state.selectedEventId = event.id;
+  focusGraphForEvent(event);
+  if (state.snapshot) {
+    renderTimeline(state.snapshot);
+  }
+}
+
+function renderEventInspector(event) {
+  if (!eventInspector) return;
+  if (!event) {
+    eventInspector.innerHTML = `
+      <div class="empty-state compact-empty">
+        <strong>No event selected</strong>
+        <p>New knowledge activity will appear here.</p>
+      </div>
+    `;
+    return;
+  }
+
+  const timeline = timelineEnvelope(event);
+  const details = event.details || {};
+  const relatedNode = relatedNodeForEvent(event);
+  const detailText = formatDetails(details) || "none";
+  const metricText = formatMetrics(timeline.metrics) || "none";
+  eventInspector.innerHTML = `
+    <div class="inspector-summary">
+      <span class="status-chip ${timelineStatusClass(event, timeline)}">${escapeHtml(timeline.status || event.type)}</span>
+      <strong>${escapeHtml(event.message || humanizeToken(event.type))}</strong>
+      <p>${escapeHtml(humanizeToken(timeline.kind))} - ${escapeHtml(formatDate(event.created_at))}</p>
+    </div>
+    <dl class="inspector-grid">
+      <div><dt>Dataset</dt><dd>${escapeHtml(timeline.dataset || "unknown")}</dd></div>
+      <div><dt>Source</dt><dd>${escapeHtml(timeline.source || "runtime")}</dd></div>
+      <div><dt>Event id</dt><dd>${escapeHtml(String(event.id))}</dd></div>
+      <div><dt>Metrics</dt><dd>${escapeHtml(metricText)}</dd></div>
+    </dl>
+    <div class="inspector-section">
+      <h4>Graph focus</h4>
+      <p>${escapeHtml(relatedNode ? `${relatedNode.label} - ${relatedNode.type}` : "No graph node matched")}</p>
+    </div>
+    <div class="inspector-section">
+      <h4>Details</h4>
+      <p>${escapeHtml(detailText)}</p>
+    </div>
+  `;
+}
+
+function timelineEnvelope(event) {
+  if (event.timeline) return event.timeline;
+  const details = event.details || {};
+  return {
+    kind: event.type || "event",
+    status: event.type === "error" ? "failed" : details.status || "recorded",
+    dataset: details.dataset || details.org || details.vault_id || null,
+    source: details.source || details.operation || "runtime",
+    metrics: {},
+  };
+}
+
+function timelineStatusClass(event, timeline = timelineEnvelope(event)) {
+  const status = String(timeline.status || event.type || "").toLowerCase();
+  if (event.type === "error" || status === "failed") return "status-error";
+  if (["pending", "detected", "rejected"].includes(status)) return "status-standby";
+  return "status-enabled";
+}
+
+function focusGraphForEvent(event) {
+  const node = relatedNodeForEvent(event);
+  if (node) {
+    selectNode(node);
+  }
+  return node;
+}
+
+function relatedNodeForEvent(event) {
+  const details = event.details || {};
+  const timeline = timelineEnvelope(event);
+  const dataset = timeline.dataset || details.dataset;
+  if (dataset) {
+    const datasetNode = findGraphNode((node) => {
+      return node.type === "dataset" && (node.metadata?.dataset === dataset || node.label === dataset);
+    });
+    if (datasetNode) return datasetNode;
+  }
+  if (details.vault_id) {
+    const vaultNode = findGraphNode((node) => node.metadata?.vault_id === details.vault_id);
+    if (vaultNode) return vaultNode;
+  }
+  if (details.org) {
+    const org = String(details.org).toLowerCase();
+    const sourceNode = findGraphNode((node) => {
+      const label = String(node.label || "").toLowerCase();
+      const url = String(node.metadata?.url || "").toLowerCase();
+      return node.type === "source" && (label.includes(org) || url.includes(org));
+    });
+    if (sourceNode) return sourceNode;
+  }
+  return null;
+}
+
+function findGraphNode(predicate) {
+  for (const node of state.nodes.values()) {
+    if (predicate(node)) return node;
+  }
+  return null;
+}
+
+function formatMetrics(metrics = {}) {
+  return Object.entries(metrics)
+    .filter(([, value]) => value !== null && value !== undefined)
+    .map(([key, value]) => `${humanizeToken(key)}: ${value}`)
+    .join(" | ");
+}
+
+function humanizeToken(value) {
+  return String(value || "")
+    .replace(/[_-]+/g, " ")
+    .replace(/\b\w/g, (letter) => letter.toUpperCase());
 }
 
 function renderDashboardIndexes(indexes = []) {
