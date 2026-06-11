@@ -95,6 +95,7 @@ const conflictFilterButtons = Array.from(document.querySelectorAll("[data-confli
 const graphModeButtons = Array.from(document.querySelectorAll("[data-graph-mode]"));
 const realGraphEmpty = document.getElementById("realGraphEmpty");
 const toastStack = document.getElementById("toastStack");
+const searchResultStatus = document.getElementById("searchResultStatus");
 const pageButtons = Array.from(document.querySelectorAll("[data-page-target]"));
 const pages = Array.from(document.querySelectorAll("[data-page]"));
 const roleOrder = { reader: 1, writer: 2, admin: 3 };
@@ -270,7 +271,7 @@ async function loadSession() {
 function initialPage() {
   const hash = window.location.hash.replace("#", "");
   if (pages.some((page) => page.dataset.page === hash)) return hash;
-  return state.role === "reader" ? "search" : "overview";
+  return state.role === "admin" ? "overview" : "search";
 }
 
 function setPage(name) {
@@ -570,6 +571,68 @@ function emptyState(title, body) {
   return item;
 }
 
+function setSearchStatus(label, statusClass = "") {
+  if (!searchResultStatus) return;
+  searchResultStatus.textContent = label;
+  searchResultStatus.className = `status-chip ${statusClass}`.trim();
+}
+
+function searchLoadingState() {
+  const fragment = document.createDocumentFragment();
+  for (let index = 0; index < 3; index += 1) {
+    const item = document.createElement("div");
+    item.className = "result-item result-skeleton";
+    item.innerHTML = `
+      <div class="skeleton-line short"></div>
+      <div class="skeleton-line"></div>
+      <div class="skeleton-line medium"></div>
+      <div class="skeleton-grid">
+        <span></span><span></span><span></span>
+      </div>
+    `;
+    fragment.append(item);
+  }
+  return fragment;
+}
+
+function searchErrorState(message) {
+  const item = document.createElement("div");
+  item.className = "empty-state issue-card search-error-state";
+  item.innerHTML = `
+    <strong>Search failed</strong>
+    <p>${escapeHtml(message || "The vault could not complete this search.")}</p>
+    <button class="secondary-button compact-button" type="button" data-search-retry>Retry</button>
+  `;
+  return item;
+}
+
+function searchEmptyState(response = {}) {
+  const item = emptyState(
+    "No source-linked results",
+    response.note || "Try a broader query, choose a dataset, or add source material."
+  );
+  if (Array.isArray(response.known_datasets) && response.known_datasets.length) {
+    const datasets = document.createElement("p");
+    datasets.className = "known-datasets";
+    datasets.textContent = `Known datasets: ${response.known_datasets.join(", ")}`;
+    item.append(datasets);
+  }
+  const actions = document.createElement("div");
+  actions.className = "empty-actions";
+  actions.innerHTML = `
+    <button class="secondary-button compact-button" data-page-target="sources" type="button">Review sources</button>
+    <button class="secondary-button compact-button" data-page-target="ingest" data-min-role="writer" type="button">Add note</button>
+  `;
+  actions.querySelectorAll("[data-page-target]").forEach((button) => {
+    if (button.dataset.minRole && !canUse(button.dataset.minRole)) {
+      button.disabled = true;
+    }
+    button.addEventListener("click", () => setPage(button.dataset.pageTarget));
+  });
+  item.append(actions);
+  return item;
+}
+
 function emptyListItem(title, body) {
   const item = document.createElement("li");
   item.className = "event-item empty-event";
@@ -746,6 +809,83 @@ function safeDocumentEndpoint(result) {
     return endpoint;
   }
   return null;
+}
+
+function safeExternalUrl(value) {
+  if (typeof value !== "string" || !value.trim()) return null;
+  try {
+    const url = new URL(value);
+    return ["http:", "https:"].includes(url.protocol) ? url.href : null;
+  } catch {
+    return null;
+  }
+}
+
+function resultBodyText(result) {
+  const body =
+    result?.body ??
+    result?.content ??
+    result?.text ??
+    result?.summary ??
+    result?.answer ??
+    result?.result;
+  return compactText(body || result, 1200);
+}
+
+function documentPreviewMarkup(document) {
+  const metadata = document?.metadata && typeof document.metadata === "object" ? document.metadata : {};
+  const title = document?.title || document?.path || document?.id || "Source document";
+  const body = compactText(document?.body || document?.content || "No document body returned.", 1800);
+  const rows = [
+    ["Source", document?.source || document?.source_type],
+    ["Dataset", document?.dataset],
+    ["Path", document?.path || document?.normalized_path],
+    ["Revision", document?.current_rev || document?.rev],
+    ["Checked", metadata.checked_at || metadata.digest_at || document?.updated_at],
+  ].filter(([, value]) => value !== null && value !== undefined && value !== "");
+  return `
+    <div class="document-preview-card">
+      <div class="document-preview-heading">
+        <strong>${escapeHtml(title)}</strong>
+        <span class="status-chip status-enabled">Source preview</span>
+      </div>
+      ${
+        rows.length
+          ? `<dl class="result-provenance document-preview-meta">${rows
+              .map(
+                ([label, value]) => `
+                  <div>
+                    <dt>${escapeHtml(label)}</dt>
+                    <dd>${escapeHtml(value)}</dd>
+                  </div>
+                `
+              )
+              .join("")}</dl>`
+          : ""
+      }
+      <pre class="result-body document-preview-body">${escapeHtml(body)}</pre>
+    </div>
+  `;
+}
+
+async function loadDocumentPreview(button, endpoint, panel) {
+  const idleLabel = button.textContent;
+  setBusy(button, true, { idle: idleLabel, loading: "Loading source" });
+  panel.hidden = false;
+  panel.innerHTML = `<div class="empty-state compact-empty"><strong>Loading source</strong><p>Fetching the supporting document.</p></div>`;
+  try {
+    const response = await api(endpoint);
+    panel.innerHTML = documentPreviewMarkup(response.document || response);
+  } catch (error) {
+    panel.innerHTML = `
+      <div class="empty-state issue-card compact-empty">
+        <strong>Could not load source</strong>
+        <p>${escapeHtml(error.message || "Try again in a moment.")}</p>
+      </div>
+    `;
+  } finally {
+    setBusy(button, false, { idle: idleLabel, loading: "Loading source" });
+  }
 }
 
 function fillFeedbackForm(qaId, score = "1") {
@@ -2526,30 +2666,50 @@ document.getElementById("searchForm").addEventListener("submit", async (event) =
   const button = document.getElementById("searchSubmit");
   const error = document.getElementById("searchError");
   const results = document.getElementById("searchResults");
+  const queryInput = form.querySelector("[name='query']");
+  const topKInput = form.querySelector("[name='topK']");
   const query = String(formData.get("query") || "").trim();
+  const topK = Number.parseInt(String(formData.get("topK") || "10"), 10) || 10;
   error.textContent = "";
   results.innerHTML = "";
+  queryInput.setAttribute("aria-invalid", "false");
+  topKInput.setAttribute("aria-invalid", "false");
   if (!query) {
     error.textContent = "Enter a search query.";
-    form.querySelector("[name='query']").focus();
+    queryInput.setAttribute("aria-invalid", "true");
+    queryInput.focus();
+    setSearchStatus("Idle");
+    return;
+  }
+  if (topK < 1 || topK > 100) {
+    error.textContent = "Top K must be between 1 and 100.";
+    topKInput.setAttribute("aria-invalid", "true");
+    topKInput.focus();
+    setSearchStatus("Check limit", "status-error");
     return;
   }
   setBusy(button, true, { idle: "Search vault", loading: "Searching" });
-  results.append(emptyState("Searching", "Checking graph and vector memory."));
+  setSearchStatus("Searching", "status-standby");
+  results.append(searchLoadingState());
   try {
     const response = await api("/search", {
       method: "POST",
       body: JSON.stringify({
         query,
         dataset: String(formData.get("dataset") || "").trim() || null,
-        top_k: Number.parseInt(String(formData.get("topK") || "10"), 10) || 10,
+        top_k: topK,
       }),
     });
-    renderSearchResults(response.results || []);
+    const returned = response.results || [];
+    setSearchStatus(returned.length ? `${returned.length} result${returned.length === 1 ? "" : "s"}` : "No results", returned.length ? "status-enabled" : "status-standby");
+    renderSearchResults(returned, response);
     await loadMesh(false);
   } catch (err) {
     results.innerHTML = "";
-    error.textContent = err.message;
+    results.append(searchErrorState(err.message));
+    const retry = results.querySelector("[data-search-retry]");
+    if (retry) retry.addEventListener("click", () => form.requestSubmit());
+    setSearchStatus("Failed", "status-error");
   } finally {
     setBusy(button, false, { idle: "Search vault", loading: "Searching" });
   }
@@ -2629,31 +2789,36 @@ document.getElementById("upgradeButton").addEventListener("click", async (event)
   }
 });
 
-function renderSearchResults(results) {
+function renderSearchResults(results, response = {}) {
   const container = document.getElementById("searchResults");
   container.innerHTML = "";
   if (!results.length) {
-    container.append(emptyState("No results", "Try a broader query or add more source material."));
+    container.append(searchEmptyState(response));
     return;
   }
-  results.slice(0, 6).forEach((result, index) => {
-    const item = document.createElement("div");
-    item.className = "result-item";
+  results.slice(0, 8).forEach((result, index) => {
+    const item = document.createElement("article");
+    item.className = "result-item citation-card";
     const feedbackId = findFeedbackId(result);
     const envelope = resultEnvelope(result);
     const provenance = resultProvenance(result);
     const metaRows = resultMetaRows(result);
     const documentEndpoint = safeDocumentEndpoint(result);
+    const sourceUrl = safeExternalUrl(provenance.source_url);
     const drilldown = envelope.retrieval?.document_drilldown_available === true;
+    const rank = envelope.rank || index + 1;
     item.innerHTML = `
       <div class="result-header">
         <div>
-          <div class="result-meta">Result ${escapeHtml(envelope.rank || index + 1)}</div>
+          <div class="result-meta">Citation ${escapeHtml(rank)} · ${escapeHtml(envelope.dataset || result?.dataset || "default dataset")}</div>
           <strong>${escapeHtml(resultTitle(result, index))}</strong>
         </div>
-        <span class="status-chip status-standby">Untrusted context</span>
+        <div class="result-trust-chips" aria-label="Retrieval status">
+          <span class="status-chip status-standby">Untrusted context</span>
+          <span class="status-chip ${drilldown ? "status-enabled" : ""}">${drilldown ? "Document" : "Chunk"}</span>
+        </div>
       </div>
-      <p class="result-summary">${escapeHtml(resultSummary(result))}</p>
+      <p class="result-summary">${escapeHtml(resultBodyText(result))}</p>
       ${
         metaRows.length
           ? `<dl class="result-provenance">${metaRows
@@ -2669,28 +2834,32 @@ function renderSearchResults(results) {
           : ""
       }
       <div class="result-retrieval">
-        <span class="status-chip ${drilldown ? "status-enabled" : ""}">
-          ${drilldown ? "Full document available" : "Chunk only"}
-        </span>
+        <span class="citation-required">Citation required before acting</span>
         ${
-          provenance.source_url
-            ? `<span class="result-source-url">${escapeHtml(provenance.source_url)}</span>`
-            : ""
+          sourceUrl
+            ? `<a class="result-source-url" href="${escapeHtml(sourceUrl)}" target="_blank" rel="noreferrer">${escapeHtml(sourceUrl)}</a>`
+            : provenance.source_url
+              ? `<span class="result-source-url">${escapeHtml(provenance.source_url)}</span>`
+              : ""
         }
       </div>
       <details class="result-raw">
-        <summary>Raw result</summary>
+        <summary>Show raw result</summary>
         <pre class="result-body">${escapeHtml(JSON.stringify(result, null, 2))}</pre>
       </details>
     `;
     const actions = document.createElement("div");
     actions.className = "result-actions";
+    const previewPanel = document.createElement("div");
+    previewPanel.className = "result-document-preview";
+    previewPanel.hidden = true;
     if (documentEndpoint) {
-      const link = document.createElement("a");
-      link.className = "secondary-button result-document-link";
-      link.href = documentEndpoint;
-      link.textContent = "Open source";
-      actions.append(link);
+      const action = document.createElement("button");
+      action.className = "secondary-button result-document-link";
+      action.type = "button";
+      action.textContent = "Preview source";
+      action.addEventListener("click", () => loadDocumentPreview(action, documentEndpoint, previewPanel));
+      actions.append(action);
     }
     if (feedbackId) {
       const action = document.createElement("button");
@@ -2703,6 +2872,7 @@ function renderSearchResults(results) {
     if (actions.children.length) {
       item.append(actions);
     }
+    item.append(previewPanel);
     container.append(item);
   });
 }
