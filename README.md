@@ -233,6 +233,7 @@ Core API endpoints:
 - `GET /api/conflicts?status=open|resolved`
 - `POST /api/conflicts/{conflict_id}/resolve`
 - `GET /api/sources`
+- `GET /api/knowledge/events?after_id=&limit=&type=&kind=`
 - `GET /api/github-sync`
 - `GET /api/learning-agent`
 - `GET /events`
@@ -266,6 +267,8 @@ The hosted UI is served by the same FastAPI process. It includes:
 - Ingest, search, feedback, and self-upgrade controls that call the wrapper API.
 - GitHub organization sync status and a manual run control for the Masumi
   Network repository digest.
+- A Live Knowledge Timeline on the Activity page with chunk freshness counters,
+  selectable event history, event inspection, and graph focus.
 - A source-learning agent API that can scan GitHub activity, summarize commits,
   ingest source digests, and trigger Cognee improvement.
 
@@ -277,6 +280,7 @@ Pages:
 - Feedback: record feedback against Cognee QA IDs.
 - Sources: GitHub sync, indexes, and self-improvement controls.
 - Access: role setup, teammate tokens, service-account tokens, and audit trail.
+- Activity: inspect live source, chunk, retrieval, conflict, and agent events.
 
 The first version visualizes Citadel's wrapper-level mesh activity. The real
 Cognee knowledge graph is exposed separately at `GET /api/mesh/graph`

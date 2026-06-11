@@ -1,6 +1,6 @@
 # Live Knowledge Graph Timeline
 
-Citadel should make knowledge movement visible while keeping retrieval fast. The first version deepens the existing mesh activity stream into a live, indexed timeline that can drive graph focus and source inspection.
+Citadel makes knowledge movement visible while keeping retrieval fast. The current implementation deepens the existing mesh activity stream into a live, indexed timeline that can drive graph focus and source inspection.
 
 ## Product Map
 
@@ -49,13 +49,21 @@ The runtime already exposes `/events` over SSE. The timeline should use that cha
 
 This keeps the first implementation simple while leaving room for a durable queue later.
 
+## Shipped Surface
+
+- Backend: `GET /api/knowledge/events` returns a bounded, newest-first event timeline with `after_id`, `limit`, `type`, and `kind` filters.
+- Snapshot stats: `/api/mesh` includes `indexed_chunks`, `pending_chunks`, `failed_chunks`, `last_indexed_at`, and `latest_event_id`.
+- SSE: `/events` still sends live mesh updates; emitted events now include the normalized `timeline` envelope.
+- UI: the Activity page is now the Live Knowledge Timeline with freshness counters, a selectable event list, event inspector, and graph focus.
+- Operational check: the production GitHub sync cron was run manually on June 11, 2026 and ingested new source activity into the production Citadel service.
+
 ## Implementation Slices
 
-1. Roadmap doc: capture the target map and performance rules.
-2. Backend timeline API: normalized event envelopes, timeline stats, `after_id` resume, and limit/type filters.
-3. Frontend timeline: activity page layout, live timeline list, freshness counters, selected-event inspector.
-4. Graph focus: selecting a timeline event highlights related nodes in the existing mesh projection.
-5. Persistence upgrade: write recent events to a small append-only JSONL or database-backed store if process restarts become a product issue.
+1. Roadmap doc: shipped in `2ea4f46`.
+2. Backend timeline API: shipped in `e17d9af`.
+3. Frontend timeline: shipped in `b484817`.
+4. Graph focus: shipped in `b484817` for dataset/source/vault/org event neighborhoods in the existing mesh projection.
+5. Persistence upgrade: still open. Recent events are bounded in memory today; write them to JSONL or a database-backed store if restart recovery becomes required.
 
 ## Performance Rules
 
