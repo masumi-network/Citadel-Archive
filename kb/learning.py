@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import logging
-from typing import Any
+from typing import Any, Literal
 
 from kb.conflicts import KnowledgeConflictStore, detect_contribution_conflict
 from kb.llm_enrichment import EnrichedChunk, EnrichmentOutcome, enrich_source_material
@@ -81,6 +81,7 @@ class LearningProcess:
         operation: str = "ingest",
         run_improve: bool = False,
         detect_conflicts: bool = True,
+        tier: Literal["full", "light"] = "full",
     ) -> LearningOutcome:
         """Filter, optionally enrich/chunk, ingest, record mesh activity,
         detect conflicts, and optionally run improvement for one piece of
@@ -90,9 +91,16 @@ class LearningProcess:
         pre-ingest step: any failure falls back to deterministic chunking and
         ingestion proceeds. On ingest failure the error is recorded to the
         mesh projection (when attached) and re-raised for the caller.
+
+        ``tier="light"`` skips enrichment and improvement for seat-node memory.
         """
         target_dataset = dataset or self.config.default_dataset
-        enrichment = self._enrich(data)
+        if tier == "light":
+            enrichment = None
+            effective_run_improve = False
+        else:
+            enrichment = self._enrich(data)
+            effective_run_improve = run_improve
         chunk_inputs = self._chunk_inputs(data, list(tags or []), enrichment)
 
         results: list[IngestResult] = []
@@ -140,7 +148,7 @@ class LearningProcess:
                 await self.mesh.record_conflict(self.config, conflict=conflict)
 
         improve_result = None
-        if run_improve and accepted_any:
+        if effective_run_improve and accepted_any:
             improve_result = await self._improve(
                 dataset=target_dataset,
                 session_ids=[session_id] if session_id else None,

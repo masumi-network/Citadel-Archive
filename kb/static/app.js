@@ -2224,6 +2224,7 @@ function renderAccess(snapshot) {
           <strong>${escapeHtml(principal.name)}</strong>
           <p>${escapeHtml(principal.kind)} - ${escapeHtml(roleLabel(principal.role))}</p>
           <p>${escapeHtml((principal.scopes || []).join(", "))}</p>
+          ${principal.seat_slug ? `<p>Seat ${escapeHtml(principal.seat_slug)} - ${escapeHtml(principal.default_dataset || "unset")}</p>` : ""}
         </div>
         <span class="status-chip status-enabled">${escapeHtml(principal.team_id || "default")}</span>
       `;
@@ -2243,6 +2244,7 @@ function renderAccess(snapshot) {
           <strong>${escapeHtml(token.name)}</strong>
           <p>${escapeHtml(token.prefix)}... - ${escapeHtml(roleLabel(token.role))}</p>
           <p>Last used ${escapeHtml(formatDate(token.last_used_at))}</p>
+          ${token.default_dataset ? `<p>${escapeHtml(token.default_dataset)}</p>` : ""}
         </div>
       `;
       const action = document.createElement("button");
@@ -2762,6 +2764,55 @@ document.getElementById("obsidianVaultForm").addEventListener("submit", async (e
   }
 });
 
+document.getElementById("accessSeatForm").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const formData = new FormData(form);
+  const button = document.getElementById("accessSeatSubmit");
+  const error = document.getElementById("accessSeatError");
+  const status = document.getElementById("accessSeatStatus");
+  const reveal = document.getElementById("newSeatToken");
+  const name = String(formData.get("name") || "").trim();
+  const slug = String(formData.get("slug") || "").trim();
+  error.textContent = "";
+  reveal.hidden = true;
+  reveal.innerHTML = "";
+  if (!name || !slug) {
+    error.textContent = "Name and seat slug are required.";
+    return;
+  }
+  status.textContent = "Creating";
+  status.className = "status-chip status-standby";
+  setBusy(button, true, { idle: "Create seat and issue writer token", loading: "Creating" });
+  try {
+    const response = await api("/api/access/seats", {
+      method: "POST",
+      body: JSON.stringify({
+        name,
+        slug,
+        email: String(formData.get("email") || "").trim() || null,
+        role: String(formData.get("role") || "writer"),
+        issue_token: true,
+      }),
+    });
+    reveal.hidden = false;
+    reveal.innerHTML = `
+      <strong>Seat created</strong>
+      <p>Node dataset: ${escapeHtml(response.principal.default_dataset)}</p>
+      <p>Copy this writer token now. Citadel stores only the hash.</p>
+      <code>${escapeHtml(response.token)}</code>
+    `;
+    form.reset();
+    await loadAccess();
+  } catch (err) {
+    error.textContent = err.message;
+    status.textContent = "Failed";
+    status.className = "status-chip status-error";
+  } finally {
+    setBusy(button, false, { idle: "Create seat and issue writer token", loading: "Creating" });
+  }
+});
+
 document.getElementById("accessTokenForm").addEventListener("submit", async (event) => {
   event.preventDefault();
   const form = event.currentTarget;
@@ -2781,6 +2832,12 @@ document.getElementById("accessTokenForm").addEventListener("submit", async (eve
   accessTokenStatus.className = "status-chip status-standby";
   setBusy(button, true, { idle: "Create access token", loading: "Creating" });
   try {
+    const allowedRaw = String(formData.get("allowedDatasets") || "").trim();
+    const allowedDatasets = allowedRaw
+      ? allowedRaw.split(",").map((value) => value.trim()).filter(Boolean)
+      : null;
+    const defaultDataset = String(formData.get("defaultDataset") || "").trim() || null;
+    const defaultSession = String(formData.get("defaultSession") || "").trim() || null;
     const response = await api("/api/access/tokens", {
       method: "POST",
       body: JSON.stringify({
@@ -2788,6 +2845,9 @@ document.getElementById("accessTokenForm").addEventListener("submit", async (eve
         role: String(formData.get("role") || "reader"),
         kind: String(formData.get("kind") || "service_account"),
         team_id: String(formData.get("teamId") || "").trim() || null,
+        default_dataset: defaultDataset,
+        default_session: defaultSession,
+        allowed_datasets: allowedDatasets,
       }),
     });
     newAccessToken.hidden = false;

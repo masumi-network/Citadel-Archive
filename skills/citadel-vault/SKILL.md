@@ -31,6 +31,19 @@ writer or admin role but still be denied a tool if the matching scope is absent.
 Use `citadel_session` first and inspect `actor.scopes` before assuming a tool is
 available.
 
+Tokens may also carry memory scope: `default_dataset`, `default_session`, and
+optional `allowed_datasets`. When callers omit dataset/session, Citadel resolves
+from the token (with principal fallback), then global config. Empty
+`allowed_datasets` means whole-vault access for that role; a non-empty list
+restricts search/ingest/contribute to those datasets (admin and
+`access:manage` bypass).
+
+**Seat / node / Central:** each seat has a private node dataset (`seat:{slug}`);
+organization-wide knowledge lives in Central (`masumi-network`). The node is the
+storage boundary — not the token. Read scope is own node + Central; never
+another seat's node. Default writes go to the seat node; org-bound and tagged
+content targets Central. See [ADR-0003](https://github.com/masumi-network/Citadel-Archive/blob/main/docs/adr/0003-seat-node-central-private-memory.md).
+
 Common scopes:
 
 - `kb:read`, `kb:search`
@@ -142,6 +155,8 @@ approval, present the exact tool and expected effect.
 | Vault Member | user |
 | Agent Identity | bot |
 | Access Token | MCP key, API secret |
+| Seat / Node / Central | user account, personal vault, shared DB |
 | Repository Daily Update | employee report |
 
 Full domain language: `CONTEXT.md` in [Citadel-Archive](https://github.com/masumi-network/Citadel-Archive).
+Architecture: [ADR-0003](https://github.com/masumi-network/Citadel-Archive/blob/main/docs/adr/0003-seat-node-central-private-memory.md).

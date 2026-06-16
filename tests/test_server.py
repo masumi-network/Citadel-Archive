@@ -502,6 +502,118 @@ def test_bearer_tokens_can_access_api_without_cookie(tmp_path: Any) -> None:
     assert admin_run.status_code == 403
 
 
+def test_token_default_dataset_is_used_when_search_omits_dataset(tmp_path: Any) -> None:
+    app.state.access_store = AccessStore(tmp_path / "access.json")
+    client = authed_client()
+    created = client.post(
+        "/api/access/tokens",
+        json={
+            "name": "personal-reader",
+            "role": "reader",
+            "kind": "service_account",
+            "default_dataset": "personal",
+        },
+    )
+    token = created.json()["token"]
+    api_client = TestClient(app, base_url="https://testserver")
+
+    session = api_client.get("/api/session", headers={"Authorization": f"Bearer {token}"})
+    search = api_client.post(
+        "/search",
+        json={"query": "notes"},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert session.status_code == 200
+    assert session.json()["default_dataset"] == "personal"
+    assert session.json()["default_session"] is None
+    assert session.json()["allowed_datasets"] is None
+    assert search.status_code == 200
+    assert search.json()["dataset"] == "personal"
+    assert search.json()["results"][0]["dataset"] == "personal"
+
+
+def test_token_allowed_datasets_rejects_other_dataset(tmp_path: Any) -> None:
+    app.state.access_store = AccessStore(tmp_path / "access.json")
+    client = authed_client()
+    created = client.post(
+        "/api/access/tokens",
+        json={
+            "name": "scoped-writer",
+            "role": "writer",
+            "kind": "service_account",
+            "default_dataset": "personal",
+            "allowed_datasets": ["personal"],
+        },
+    )
+    token = created.json()["token"]
+    api_client = TestClient(app, base_url="https://testserver")
+
+    allowed = api_client.post(
+        "/ingest",
+        json={"data": "Scoped note"},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    denied = api_client.post(
+        "/search",
+        json={"query": "notes", "dataset": "masumi-network"},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert allowed.status_code == 200
+    assert allowed.json()["dataset"] == "personal"
+    assert denied.status_code == 403
+    assert denied.json()["detail"] == "Dataset not allowed: masumi-network."
+
+
+def test_tokens_without_memory_fields_use_config_defaults(tmp_path: Any) -> None:
+    app.state.access_store = AccessStore(tmp_path / "access.json")
+    client = authed_client()
+    created = client.post(
+        "/api/access/tokens",
+        json={"name": "legacy-reader", "role": "reader", "kind": "service_account"},
+    )
+    token = created.json()["token"]
+    api_client = TestClient(app, base_url="https://testserver")
+
+    session = api_client.get("/api/session", headers={"Authorization": f"Bearer {token}"})
+    search = api_client.post(
+        "/search",
+        json={"query": "notes"},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert session.status_code == 200
+    assert session.json()["default_dataset"] == "notes"
+    assert search.status_code == 200
+    assert search.json()["dataset"] == "notes"
+
+
+def test_admin_token_bypasses_allowed_datasets(tmp_path: Any) -> None:
+    app.state.access_store = AccessStore(tmp_path / "access.json")
+    client = authed_client()
+    created = client.post(
+        "/api/access/tokens",
+        json={
+            "name": "admin-scoped",
+            "role": "admin",
+            "kind": "service_account",
+            "allowed_datasets": ["personal"],
+        },
+    )
+    token = created.json()["token"]
+    api_client = TestClient(app, base_url="https://testserver")
+
+    search = api_client.post(
+        "/search",
+        json={"query": "notes", "dataset": "masumi-network"},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert search.status_code == 200
+    assert search.json()["dataset"] == "masumi-network"
+
+
 def test_google_chat_test_delivery_is_admin_only_and_redacted(tmp_path: Any) -> None:
     app.state.access_store = AccessStore(tmp_path / "access.json")
     admin = authed_client()
@@ -1363,7 +1475,7 @@ def test_contribute_routes_through_learning_process_and_audits(tmp_path: Any) ->
     assert payload["accepted"] is True
     assert payload["chunks"] == 1
     assert payload["conflict"] is None
-    assert payload["dataset"] == "notes"
+    assert payload["dataset"] == "masumi-network"
 
     events = store.snapshot()["audit_events"]
     contribute_events = [event for event in events if event["action"] == "contribute"]
@@ -1469,3 +1581,184 @@ def test_optimize_endpoint_is_admin_only_bounded_and_audited(
     assert len(optimize_events) == 1
     assert optimize_events[0]["success"] is True
     assert optimize_events[0]["detail"]["dry_run"] is True
+
+
+class MultiSearchCitadel(FakeCitadel):
+    def __init__(self) -> None:
+        self.search_calls: list[str] = []
+
+    async def search(self, query: str, **kwargs: Any) -> list[dict[str, Any]]:
+        dataset = kwargs["dataset"]
+        self.search_calls.append(dataset)
+        return [
+            {
+                "query": query,
+                "dataset": dataset,
+                "text": f"{query} in {dataset}",
+                "top_k": kwargs["top_k"],
+            }
+        ]
+
+
+class TrackingCitadel(FakeCitadel):
+    def __init__(self) -> None:
+        self.ingest_calls: list[dict[str, Any]] = []
+
+    async def ingest(self, data: str, **kwargs: Any) -> IngestResult:
+        self.ingest_calls.append({"data": data, **kwargs})
+        dataset = kwargs.get("dataset") or "notes"
+        return IngestResult(True, "accepted", dataset, tuple(kwargs.get("tags") or ()))
+
+
+def test_create_seat_api_provisions_node_and_writer_token(tmp_path: Any) -> None:
+    app.state.access_store = AccessStore(tmp_path / "access.json")
+    client = authed_client()
+
+    response = client.post(
+        "/api/access/seats",
+        json={"name": "Alice Smith", "slug": "alice", "email": "alice@example.com"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ok"] is True
+    assert payload["principal"]["seat_slug"] == "alice"
+    assert payload["principal"]["default_dataset"] == "seat:alice"
+    assert payload["principal"]["default_session"] == "seat-alice"
+    assert payload["api_token"]["default_dataset"] == "seat:alice"
+    assert payload["api_token"]["allowed_datasets"] == ["seat:alice", "masumi-network"]
+    assert payload["token"].startswith("ctdl_")
+
+    duplicate = client.post(
+        "/api/access/seats",
+        json={"name": "Alice Two", "slug": "alice"},
+    )
+    assert duplicate.status_code == 422
+    assert "already exists" in duplicate.json()["detail"]
+
+    invalid = client.post(
+        "/api/access/seats",
+        json={"name": "Bad", "slug": "Bad Slug"},
+    )
+    assert invalid.status_code == 422
+
+
+def test_seat_token_searches_node_and_central(tmp_path: Any) -> None:
+    app.state.access_store = AccessStore(tmp_path / "access.json")
+    admin = authed_client()
+    created = admin.post(
+        "/api/access/seats",
+        json={"name": "Bob", "slug": "bob"},
+    )
+    token = created.json()["token"]
+    app.state.citadel = MultiSearchCitadel()
+    api_client = TestClient(app, base_url="https://testserver")
+
+    search = api_client.post(
+        "/search",
+        json={"query": "architecture"},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    knowledge = api_client.get(
+        "/api/knowledge",
+        params={"q": "architecture", "limit": 5},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert search.status_code == 200
+    payload = search.json()
+    assert payload["dataset"] == "seat:bob"
+    assert payload["datasets"] == ["seat:bob", "masumi-network"]
+    assert len(payload["results"]) == 2
+    assert payload["results"][0]["dataset"] == "seat:bob"
+    assert payload["results"][1]["dataset"] == "masumi-network"
+    assert set(app.state.citadel.search_calls) == {"seat:bob", "masumi-network"}
+
+    assert knowledge.status_code == 200
+    assert knowledge.json()["datasets"] == ["seat:bob", "masumi-network"]
+
+
+def test_seat_search_deduplicates_preferring_node(tmp_path: Any) -> None:
+    class DuplicateCitadel(FakeCitadel):
+        async def search(self, query: str, **kwargs: Any) -> list[dict[str, Any]]:
+            return [{"text": "shared hit", "dataset": kwargs["dataset"]}]
+
+    app.state.access_store = AccessStore(tmp_path / "access.json")
+    admin = authed_client()
+    token = admin.post("/api/access/seats", json={"name": "Carol", "slug": "carol"}).json()["token"]
+    app.state.citadel = DuplicateCitadel()
+    api_client = TestClient(app, base_url="https://testserver")
+
+    search = api_client.post(
+        "/search",
+        json={"query": "shared", "top_k": 5},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert search.status_code == 200
+    assert len(search.json()["results"]) == 1
+    assert search.json()["results"][0]["dataset"] == "seat:carol"
+
+
+def test_seat_ingest_defaults_to_node_light_path(tmp_path: Any) -> None:
+    app.state.access_store = AccessStore(tmp_path / "access.json")
+    admin = authed_client()
+    token = admin.post("/api/access/seats", json={"name": "Dana", "slug": "dana"}).json()["token"]
+    tracking = TrackingCitadel()
+    app.state.citadel = tracking
+    app.state.mesh = MeshState()
+    api_client = TestClient(app, base_url="https://testserver")
+
+    response = api_client.post(
+        "/ingest",
+        json={"data": "Working memory note"},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["dataset"] == "seat:dana"
+    assert len(tracking.ingest_calls) == 1
+    assert tracking.ingest_calls[0]["dataset"] == "seat:dana"
+
+
+def test_org_tag_ingest_routes_to_central(tmp_path: Any) -> None:
+    app.state.access_store = AccessStore(tmp_path / "access.json")
+    admin = authed_client()
+    token = admin.post("/api/access/seats", json={"name": "Eve", "slug": "eve"}).json()["token"]
+    tracking = TrackingCitadel()
+    app.state.citadel = tracking
+    app.state.mesh = MeshState()
+    api_client = TestClient(app, base_url="https://testserver")
+
+    response = api_client.post(
+        "/ingest",
+        json={"data": "Org policy", "tags": ["repo-content"]},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["dataset"] == "masumi-network"
+    assert len(tracking.ingest_calls) == 1
+    assert tracking.ingest_calls[0]["dataset"] == "masumi-network"
+
+
+def test_promotion_tag_dual_writes_node_and_central(tmp_path: Any) -> None:
+    app.state.access_store = AccessStore(tmp_path / "access.json")
+    admin = authed_client()
+    token = admin.post("/api/access/seats", json={"name": "Frank", "slug": "frank"}).json()["token"]
+    tracking = TrackingCitadel()
+    app.state.citadel = tracking
+    app.state.mesh = MeshState()
+    api_client = TestClient(app, base_url="https://testserver")
+
+    response = api_client.post(
+        "/ingest",
+        json={"data": "Curated share", "tags": ["org-ready"]},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["dataset"] == "masumi-network"
+    assert len(tracking.ingest_calls) == 2
+    assert tracking.ingest_calls[0]["dataset"] == "seat:frank"
+    assert tracking.ingest_calls[1]["dataset"] == "masumi-network"

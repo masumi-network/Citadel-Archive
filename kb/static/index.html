@@ -795,6 +795,67 @@
             <section class="window action-panel">
               <div class="window-titlebar">
                 <div>
+                  <h2>Create Seat</h2>
+                  <p class="panel-kicker">Provision a principal and node before tokens</p>
+                </div>
+                <span id="accessSeatStatus" class="status-chip">Ready</span>
+              </div>
+              <form id="accessSeatForm" class="form">
+                <div class="field-grid">
+                  <div class="field">
+                    <label for="seatName">Name</label>
+                    <input
+                      id="seatName"
+                      name="name"
+                      type="text"
+                      placeholder="Alice Smith"
+                      autocomplete="name"
+                      required
+                    />
+                  </div>
+                  <div class="field">
+                    <label for="seatSlug">Seat slug</label>
+                    <input
+                      id="seatSlug"
+                      name="slug"
+                      type="text"
+                      placeholder="alice"
+                      autocomplete="off"
+                      pattern="[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?"
+                      required
+                    />
+                  </div>
+                </div>
+                <div class="field-grid">
+                  <div class="field">
+                    <label for="seatEmail">Email</label>
+                    <input
+                      id="seatEmail"
+                      name="email"
+                      type="email"
+                      placeholder="alice@example.com"
+                      autocomplete="email"
+                    />
+                  </div>
+                  <div class="field">
+                    <label for="seatRole">Role</label>
+                    <select id="seatRole" name="role">
+                      <option value="writer" selected>Read write</option>
+                      <option value="reader">Read only</option>
+                      <option value="admin">Admin</option>
+                    </select>
+                  </div>
+                </div>
+                <button id="accessSeatSubmit" class="primary-button" type="submit">
+                  Create seat and issue writer token
+                </button>
+                <p id="accessSeatError" class="form-error" role="alert"></p>
+              </form>
+              <div id="newSeatToken" class="token-reveal" hidden></div>
+            </section>
+            <section class="window action-panel">
+              <div class="window-titlebar">
+                <div>
                   <h2>Invite Or Agent Token</h2>
                   <p class="panel-kicker">Stored locally, token shown once</p>
                 </div>
@@ -840,6 +901,38 @@
                       autocomplete="off"
                     />
                   </div>
+                </div>
+                <div class="field-grid">
+                  <div class="field">
+                    <label for="accessDefaultDataset">Default dataset</label>
+                    <input
+                      id="accessDefaultDataset"
+                      name="defaultDataset"
+                      type="text"
+                      placeholder="seat:alice or masumi-network"
+                      autocomplete="off"
+                    />
+                  </div>
+                  <div class="field">
+                    <label for="accessDefaultSession">Default session</label>
+                    <input
+                      id="accessDefaultSession"
+                      name="defaultSession"
+                      type="text"
+                      placeholder="seat-alice"
+                      autocomplete="off"
+                    />
+                  </div>
+                </div>
+                <div class="field">
+                  <label for="accessAllowedDatasets">Allowed datasets</label>
+                  <input
+                    id="accessAllowedDatasets"
+                    name="allowedDatasets"
+                    type="text"
+                    placeholder="seat:alice, masumi-network"
+                    autocomplete="off"
+                  />
                 </div>
                 <button id="accessTokenSubmit" class="primary-button" type="submit">
                   Create access token

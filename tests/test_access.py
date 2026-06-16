@@ -180,3 +180,134 @@ def test_has_tokens_ignores_revoked_tokens(tmp_path: Path) -> None:
     access_store.revoke_token(created.api_token.id)
 
     assert access_store.has_tokens() is False
+
+
+def test_token_memory_scope_fields_persist_and_resolve(tmp_path: Path) -> None:
+    access_store = store(tmp_path)
+    created = access_store.create_principal_token(
+        name="scoped-agent",
+        kind="service_account",
+        role="writer",
+        default_dataset="personal",
+        default_session="agent-session-1",
+        allowed_datasets=["personal", "team-notes"],
+    )
+
+    session = access_store.authenticate_token(created.token)
+
+    assert session is not None
+    assert session.identity.default_dataset == "personal"
+    assert session.identity.default_session == "agent-session-1"
+    assert session.identity.allowed_datasets == ("personal", "team-notes")
+    snapshot = access_store.snapshot()
+    assert snapshot["tokens"][0]["default_dataset"] == "personal"
+    assert snapshot["tokens"][0]["allowed_datasets"] == ("personal", "team-notes")
+
+
+def test_token_inherits_principal_memory_defaults(tmp_path: Path) -> None:
+    access_store = store(tmp_path)
+    principal = access_store.create_principal(
+        name="team-member",
+        kind="user",
+        role="reader",
+        default_dataset="personal",
+        default_session="member-session",
+    )
+    created = access_store.create_token(
+        principal_id=principal.id,
+        name="member-key",
+    )
+
+    session = access_store.authenticate_token(created.token)
+
+    assert session is not None
+    assert session.identity.default_dataset == "personal"
+    assert session.identity.default_session == "member-session"
+    assert session.identity.allowed_datasets == ()
+
+
+def test_token_overrides_principal_memory_defaults(tmp_path: Path) -> None:
+    access_store = store(tmp_path)
+    principal = access_store.create_principal(
+        name="team-member",
+        kind="user",
+        role="reader",
+        default_dataset="personal",
+        default_session="member-session",
+    )
+    created = access_store.create_token(
+        principal_id=principal.id,
+        name="override-key",
+        default_dataset="team-notes",
+        allowed_datasets=["team-notes"],
+    )
+
+    session = access_store.authenticate_token(created.token)
+
+    assert session is not None
+    assert session.identity.default_dataset == "team-notes"
+    assert session.identity.default_session == "member-session"
+    assert session.identity.allowed_datasets == ("team-notes",)
+
+
+def test_legacy_tokens_without_memory_fields_authenticate(tmp_path: Path) -> None:
+    access_store = store(tmp_path)
+    created = access_store.create_principal_token(
+        name="legacy-agent",
+        kind="service_account",
+        role="reader",
+    )
+    data = access_store._load()
+    data["tokens"][0].pop("default_dataset", None)
+    data["tokens"][0].pop("default_session", None)
+    data["tokens"][0].pop("allowed_datasets", None)
+    data["principals"][0].pop("default_dataset", None)
+    data["principals"][0].pop("default_session", None)
+    access_store._save(data)
+
+    session = access_store.authenticate_token(created.token)
+
+    assert session is not None
+    assert session.identity.default_dataset is None
+    assert session.identity.default_session is None
+    assert session.identity.allowed_datasets == ()
+
+
+def test_create_seat_provisions_principal_and_scoped_token(tmp_path: Path) -> None:
+    access_store = store(tmp_path)
+    created = access_store.create_seat(
+        name="Alice Smith",
+        slug="alice",
+        email="alice@example.com",
+    )
+
+    assert created.principal.seat_slug == "alice"
+    assert created.principal.default_dataset == "seat:alice"
+    assert created.principal.default_session == "seat-alice"
+    assert created.principal.email == "alice@example.com"
+    assert created.token is not None
+    assert created.api_token is not None
+    assert created.api_token.allowed_datasets == ("seat:alice", "masumi-network")
+
+    session = access_store.authenticate_token(created.token)
+    assert session is not None
+    assert session.identity.default_dataset == "seat:alice"
+    assert session.identity.allowed_datasets == ("seat:alice", "masumi-network")
+
+
+def test_create_seat_rejects_duplicate_slug(tmp_path: Path) -> None:
+    access_store = store(tmp_path)
+    access_store.create_seat(name="Alice", slug="alice")
+
+    with pytest.raises(ValueError, match="already exists"):
+        access_store.create_seat(name="Alice Two", slug="alice")
+
+
+def test_validate_seat_slug_rejects_invalid_values() -> None:
+    from kb.access import validate_seat_slug
+
+    assert validate_seat_slug("alice-smith") == "alice-smith"
+    with pytest.raises(ValueError, match="Seat slug"):
+        validate_seat_slug("Bad Slug")
+    with pytest.raises(ValueError, match="Seat slug"):
+        validate_seat_slug("-bad")

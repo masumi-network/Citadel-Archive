@@ -6,11 +6,16 @@ import hashlib
 import json
 import logging
 from pathlib import Path
+import re
 import secrets
 from typing import Any
 from uuid import uuid4
 
 logger = logging.getLogger(__name__)
+
+CENTRAL_DATASET = "masumi-network"
+SEAT_DATASET_PREFIX = "seat:"
+SEAT_SLUG_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$")
 
 ROLE_ORDER = {"reader": 1, "writer": 2, "admin": 3}
 VALID_ROLES = frozenset(ROLE_ORDER)
@@ -52,6 +57,9 @@ class AccessIdentity:
     source: str
     scopes: tuple[str, ...] = field(default_factory=tuple)
     token_id: str | None = None
+    default_dataset: str | None = None
+    default_session: str | None = None
+    allowed_datasets: tuple[str, ...] = field(default_factory=tuple)
 
 
 @dataclass(frozen=True)
@@ -64,6 +72,10 @@ class AccessPrincipal:
     team_id: str | None
     created_at: str
     disabled_at: str | None = None
+    default_dataset: str | None = None
+    default_session: str | None = None
+    email: str | None = None
+    seat_slug: str | None = None
 
 
 @dataclass(frozen=True)
@@ -80,6 +92,9 @@ class ApiToken:
     expires_at: str | None = None
     last_used_at: str | None = None
     revoked_at: str | None = None
+    default_dataset: str | None = None
+    default_session: str | None = None
+    allowed_datasets: tuple[str, ...] = field(default_factory=tuple)
 
 
 @dataclass(frozen=True)
@@ -87,6 +102,13 @@ class TokenCreation:
     token: str
     api_token: ApiToken
     principal: AccessPrincipal
+
+
+@dataclass(frozen=True)
+class SeatCreation:
+    principal: AccessPrincipal
+    token: str | None
+    api_token: ApiToken | None
 
 
 @dataclass(frozen=True)
@@ -148,6 +170,24 @@ def validate_principal_kind(kind: str) -> None:
         raise ValueError(f"Unsupported principal kind: {kind}")
 
 
+def validate_seat_slug(slug: str) -> str:
+    normalized = slug.strip().lower()
+    if not SEAT_SLUG_RE.match(normalized):
+        raise ValueError(
+            "Seat slug must be 2-63 lowercase letters, numbers, or hyphens "
+            "and start/end with a letter or number."
+        )
+    return normalized
+
+
+def seat_dataset(slug: str) -> str:
+    return f"{SEAT_DATASET_PREFIX}{validate_seat_slug(slug)}"
+
+
+def is_seat_dataset(dataset: str | None) -> bool:
+    return bool(dataset and dataset.startswith(SEAT_DATASET_PREFIX))
+
+
 def _parse_time(value: str | None) -> datetime | None:
     if not value:
         return None
@@ -168,6 +208,30 @@ def _is_expired(value: str | None) -> bool:
 
 def _dedupe(values: tuple[str, ...] | list[str]) -> tuple[str, ...]:
     return tuple(dict.fromkeys(value.strip() for value in values if value.strip()))
+
+
+def _normalize_optional_str(value: str | None) -> str | None:
+    if value is None:
+        return None
+    stripped = value.strip()
+    return stripped or None
+
+
+def _resolve_token_memory_scope(
+    api_token: ApiToken,
+    principal: AccessPrincipal,
+) -> tuple[str | None, str | None, tuple[str, ...]]:
+    default_dataset = (
+        api_token.default_dataset
+        if api_token.default_dataset is not None
+        else principal.default_dataset
+    )
+    default_session = (
+        api_token.default_session
+        if api_token.default_session is not None
+        else principal.default_session
+    )
+    return default_dataset, default_session, api_token.allowed_datasets
 
 
 class AccessStore:
@@ -226,6 +290,10 @@ class AccessStore:
         role: str,
         scopes: tuple[str, ...] | list[str] | None = None,
         team_id: str | None = None,
+        default_dataset: str | None = None,
+        default_session: str | None = None,
+        email: str | None = None,
+        seat_slug: str | None = None,
     ) -> AccessPrincipal:
         validate_principal_kind(kind)
         validate_role(role)
@@ -237,11 +305,56 @@ class AccessStore:
             scopes=validate_role_scopes(role, tuple(scopes) if scopes else default_scopes(role)),
             team_id=team_id,
             created_at=now_iso(),
+            default_dataset=_normalize_optional_str(default_dataset),
+            default_session=_normalize_optional_str(default_session),
+            email=_normalize_optional_str(email),
+            seat_slug=_normalize_optional_str(seat_slug),
         )
         data = self._load()
         data["principals"] = [*data.get("principals", []), asdict(principal)]
         self._save(data)
         return principal
+
+    def create_seat(
+        self,
+        *,
+        name: str,
+        slug: str,
+        email: str | None = None,
+        role: str = "writer",
+        issue_token: bool = True,
+        token_name: str | None = None,
+    ) -> SeatCreation:
+        normalized_slug = validate_seat_slug(slug)
+        node_dataset = seat_dataset(normalized_slug)
+        if self._find_seat_by_dataset(node_dataset):
+            raise ValueError(f"Seat already exists for slug: {normalized_slug}")
+        session_id = f"seat-{normalized_slug}"
+        allowed = (node_dataset, CENTRAL_DATASET)
+        principal = self.create_principal(
+            name=name,
+            kind="user",
+            role=role,
+            default_dataset=node_dataset,
+            default_session=session_id,
+            email=email,
+            seat_slug=normalized_slug,
+        )
+        if not issue_token:
+            return SeatCreation(principal=principal, token=None, api_token=None)
+        created = self.create_token(
+            principal_id=principal.id,
+            name=token_name or f"{name.strip()} writer",
+            role=role,
+            default_dataset=node_dataset,
+            default_session=session_id,
+            allowed_datasets=list(allowed),
+        )
+        return SeatCreation(
+            principal=principal,
+            token=created.token,
+            api_token=created.api_token,
+        )
 
     def create_token(
         self,
@@ -252,6 +365,9 @@ class AccessStore:
         scopes: tuple[str, ...] | list[str] | None = None,
         team_id: str | None = None,
         expires_at: str | None = None,
+        default_dataset: str | None = None,
+        default_session: str | None = None,
+        allowed_datasets: tuple[str, ...] | list[str] | None = None,
     ) -> TokenCreation:
         data = self._load()
         principal = self._principal(data, principal_id)
@@ -279,6 +395,9 @@ class AccessStore:
             team_id=team_id if team_id is not None else principal.team_id,
             created_at=now_iso(),
             expires_at=expires_at,
+            default_dataset=_normalize_optional_str(default_dataset),
+            default_session=_normalize_optional_str(default_session),
+            allowed_datasets=_dedupe(allowed_datasets or ()),
         )
         data["tokens"] = [*data.get("tokens", []), asdict(api_token)]
         self._save(data)
@@ -293,6 +412,9 @@ class AccessStore:
         scopes: tuple[str, ...] | list[str] | None = None,
         team_id: str | None = None,
         expires_at: str | None = None,
+        default_dataset: str | None = None,
+        default_session: str | None = None,
+        allowed_datasets: tuple[str, ...] | list[str] | None = None,
     ) -> TokenCreation:
         principal = self.create_principal(
             name=name,
@@ -300,6 +422,8 @@ class AccessStore:
             role=role,
             scopes=scopes,
             team_id=team_id,
+            default_dataset=default_dataset,
+            default_session=default_session,
         )
         return self.create_token(
             principal_id=principal.id,
@@ -308,6 +432,9 @@ class AccessStore:
             scopes=scopes,
             team_id=team_id,
             expires_at=expires_at,
+            default_dataset=default_dataset,
+            default_session=default_session,
+            allowed_datasets=allowed_datasets,
         )
 
     def revoke_token(self, token_id: str) -> ApiToken | None:
@@ -391,6 +518,10 @@ class AccessStore:
             return None
         if principal.disabled_at or api_token.revoked_at or _is_expired(api_token.expires_at):
             return None
+        default_dataset, default_session, allowed_datasets = _resolve_token_memory_scope(
+            api_token,
+            principal,
+        )
         identity = AccessIdentity(
             role=api_token.role,
             actor_id=principal.id,
@@ -399,8 +530,17 @@ class AccessStore:
             source="api_token",
             scopes=api_token.scopes,
             token_id=api_token.id,
+            default_dataset=default_dataset,
+            default_session=default_session,
+            allowed_datasets=allowed_datasets,
         )
         return TokenSession(identity=identity, token_hash=api_token.token_hash)
+
+    def _find_seat_by_dataset(self, dataset: str) -> AccessPrincipal | None:
+        for principal in self._principals(self._load()):
+            if principal.default_dataset == dataset:
+                return principal
+        return None
 
     def _principal(self, data: dict[str, Any], principal_id: str) -> AccessPrincipal | None:
         for principal in self._principals(data):
@@ -414,6 +554,10 @@ class AccessStore:
                 **{
                     **item,
                     "scopes": tuple(item.get("scopes", ())),
+                    "default_dataset": item.get("default_dataset"),
+                    "default_session": item.get("default_session"),
+                    "email": item.get("email"),
+                    "seat_slug": item.get("seat_slug"),
                 }
             )
             for item in data.get("principals", [])
@@ -425,6 +569,9 @@ class AccessStore:
                 **{
                     **item,
                     "scopes": tuple(item.get("scopes", ())),
+                    "default_dataset": item.get("default_dataset"),
+                    "default_session": item.get("default_session"),
+                    "allowed_datasets": tuple(item.get("allowed_datasets") or ()),
                 }
             )
             for item in data.get("tokens", [])

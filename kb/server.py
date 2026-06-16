@@ -10,6 +10,7 @@ import os
 from pathlib import Path
 import re
 import secrets
+from dataclasses import dataclass
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, Query, Request, Response
@@ -18,12 +19,22 @@ from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, Stre
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from kb.access import AccessIdentity, AccessStore, ROLE_ORDER, default_scopes, hash_api_token
+from kb.access import (
+    CENTRAL_DATASET,
+    AccessIdentity,
+    AccessStore,
+    ROLE_ORDER,
+    default_scopes,
+    hash_api_token,
+    is_seat_dataset,
+)
 from kb.backup_mirror import BackupMirror, BackupMirrorDisabled, BackupMirrorPublishError
 from kb.conflicts import KnowledgeConflictStore, obsidian_push_conflict_candidate
+from kb.tags import normalize_tags
+from kb.config import CitadelConfig
 from kb.github_sync import GitHubOrgSyncer
 from kb.knowledge_mesh import KnowledgeMesh
-from kb.learning import LearningProcess
+from kb.learning import LearningOutcome, LearningProcess
 from kb.learning_agent import LearningAgent
 from kb.logging_utils import configure_logging
 from kb.mcp_server import TOOL_POLICIES, create_mcp_server
@@ -205,6 +216,18 @@ class AccessTokenBody(BaseModel):
     scopes: list[str] | None = None
     team_id: str | None = None
     expires_at: str | None = None
+    default_dataset: str | None = None
+    default_session: str | None = None
+    allowed_datasets: list[str] | None = None
+
+
+class CreateSeatBody(BaseModel):
+    name: str = Field(min_length=1, max_length=120)
+    slug: str = Field(min_length=2, max_length=63)
+    email: str | None = Field(default=None, max_length=320)
+    role: str = Field(default="writer")
+    issue_token: bool = True
+    token_name: str | None = Field(default=None, max_length=120)
 
 
 class ObsidianVaultBody(BaseModel):
@@ -476,6 +499,231 @@ def require_access(request: Request, minimum_role: str, scope: str) -> AccessIde
     return identity
 
 
+def can_bypass_dataset_allowlist(identity: AccessIdentity) -> bool:
+    if identity.source == "env":
+        return True
+    if identity.role == "admin":
+        return True
+    return "access:manage" in effective_scopes(identity)
+
+
+def enforce_dataset_allowlist(identity: AccessIdentity, dataset: str) -> None:
+    if can_bypass_dataset_allowlist(identity):
+        return
+    if not identity.allowed_datasets:
+        return
+    if dataset not in identity.allowed_datasets:
+        raise HTTPException(status_code=403, detail=f"Dataset not allowed: {dataset}.")
+
+
+ORG_BOUND_TAGS = frozenset(
+    {
+        "vault-contribution",
+        "org-ready",
+        "repo-content",
+        "product-knowledge",
+        "github",
+        "github-daily",
+    }
+)
+PROMOTION_TAGS = frozenset({"org-ready", "vault-contribution"})
+IngestTier = str
+
+
+@dataclass(frozen=True)
+class WriteTarget:
+    dataset: str
+    tier: IngestTier
+
+
+def central_dataset(config: CitadelConfig) -> str:
+    return config.github_sync_dataset or CENTRAL_DATASET
+
+
+def is_org_bound(tags: list[str] | tuple[str, ...]) -> bool:
+    return bool(set(normalize_tags(tags)) & ORG_BOUND_TAGS)
+
+
+def is_promotion(tags: list[str] | tuple[str, ...]) -> bool:
+    return bool(set(normalize_tags(tags)) & PROMOTION_TAGS)
+
+
+def resolve_search_datasets(
+    identity: AccessIdentity,
+    requested: str | None,
+    config: CitadelConfig,
+) -> list[str]:
+    if requested:
+        enforce_dataset_allowlist(identity, requested)
+        return [requested]
+
+    node_dataset = identity.default_dataset if is_seat_dataset(identity.default_dataset) else None
+    if node_dataset:
+        enforce_dataset_allowlist(identity, node_dataset)
+        datasets = [node_dataset]
+        central = central_dataset(config)
+        if central != node_dataset:
+            if can_bypass_dataset_allowlist(identity) or (
+                not identity.allowed_datasets or central in identity.allowed_datasets
+            ):
+                enforce_dataset_allowlist(identity, central)
+                datasets.append(central)
+        return datasets
+
+    dataset = identity.default_dataset or config.search_default_dataset or config.default_dataset
+    enforce_dataset_allowlist(identity, dataset)
+    return [dataset]
+
+
+def resolve_search_dataset(
+    identity: AccessIdentity,
+    requested: str | None,
+    config: CitadelConfig,
+) -> str:
+    return resolve_search_datasets(identity, requested, config)[0]
+
+
+def resolve_write_targets(
+    identity: AccessIdentity,
+    requested: str | None,
+    tags: list[str],
+    config: CitadelConfig,
+) -> list[WriteTarget]:
+    if requested:
+        dataset = requested
+        enforce_dataset_allowlist(identity, dataset)
+        tier: IngestTier = "light" if is_seat_dataset(dataset) and not is_org_bound(tags) else "full"
+        return [WriteTarget(dataset, tier)]
+
+    node_dataset = identity.default_dataset if is_seat_dataset(identity.default_dataset) else None
+    central = central_dataset(config)
+    normalized_tags = list(normalize_tags(tags))
+
+    if is_promotion(normalized_tags) and node_dataset:
+        targets = [
+            WriteTarget(node_dataset, "light"),
+            WriteTarget(central, "full"),
+        ]
+        for target in targets:
+            enforce_dataset_allowlist(identity, target.dataset)
+        return targets
+
+    if is_org_bound(normalized_tags):
+        enforce_dataset_allowlist(identity, central)
+        return [WriteTarget(central, "full")]
+
+    dataset = identity.default_dataset or config.default_dataset
+    enforce_dataset_allowlist(identity, dataset)
+    tier = "light" if is_seat_dataset(dataset) else "full"
+    return [WriteTarget(dataset, tier)]
+
+
+def resolve_write_dataset(
+    identity: AccessIdentity,
+    requested: str | None,
+    config: CitadelConfig,
+) -> str:
+    return resolve_write_targets(identity, requested, [], config)[0].dataset
+
+
+def search_result_dedup_key(result: Any) -> str:
+    if isinstance(result, dict):
+        text = first_string(
+            result.get("text"),
+            result.get("content"),
+            result.get("chunk"),
+            result.get("body"),
+            result.get("summary"),
+            result.get("title"),
+            result.get("query"),
+        )
+        if text:
+            return text.strip().lower()
+        return json.dumps(
+            {key: value for key, value in result.items() if key != "_citadel"},
+            sort_keys=True,
+            default=str,
+        )
+    return str(result)
+
+
+async def search_across_datasets(
+    citadel: Citadel,
+    *,
+    query: str,
+    datasets: list[str],
+    session_id: str | None,
+    top_k: int,
+) -> list[tuple[str, Any]]:
+    merged: list[tuple[str, Any]] = []
+    seen: set[str] = set()
+    for dataset in datasets:
+        results = await citadel.search(
+            query,
+            dataset=dataset,
+            session_id=session_id,
+            top_k=top_k,
+        )
+        for result in results:
+            key = search_result_dedup_key(result)
+            if key in seen:
+                continue
+            seen.add(key)
+            merged.append((dataset, result))
+            if len(merged) >= top_k:
+                return merged
+    return merged
+
+
+async def execute_learning_writes(
+    learning: LearningProcess,
+    *,
+    data: str,
+    targets: list[WriteTarget],
+    tags: list[str],
+    session_id: str | None,
+    operation: str,
+    detect_conflicts: bool = True,
+    run_improve: bool = False,
+) -> tuple[LearningOutcome, list[LearningOutcome]]:
+    outcomes: list[LearningOutcome] = []
+    primary: LearningOutcome | None = None
+    for target in targets:
+        outcome = await learning.learn(
+            data,
+            dataset=target.dataset,
+            tags=tags,
+            session_id=session_id,
+            operation=operation,
+            detect_conflicts=detect_conflicts and target.tier == "full",
+            run_improve=run_improve and target.tier == "full",
+            tier=target.tier,
+        )
+        outcomes.append(outcome)
+        if primary is None or target.tier == "full":
+            primary = outcome
+    if primary is None:
+        raise RuntimeError("execute_learning_writes requires at least one target")
+    return primary, outcomes
+
+
+def resolve_session_id(identity: AccessIdentity, requested: str | None) -> str | None:
+    return requested or identity.default_session
+
+
+def resolved_memory_scope(
+    identity: AccessIdentity,
+    config: CitadelConfig,
+) -> dict[str, Any]:
+    search_datasets = resolve_search_datasets(identity, None, config)
+    return {
+        "default_dataset": search_datasets[0],
+        "default_session": identity.default_session,
+        "allowed_datasets": list(identity.allowed_datasets) or None,
+        "search_datasets": search_datasets if len(search_datasets) > 1 else None,
+    }
+
+
 _AUTHOR_TAG_RE = re.compile(r"[^a-z0-9]+")
 
 
@@ -497,7 +745,7 @@ def _contribution_tags(body_tags: list[str], actor: AccessIdentity) -> list[str]
 
 def role_payload(role: str, identity: AccessIdentity | None = None) -> dict[str, Any]:
     scopes = set(effective_scopes(identity)) if identity else set(default_scopes(role))
-    return {
+    payload: dict[str, Any] = {
         "role": role,
         "capabilities": {
             "read": ROLE_ORDER[role] >= ROLE_ORDER["reader"]
@@ -518,6 +766,9 @@ def role_payload(role: str, identity: AccessIdentity | None = None) -> dict[str,
             "scopes": list(effective_scopes(identity)),
         },
     }
+    if identity is not None:
+        payload.update(resolved_memory_scope(identity, get_citadel().config))
+    return payload
 
 
 def mcp_tool_name(request: Request) -> str | None:
@@ -899,6 +1150,45 @@ async def audit_snapshot(
     }
 
 
+@app.post("/api/access/seats")
+async def create_access_seat(body: CreateSeatBody, request: Request) -> dict[str, Any]:
+    actor = require_access(request, "admin", "access:manage")
+    try:
+        created = get_access_store().create_seat(
+            name=body.name,
+            slug=body.slug,
+            email=body.email,
+            role=body.role,
+            issue_token=body.issue_token,
+            token_name=body.token_name,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    get_access_store().record_event(
+        action="access.seat.create",
+        actor=actor,
+        success=True,
+        dataset=created.principal.default_dataset,
+        detail={
+            "principal_id": created.principal.id,
+            "seat_slug": created.principal.seat_slug,
+            "token_id": created.api_token.id if created.api_token else None,
+            "role": created.principal.role,
+        },
+    )
+    payload: dict[str, Any] = {
+        "ok": True,
+        "principal": jsonable_encoder(created.principal),
+    }
+    if created.token and created.api_token:
+        payload["token"] = created.token
+        payload["api_token"] = jsonable_encoder(
+            {key: value for key, value in created.api_token.__dict__.items() if key != "token_hash"}
+        )
+    return payload
+
+
 @app.post("/api/access/tokens")
 async def create_access_token(body: AccessTokenBody, request: Request) -> dict[str, Any]:
     actor = require_access(request, "admin", "access:manage")
@@ -910,6 +1200,9 @@ async def create_access_token(body: AccessTokenBody, request: Request) -> dict[s
             scopes=body.scopes,
             team_id=body.team_id,
             expires_at=body.expires_at,
+            default_dataset=body.default_dataset,
+            default_session=body.default_session,
+            allowed_datasets=body.allowed_datasets,
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -1337,6 +1630,8 @@ async def push_obsidian_sync(body: ObsidianPushBody, request: Request) -> Any:
     actor = require_access(request, "writer", "obsidian:sync:push")
     citadel = get_citadel()
     mesh_state = get_mesh()
+    push_dataset = resolve_write_dataset(actor, body.dataset, citadel.config)
+    push_session_id = resolve_session_id(actor, body.session_id)
     push_documents = [
         SyncPushDocument(
             path=document.path,
@@ -1353,7 +1648,7 @@ async def push_obsidian_sync(body: ObsidianPushBody, request: Request) -> Any:
             vault_id=body.vault_id,
             actor=actor,
             documents=push_documents,
-            dataset=body.dataset or citadel.config.default_dataset,
+            dataset=push_dataset,
         )
         manifest = get_obsidian_sync().manifest(vault_id=body.vault_id)
     except KeyError as exc:
@@ -1377,13 +1672,17 @@ async def push_obsidian_sync(body: ObsidianPushBody, request: Request) -> Any:
         if not source_document:
             continue
         document_tags = [*body.tags, *source_document.tags, "obsidian", "obsidian_vault"]
-        document_dataset = source_document.dataset or body.dataset or citadel.config.default_dataset
+        document_dataset = resolve_write_dataset(
+            actor,
+            source_document.dataset or body.dataset,
+            citadel.config,
+        )
         try:
             outcome = await learning.learn(
                 source_document.content,
                 dataset=document_dataset,
                 tags=document_tags,
-                session_id=body.session_id,
+                session_id=push_session_id,
                 operation="obsidian_sync",
                 detect_conflicts=False,
             )
@@ -1416,13 +1715,13 @@ async def push_obsidian_sync(body: ObsidianPushBody, request: Request) -> Any:
         citadel.config,
         vault=manifest["vault"],
         result=result,
-        dataset=body.dataset or citadel.config.default_dataset,
+        dataset=push_dataset,
     )
     get_access_store().record_event(
         action="obsidian.sync.push",
         actor=actor,
         success=True,
-        dataset=body.dataset or citadel.config.default_dataset,
+        dataset=push_dataset,
         detail={
             "vault_id": body.vault_id,
             "accepted": len(result["accepted"]),
@@ -1726,13 +2025,16 @@ async def ingest(body: IngestBody, request: Request) -> Any:
     actor = require_access(request, "writer", "kb:ingest")
     citadel = get_citadel()
     learning = get_learning_process()
-    dataset = body.dataset or citadel.config.default_dataset
+    write_targets = resolve_write_targets(actor, body.dataset, body.tags, citadel.config)
+    session_id = resolve_session_id(actor, body.session_id)
+    primary_dataset = write_targets[0].dataset
     try:
-        outcome = await learning.learn(
-            body.data,
-            dataset=body.dataset,
+        outcome, _ = await execute_learning_writes(
+            learning,
+            data=body.data,
+            targets=write_targets,
             tags=body.tags,
-            session_id=body.session_id,
+            session_id=session_id,
             operation="ingest",
         )
     except Exception as exc:  # pragma: no cover - depends on runtime Cognee configuration.
@@ -1740,7 +2042,7 @@ async def ingest(body: IngestBody, request: Request) -> Any:
             request,
             actor=actor,
             success=False,
-            dataset=dataset,
+            dataset=primary_dataset,
             detail={"operation": "ingest", "error_type": exc.__class__.__name__},
         )
         raise HTTPException(status_code=500, detail=str(exc)) from exc
@@ -1750,13 +2052,14 @@ async def ingest(body: IngestBody, request: Request) -> Any:
         request,
         actor=actor,
         success=True,
-        dataset=dataset,
+        dataset=outcome.dataset,
         detail={
             "operation": "ingest",
             "accepted": result.accepted,
             "reason": result.reason,
             "data_bytes": len(body.data.encode("utf-8")),
             "tag_count": len(body.tags),
+            "write_targets": [target.dataset for target in write_targets],
         },
     )
     return jsonable_encoder(result)
@@ -1793,8 +2096,8 @@ async def contribute(body: ContributeBody, request: Request) -> Any:
     actor = require_access(request, "writer", "kb:ingest")
     citadel = get_citadel()
     learning = get_learning_process()
-    dataset = body.dataset or citadel.config.default_dataset
     contribution_tags = _contribution_tags(body.tags, actor)
+    write_targets = resolve_write_targets(actor, body.dataset, contribution_tags, citadel.config)
     parts = [f"# {body.title.strip()}", "", body.content.strip()]
     if body.source_url and body.source_url.strip():
         parts.extend(["", f"Source: {body.source_url.strip()}"])
@@ -1802,12 +2105,13 @@ async def contribute(body: ContributeBody, request: Request) -> Any:
         parts.extend(["", f"Author: {actor.actor_name.strip()}"])
     data = "\n".join(parts)
     try:
-        outcome = await learning.learn(
-            data,
-            dataset=body.dataset,
+        outcome, _ = await execute_learning_writes(
+            learning,
+            data=data,
+            targets=write_targets,
             tags=contribution_tags,
+            session_id=None,
             operation="contribute",
-            detect_conflicts=True,
             run_improve=citadel.config.contribute_run_improve,
         )
     except Exception as exc:  # pragma: no cover - depends on runtime Cognee configuration.
@@ -1815,14 +2119,14 @@ async def contribute(body: ContributeBody, request: Request) -> Any:
             action="contribute",
             actor=actor,
             success=False,
-            dataset=dataset,
+            dataset=write_targets[0].dataset,
             detail={"error_type": exc.__class__.__name__},
         )
         record_mcp_audit(
             request,
             actor=actor,
             success=False,
-            dataset=dataset,
+            dataset=write_targets[0].dataset,
             detail={"operation": "contribute", "error_type": exc.__class__.__name__},
         )
         raise HTTPException(status_code=500, detail=str(exc)) from exc
@@ -1912,7 +2216,7 @@ async def knowledge(
     dataset: str | None = None,
 ) -> Any:
     """Thin reader alias over /search with a flat, agent-friendly shape."""
-    require_access(request, "reader", "kb:search")
+    identity = require_access(request, "reader", "kb:search")
     query = q.strip()
     if not query:
         raise HTTPException(status_code=422, detail="Query q must not be empty.")
@@ -1920,28 +2224,34 @@ async def knowledge(
         raise HTTPException(status_code=422, detail="Limit must be between 1 and 50.")
     citadel = get_citadel()
     mesh_state = get_mesh()
-    target_dataset = (
-        dataset
-        or citadel.config.search_default_dataset
-        or citadel.config.default_dataset
-    )
+    search_datasets = resolve_search_datasets(identity, dataset, citadel.config)
+    session_id = resolve_session_id(identity, None)
     try:
-        results = await citadel.search(query, dataset=target_dataset, top_k=limit)
+        merged = await search_across_datasets(
+            citadel,
+            query=query,
+            datasets=search_datasets,
+            session_id=session_id,
+            top_k=limit,
+        )
     except Exception as exc:  # pragma: no cover - depends on runtime Cognee configuration.
         await mesh_state.record_error(citadel.config, operation="search", error=str(exc))
         raise HTTPException(status_code=500, detail=str(exc)) from exc
-    await mesh_state.record_search(
-        citadel.config,
-        query=query,
-        dataset=target_dataset,
-        result_count=len(results),
-    )
+    for search_dataset, _ in merged:
+        await mesh_state.record_search(
+            citadel.config,
+            query=query,
+            dataset=search_dataset,
+            result_count=sum(1 for ds, _ in merged if ds == search_dataset),
+        )
+    primary_dataset = search_datasets[0]
     return jsonable_encoder(
         {
             "ok": True,
             "query": query,
-            "dataset": target_dataset,
-            "results": [flat_knowledge_result(result) for result in results],
+            "dataset": primary_dataset,
+            "datasets": search_datasets if len(search_datasets) > 1 else None,
+            "results": [flat_knowledge_result(result) for _, result in merged],
         }
     )
 
@@ -1993,16 +2303,14 @@ async def search(body: SearchBody, request: Request) -> Any:
     actor = require_access(request, "reader", "kb:search")
     citadel = get_citadel()
     mesh_state = get_mesh()
-    dataset = (
-        body.dataset
-        or citadel.config.search_default_dataset
-        or citadel.config.default_dataset
-    )
+    search_datasets = resolve_search_datasets(actor, body.dataset, citadel.config)
+    session_id = resolve_session_id(actor, body.session_id)
     try:
-        results = await citadel.search(
-            body.query,
-            dataset=dataset,
-            session_id=body.session_id,
+        merged = await search_across_datasets(
+            citadel,
+            query=body.query,
+            datasets=search_datasets,
+            session_id=session_id,
             top_k=body.top_k,
         )
     except Exception as exc:  # pragma: no cover - depends on runtime Cognee configuration.
@@ -2011,7 +2319,7 @@ async def search(body: SearchBody, request: Request) -> Any:
             request,
             actor=actor,
             success=False,
-            dataset=dataset,
+            dataset=search_datasets[0],
             detail={
                 "operation": "search",
                 "query_sha256": hashlib.sha256(body.query.encode("utf-8")).hexdigest(),
@@ -2021,30 +2329,38 @@ async def search(body: SearchBody, request: Request) -> Any:
         )
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
-    await mesh_state.record_search(
-        citadel.config,
-        query=body.query,
-        dataset=dataset,
-        result_count=len(results),
-    )
+    for search_dataset in search_datasets:
+        await mesh_state.record_search(
+            citadel.config,
+            query=body.query,
+            dataset=search_dataset,
+            result_count=sum(1 for ds, _ in merged if ds == search_dataset),
+        )
     record_mcp_audit(
         request,
         actor=actor,
         success=True,
-        dataset=dataset,
+        dataset=search_datasets[0],
         detail={
             "operation": "search",
             "query_sha256": hashlib.sha256(body.query.encode("utf-8")).hexdigest(),
             "query_length": len(body.query),
-            "result_count": len(results),
+            "result_count": len(merged),
             "top_k": body.top_k,
+            "datasets": search_datasets,
         },
     )
     normalized = [
         with_result_metadata(result, index, dataset)
-        for index, result in enumerate(results)
+        for index, (dataset, result) in enumerate(merged)
     ]
-    payload: dict[str, Any] = {"results": normalized, "dataset": dataset}
+    primary_dataset = search_datasets[0]
+    payload: dict[str, Any] = {
+        "results": normalized,
+        "dataset": primary_dataset,
+    }
+    if len(search_datasets) > 1:
+        payload["datasets"] = search_datasets
     if not normalized and body.dataset is None:
         payload["note"] = (
             "No results in the default dataset. Pass an explicit \"dataset\" to search a "

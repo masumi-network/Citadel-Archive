@@ -254,10 +254,6 @@ def _max_ingest_bytes() -> int:
     return max(1, value)
 
 
-def _default_search_dataset() -> str | None:
-    raw_value = os.getenv("CITADEL_MCP_DEFAULT_DATASET", "").strip()
-    return raw_value or None
-
 
 def _self_base_url() -> str:
     """Base URL the hosted MCP uses to reach the Citadel HTTP API in-process."""
@@ -563,7 +559,7 @@ def create_mcp_server(
                 "/search",
                 {
                     "query": _require_non_empty(query, "query"),
-                    "dataset": dataset or _default_search_dataset(),
+                    "dataset": dataset,
                     "session_id": session_id,
                     "top_k": _clamp_top_k(top_k),
                 },

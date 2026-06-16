@@ -93,6 +93,31 @@ async def test_learn_runs_improve_only_for_accepted_material(tmp_path: Path) -> 
     assert rejected.improved is False
 
 
+async def test_light_tier_skips_enrichment_and_improve(tmp_path: Path, monkeypatch: Any) -> None:
+    config = config_for(tmp_path)
+    citadel = FakeCitadel(config)
+    learning = LearningProcess(citadel)
+    called = {"enrich": 0}
+
+    def fake_enrich(_data: str) -> None:
+        called["enrich"] += 1
+        return None
+
+    monkeypatch.setattr(learning, "_enrich", fake_enrich)
+
+    outcome = await learning.learn(
+        "Seat working memory",
+        dataset="seat:alice",
+        run_improve=True,
+        tier="light",
+    )
+
+    assert outcome.ingest.accepted is True
+    assert outcome.improve is None
+    assert called["enrich"] == 0
+    assert citadel.improve_calls == []
+
+
 async def test_learn_keeps_going_when_improve_fails(tmp_path: Path) -> None:
     config = config_for(tmp_path)
     citadel = FailingImproveCitadel(config)
