@@ -30,6 +30,7 @@ from kb.mcp_server import TOOL_POLICIES, create_mcp_server
 from kb.mesh import MeshState
 from kb.models import FeedbackRequest
 from kb.obsidian_sync import ObsidianSyncStore, SyncPushDocument, normalize_path
+from kb.repo_content_sync import RepoContentSyncer
 from kb.self_improve import SelfImprovement
 from kb.service import Citadel
 from kb.skills import skill_catalog, skill_integrity, skill_path
@@ -177,6 +178,11 @@ class GitHubSyncBody(BaseModel):
     force: bool = False
 
 
+class RepoContentSyncBody(BaseModel):
+    force: bool = False
+    dry_run: bool = False
+
+
 class LearningAgentRunBody(BaseModel):
     force: bool = False
     dry_run: bool = False
@@ -265,10 +271,20 @@ def get_github_syncer() -> GitHubOrgSyncer:
     return GitHubOrgSyncer(get_citadel())
 
 
+def get_repo_content_syncer() -> RepoContentSyncer:
+    if hasattr(app.state, "repo_content_syncer"):
+        return app.state.repo_content_syncer
+    return RepoContentSyncer(get_citadel())
+
+
 def get_learning_agent() -> LearningAgent:
     if hasattr(app.state, "learning_agent"):
         return app.state.learning_agent
-    return LearningAgent(get_citadel(), github_syncer=get_github_syncer())
+    return LearningAgent(
+        get_citadel(),
+        github_syncer=get_github_syncer(),
+        repo_content_syncer=get_repo_content_syncer(),
+    )
 
 
 def get_backup_mirror() -> BackupMirror:
@@ -458,6 +474,25 @@ def require_access(request: Request, minimum_role: str, scope: str) -> AccessIde
     if scope not in effective_scopes(identity):
         raise HTTPException(status_code=403, detail=f"Scope required: {scope}.")
     return identity
+
+
+_AUTHOR_TAG_RE = re.compile(r"[^a-z0-9]+")
+
+
+def _author_tag(actor: AccessIdentity) -> str | None:
+    if not actor.actor_name:
+        return None
+    slug = _AUTHOR_TAG_RE.sub("-", actor.actor_name.strip().lower()).strip("-")
+    return slug or None
+
+
+def _contribution_tags(body_tags: list[str], actor: AccessIdentity) -> list[str]:
+    tags = list(dict.fromkeys([*body_tags, "vault-contribution"]))
+    if not any(tag.startswith("author:") for tag in tags):
+        author = _author_tag(actor)
+        if author:
+            tags.append(f"author:{author}")
+    return tags
 
 
 def role_payload(role: str, identity: AccessIdentity | None = None) -> dict[str, Any]:
@@ -1137,6 +1172,12 @@ async def github_sync_status(request: Request) -> Any:
     return jsonable_encoder(await get_github_syncer().status())
 
 
+@app.get("/api/repo-content-sync")
+async def repo_content_sync_status(request: Request) -> Any:
+    require_access(request, "reader", "sources:read")
+    return jsonable_encoder(await get_repo_content_syncer().status())
+
+
 @app.get("/api/sources")
 async def sources(request: Request, type: str | None = None) -> Any:
     require_access(request, "reader", "sources:read")
@@ -1160,12 +1201,28 @@ async def sources(request: Request, type: str | None = None) -> Any:
         )
         summary["github_repositories"] = github_status.get("tracked_repositories", 0)
 
+    if type in {None, "github_repo_content"}:
+        repo_content_status = await get_repo_content_syncer().status()
+        sources_payload.append(
+            {
+                "id": "github-repo-content",
+                "source_type": "github_repo_content",
+                "name": repo_content_status.get("org"),
+                "status": "tracked" if repo_content_status.get("last_checked_at") else "ready",
+                "last_checked_at": repo_content_status.get("last_checked_at"),
+                "documents": repo_content_status.get("tracked_files", 0),
+                "open_conflicts": 0,
+                "metadata": repo_content_status,
+            }
+        )
+        summary["repo_content_files"] = repo_content_status.get("tracked_files", 0)
+
     if type in {None, "obsidian_vault"}:
         obsidian_status = get_obsidian_sync().source_status(source_type="obsidian_vault")
         sources_payload.extend(obsidian_status["sources"])
         summary.update(obsidian_status["summary"])
 
-    if type not in {None, "github", "obsidian_vault"}:
+    if type not in {None, "github", "github_repo_content", "obsidian_vault"}:
         raise HTTPException(status_code=422, detail="Unsupported source type.")
 
     return {"ok": True, "sources": sources_payload, "summary": summary}
@@ -1183,6 +1240,61 @@ async def run_github_sync(body: GitHubSyncBody, request: Request) -> Any:
         await mesh_state.record_error(citadel.config, operation="github_sync", error=str(exc))
         raise HTTPException(status_code=500, detail=str(exc)) from exc
     await mesh_state.record_github_sync(citadel.config, result)
+    return jsonable_encoder(result)
+
+
+@app.post("/api/repo-content-sync/run")
+async def run_repo_content_sync(body: RepoContentSyncBody, request: Request) -> Any:
+    actor = require_access(request, "admin", "sources:sync")
+    citadel = get_citadel()
+    mesh_state = get_mesh()
+    try:
+        result = await get_repo_content_syncer().run(force=body.force, dry_run=body.dry_run)
+    except Exception as exc:  # pragma: no cover - depends on GitHub and runtime Cognee config.
+        logger.error("Repo content sync run failed: %s", exc.__class__.__name__)
+        await mesh_state.record_error(
+            citadel.config,
+            operation="repo_content_sync",
+            error=str(exc),
+        )
+        get_access_store().record_event(
+            action="repo_content_sync.run",
+            actor=actor,
+            success=False,
+            detail={
+                "force": body.force,
+                "dry_run": body.dry_run,
+                "error_type": exc.__class__.__name__,
+            },
+        )
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    if not body.dry_run and result.get("enabled") is not False:
+        await mesh_state.record_repo_content_sync(citadel.config, result)
+    get_access_store().record_event(
+        action="repo_content_sync.run",
+        actor=actor,
+        success=True,
+        detail={
+            "force": body.force,
+            "dry_run": body.dry_run,
+            "files_ingested": result.get("files_ingested"),
+            "files_skipped": result.get("files_skipped"),
+            "improved": result.get("improved"),
+        },
+    )
+    record_mcp_audit(
+        request,
+        actor=actor,
+        success=True,
+        dataset=citadel.config.repo_content_sync_dataset,
+        detail={
+            "operation": "repo_content_sync.run",
+            "force": body.force,
+            "dry_run": body.dry_run,
+            "files_ingested": result.get("files_ingested"),
+            "files_skipped": result.get("files_skipped"),
+        },
+    )
     return jsonable_encoder(result)
 
 
@@ -1470,6 +1582,13 @@ async def run_learning_agent(body: LearningAgentRunBody, request: Request) -> An
     github_result = result.get("sources", {}).get("github")
     if isinstance(github_result, dict):
         await mesh_state.record_github_sync(citadel.config, github_result)
+    repo_content_result = result.get("sources", {}).get("repo_content")
+    if (
+        isinstance(repo_content_result, dict)
+        and repo_content_result.get("enabled") is not False
+        and not body.dry_run
+    ):
+        await mesh_state.record_repo_content_sync(citadel.config, repo_content_result)
     get_access_store().record_event(
         action="learning_agent.run",
         actor=actor,
@@ -1480,6 +1599,9 @@ async def run_learning_agent(body: LearningAgentRunBody, request: Request) -> An
             "post_to_chat": body.post_to_chat,
             "ingested": result.get("ingested"),
             "improved": result.get("improved"),
+            "files_ingested": (
+                repo_content_result.get("files_ingested") if isinstance(repo_content_result, dict) else None
+            ),
             "digest_meaningful": (result.get("organization_digest") or {}).get("meaningful"),
             "google_chat_sent": (
                 (result.get("notifications") or {}).get("google_chat") or {}
@@ -1640,6 +1762,26 @@ async def ingest(body: IngestBody, request: Request) -> Any:
     return jsonable_encoder(result)
 
 
+@app.get("/api/contributions/recent")
+async def recent_contributions(
+    request: Request,
+    limit: int = Query(default=20, ge=1, le=100),
+    mine: bool = Query(default=False),
+) -> Any:
+    actor = require_access(request, "reader", "kb:read")
+    actor_id = actor.actor_id if mine else None
+    events = get_access_store().recent_audit_events(
+        action="contribute",
+        actor_id=actor_id,
+        limit=limit,
+    )
+    return {
+        "ok": True,
+        "contributions": events,
+        "filter": {"mine": mine, "limit": limit},
+    }
+
+
 @app.post("/api/contribute")
 async def contribute(body: ContributeBody, request: Request) -> Any:
     """Simple write path for teammates and agents.
@@ -1652,17 +1794,21 @@ async def contribute(body: ContributeBody, request: Request) -> Any:
     citadel = get_citadel()
     learning = get_learning_process()
     dataset = body.dataset or citadel.config.default_dataset
+    contribution_tags = _contribution_tags(body.tags, actor)
     parts = [f"# {body.title.strip()}", "", body.content.strip()]
     if body.source_url and body.source_url.strip():
         parts.extend(["", f"Source: {body.source_url.strip()}"])
+    if actor.actor_name:
+        parts.extend(["", f"Author: {actor.actor_name.strip()}"])
     data = "\n".join(parts)
     try:
         outcome = await learning.learn(
             data,
             dataset=body.dataset,
-            tags=body.tags,
+            tags=contribution_tags,
             operation="contribute",
             detect_conflicts=True,
+            run_improve=citadel.config.contribute_run_improve,
         )
     except Exception as exc:  # pragma: no cover - depends on runtime Cognee configuration.
         get_access_store().record_event(
@@ -1692,7 +1838,9 @@ async def contribute(body: ContributeBody, request: Request) -> Any:
             "chunks": outcome.accepted_chunks,
             "conflict": bool(outcome.conflict),
             "reason": outcome.ingest.reason,
-            "tag_count": len(body.tags),
+            "title": body.title.strip(),
+            "tags": contribution_tags,
+            "tag_count": len(contribution_tags),
             "content_bytes": len(body.content.encode("utf-8")),
         },
     )

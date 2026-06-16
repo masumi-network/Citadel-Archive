@@ -292,6 +292,59 @@ class MeshState:
                 },
             )
 
+    async def record_repo_content_sync(self, config: CitadelConfig, result: dict[str, Any]) -> None:
+        async with self._lock:
+            self._ensure_base_graph(config)
+            dataset_id = self._dataset_node(
+                result.get("dataset") or config.repo_content_sync_dataset
+            )
+            source_id = stable_id("source", f"github-repo-content:{result.get('org') or config.github_org}")
+            self.nodes[source_id] = {
+                "id": source_id,
+                "label": f"Repo content / {result.get('org') or config.github_org}",
+                "type": "source",
+                "status": "synced",
+                "size": 48,
+                "metadata": {
+                    "source_type": "github_repo_content",
+                    "checked_at": result.get("checked_at"),
+                    "repos_scanned": result.get("repos_scanned"),
+                    "files_ingested": result.get("files_ingested"),
+                },
+            }
+            self._edge(source_id, dataset_id, "cognifies")
+
+            for repo_result in result.get("repositories", [])[:12]:
+                if not isinstance(repo_result, dict):
+                    continue
+                repo_name = repo_result.get("repo")
+                if not repo_name:
+                    continue
+                repo_id = stable_id("repository", repo_name)
+                self.nodes[repo_id] = {
+                    "id": repo_id,
+                    "label": repo_name.split("/")[-1],
+                    "type": "repository",
+                    "status": "indexed" if repo_result.get("ingested") else "ready",
+                    "size": 28,
+                    "metadata": repo_result,
+                }
+                self._edge(source_id, repo_id, "ingested")
+                self._edge(repo_id, dataset_id, "documents")
+
+            await self._record_event(
+                "repo_content_sync",
+                "Repository content sync completed",
+                {
+                    "org": result.get("org"),
+                    "dataset": config.repo_content_sync_dataset,
+                    "repos": result.get("repos_scanned"),
+                    "files_ingested": result.get("files_ingested"),
+                    "files_skipped": result.get("files_skipped"),
+                    "improved": result.get("improved"),
+                },
+            )
+
     async def record_obsidian_sync(
         self,
         config: CitadelConfig,

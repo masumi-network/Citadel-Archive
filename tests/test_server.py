@@ -98,8 +98,14 @@ class FakeLearningAgent:
             "agent": "citadel-learning-agent",
             "sources": {
                 "github": await FakeGitHubSyncer().status(),
+                "repo_content": {
+                    "ok": True,
+                    "source_type": "github_repo_content",
+                    "enabled": True,
+                    "tracked_files": 8,
+                },
             },
-            "capabilities": ["summarize_recent_commits"],
+            "capabilities": ["summarize_recent_commits", "sync_repo_content"],
         }
 
     async def run(
@@ -117,7 +123,15 @@ class FakeLearningAgent:
                 "github": {
                     **(await FakeGitHubSyncer().run(force=force)),
                     "dry_run": dry_run,
-                }
+                },
+                "repo_content": {
+                    "ok": True,
+                    "enabled": True,
+                    "files_ingested": 0 if dry_run else 4,
+                    "files_skipped": 2,
+                    "improved": not dry_run,
+                    "dry_run": dry_run,
+                },
             },
             "ingested": not dry_run,
             "improved": not dry_run,
@@ -1272,6 +1286,62 @@ class KnowledgeCitadel(FakeCitadel):
         ]
 
 
+def test_repo_content_sync_status_and_run(tmp_path: Any) -> None:
+    class FakeRepoContentSyncer:
+        async def status(self) -> dict[str, Any]:
+            return {
+                "ok": True,
+                "enabled": True,
+                "source_type": "github_repo_content",
+                "tracked_files": 14,
+            }
+
+        async def run(self, *, force: bool = False, dry_run: bool = False) -> dict[str, Any]:
+            return {
+                "ok": True,
+                "enabled": True,
+                "files_ingested": 2 if not dry_run else 0,
+                "files_skipped": 1,
+                "dry_run": dry_run,
+                "improved": not dry_run,
+            }
+
+    app.state.repo_content_syncer = FakeRepoContentSyncer()
+    reader = authed_client("test-reader")
+    admin = authed_client("test-admin")
+
+    status = reader.get("/api/repo-content-sync")
+    assert status.status_code == 200
+    assert status.json()["source_type"] == "github_repo_content"
+
+    denied = reader.post("/api/repo-content-sync/run", json={"dry_run": True})
+    assert denied.status_code == 403
+
+    run = admin.post("/api/repo-content-sync/run", json={"force": True, "dry_run": True})
+    assert run.status_code == 200
+    assert run.json()["dry_run"] is True
+
+
+def test_recent_contributions_lists_audit_events(tmp_path: Any) -> None:
+    store = AccessStore(str(tmp_path / "access.json"))
+    app.state.access_store = store
+    writer = authed_client("test-writer")
+
+    response = writer.post(
+        "/api/contribute",
+        json={"title": "WIP: MCP docs", "content": "OAuth uses hosted endpoint.", "tags": ["wip"]},
+    )
+    assert response.status_code == 200
+
+    recent = writer.get("/api/contributions/recent?limit=5")
+    assert recent.status_code == 200
+    payload = recent.json()
+    assert payload["ok"] is True
+    assert len(payload["contributions"]) == 1
+    assert payload["contributions"][0]["action"] == "contribute"
+    assert payload["contributions"][0]["detail"]["title"] == "WIP: MCP docs"
+
+
 def test_contribute_routes_through_learning_process_and_audits(tmp_path: Any) -> None:
     client = authed_client("test-writer")
     store = AccessStore(str(tmp_path / "access.json"))
@@ -1300,7 +1370,13 @@ def test_contribute_routes_through_learning_process_and_audits(tmp_path: Any) ->
     assert len(contribute_events) == 1
     assert contribute_events[0]["success"] is True
     assert contribute_events[0]["detail"]["chunks"] == 1
-    assert contribute_events[0]["detail"]["tag_count"] == 2
+    assert contribute_events[0]["detail"]["tag_count"] == 4
+    assert contribute_events[0]["detail"]["tags"] == [
+        "decision",
+        "llm",
+        "vault-contribution",
+        "author:writer-bootstrap-key",
+    ]
     # Raw contribution content never lands in the audit trail.
     assert "deepseek-v4-flash" not in json.dumps(contribute_events[0])
 

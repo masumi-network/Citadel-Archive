@@ -441,6 +441,22 @@ class AccessStore:
             for item in data.get("audit_events", [])
         ]
 
+    def recent_audit_events(
+        self,
+        *,
+        action: str | None = None,
+        actor_id: str | None = None,
+        limit: int = 20,
+    ) -> list[dict[str, Any]]:
+        events = self._audit_events(self._load())
+        filtered = [
+            asdict(event)
+            for event in reversed(events)
+            if (action is None or event.action == action)
+            and (actor_id is None or event.actor_id == actor_id)
+        ]
+        return filtered[: max(1, min(limit, 100))]
+
     def _redact_token(self, api_token: ApiToken) -> dict[str, Any]:
         redacted = asdict(api_token)
         redacted.pop("token_hash", None)

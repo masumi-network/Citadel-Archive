@@ -35,6 +35,29 @@ async def test_rejected_ingest_records_reject_event_without_document() -> None:
     assert snapshot["events"][0]["details"]["reason"] == "too_short"
 
 
+async def test_record_repo_content_sync_adds_source_and_event() -> None:
+    mesh = MeshState()
+    result = {
+        "org": "masumi-network",
+        "checked_at": "2026-06-16T00:00:00Z",
+        "repos_scanned": 2,
+        "files_ingested": 5,
+        "files_skipped": 1,
+        "improved": True,
+        "repositories": [
+            {"repo": "masumi-network/sokosumi-cli", "ingested": 3, "skipped": 0},
+        ],
+    }
+
+    await mesh.record_repo_content_sync(CONFIG, result)
+    snapshot = await mesh.snapshot(CONFIG)
+
+    repo_nodes = [node for node in snapshot["nodes"] if node["type"] == "repository"]
+    assert any(node["label"] == "sokosumi-cli" for node in repo_nodes)
+    assert snapshot["events"][-1]["type"] == "repo_content_sync"
+    assert snapshot["events"][-1]["details"]["files_ingested"] == 5
+
+
 async def test_revision_counter_increments_per_event() -> None:
     mesh = MeshState()
 
