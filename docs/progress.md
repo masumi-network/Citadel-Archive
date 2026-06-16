@@ -1,6 +1,46 @@
 # Citadel Progress
 
-Last updated: 2026-06-11.
+Last updated: 2026-06-17.
+
+## 2026-06-17
+
+- Reviewed the seat/node/central Phase 1+2 work (commit `2cd3ac9`,
+  `feat(access): add seat provisioning and multi-dataset search`) against
+  ADR-0003 and hardened six isolation/correctness gaps. Changes are local on
+  `main`, verified but not yet committed/pushed.
+- Closed the seat-isolation gaps in `kb/server.py` and `kb/access.py`:
+  - **Default-deny `seat:` namespace.** `enforce_dataset_allowlist` no longer
+    lets a token with an empty `allowed_datasets` reach a seat node by naming it.
+    Previously any legacy/non-seat token could read or write another seat's
+    `seat:{slug}` node; now only the owning seat (plus audited admin/env bypass)
+    can. Ordinary (non-seat) datasets stay open for unscoped tokens for backward
+    compatibility.
+  - **Seats cannot be admin.** `create_seat(role="admin")` is rejected and the
+    Admin option is removed from the seat form, because an admin token bypasses
+    the allowlist and would dissolve the node boundary. Admin tokens are issued
+    directly via token creation.
+  - **Central allow-entry derived from config.** `create_seat` now takes the
+    resolved `central_dataset(config)` instead of hardcoding `masumi-network`, so
+    the seat allowlist can no longer drift from the dataset the router targets
+    when `CITADEL_GITHUB_SYNC_DATASET` is overridden.
+  - **Central is curated.** A seat-holder's explicit write to the Central dataset
+    must carry an org tag (`org-ready` / `vault-contribution`) or go through
+    `/api/contribute`; an untagged direct write to Central is rejected (403).
+    Admin/env callers and non-seat service accounts keep their direct path.
+- Hardened multi-dataset search merge: `search_across_datasets` now queries every
+  allowed dataset before ranking, with a reserved slice for secondaries, so a
+  result-rich node can no longer short-circuit and silently drop Central. Dedup
+  still favors the node copy.
+- Added scope-override auditing: when a bypassing caller that carries its own
+  allowlist reaches outside it, search/ingest/contribute audit detail records
+  `scope_override: true`.
+- Documented the model changes in `docs/adr/0003-seat-node-central-private-memory.md`
+  (three new Consequence bullets) and `docs/agent-access-model.md` (Read/Write
+  Scope, Admin Override, Token Memory Scope, and Security Rules).
+- Verified with `uv run pytest -q`: 301 passed (294 prior + 7 new tests covering
+  cross-seat denial, unscoped-token denial of a seat node, admin-seat rejection,
+  the curated-Central gate, scope-override auditing, and the configurable Central
+  allow-entry).
 
 ## 2026-06-11
 

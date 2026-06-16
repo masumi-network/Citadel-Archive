@@ -36,10 +36,16 @@ before issuing tokens. Storage isolation is at the **Node**, not the token.
 ### Read Scope
 
 - **Allowed:** caller's own node (`seat:{slug}`) + Central (`masumi-network`).
-- **Forbidden:** any other seat's node — hard isolation.
+- **Forbidden:** any other seat's node — hard isolation. The `seat:` namespace is
+  default-deny: a token reaches a seat node only when that node is in its own
+  `allowed_datasets`. An unscoped or legacy token (empty allowlist) keeps
+  whole-vault access to ordinary datasets but cannot name another seat's node.
+  Env/bootstrap and admin/`access:manage` callers still bypass.
 
 Phase 2 adds multi-dataset search that queries allowed datasets in one call;
-Phase 1 resolves a single dataset per request with token defaults.
+Phase 1 resolves a single dataset per request with token defaults. The merge
+queries every allowed dataset before ranking — a result-rich node can never
+short-circuit and silently drop Central — and dedup favors the node copy.
 
 ### Write Scope
 
@@ -50,13 +56,22 @@ Phase 1 resolves a single dataset per request with token defaults.
 | GitHub / repo sync | Central | Full Learning Process |
 | Promotion | Dual-write (node + Central) | Curated; original stays in node |
 
-Tags (Phase 2) separate automatic (node) and curated (Central) lanes. Until
-tag routing ships, callers should pass an explicit `dataset` on ingest/search.
+Tags (Phase 2) separate automatic (node) and curated (Central) lanes.
+**Central is curated:** a seat-holder cannot write raw content straight into it.
+A write that explicitly targets Central must carry an org tag (`org-ready` /
+`vault-contribution`, which routes through promotion/dual-write) or go through
+`/api/contribute`; an untagged direct write to Central from a seat is rejected
+(403). Admin/env callers and non-seat service accounts keep their direct write
+path.
 
 ### Admin Override
 
 Admins may override scope for support with full audit. Seat-to-seat node reads
-remain forbidden. See ADR-0003.
+remain forbidden, and **seats cannot be admin** — admin tokens bypass the
+allowlist (dissolving the node boundary) and are issued directly via token
+creation, never as a seat (`create_seat(role="admin")` is rejected). When a
+bypassing caller that carries its own allowlist reaches outside it, the audit
+detail records `scope_override: true`. See ADR-0003.
 
 ## MCP Surface
 
@@ -136,9 +151,10 @@ Each token may carry:
 - `default_dataset` — default for search/ingest when caller omits `dataset`
   (typically `seat:{slug}` for members, `masumi-network` for org-wide agents).
 - `default_session` — default Cognee session for the token.
-- `allowed_datasets` — optional allowlist; empty means whole-vault access for
-  the role; non-empty restricts search/ingest/contribute to listed datasets
-  (admin and `access:manage` bypass).
+- `allowed_datasets` — optional allowlist; empty means whole-vault access to
+  ordinary datasets for the role **but never another seat's node** (the `seat:`
+  namespace is default-deny); non-empty restricts search/ingest/contribute to
+  listed datasets (admin and `access:manage` bypass, audited as `scope_override`).
 
 Resolution order: token fields → principal defaults → server config.
 
@@ -185,13 +201,13 @@ Future scopes:
 - Use browser sessions for humans and bearer tokens/OAuth for agents.
 - Store API tokens hashed, never plaintext.
 - Let admins create, rotate, disable, and expire agent tokens after seat provisioning.
-- Scope tokens by role and memory fields; enforce `allowed_datasets` at query time.
+- Scope tokens by role and memory fields; enforce `allowed_datasets` at query time. The `seat:` namespace is default-deny even for tokens with an empty allowlist; direct writes to Central require an org tag or `/api/contribute`.
 - Rate limit per seat/service account, especially search and ingest.
 - Audit every MCP call with actor, role, tool, dataset, success/failure, and request ID.
 - Treat retrieved vault content as untrusted context. Do not allow retrieved text to override system/developer instructions.
 - Sensitive MCP tools must require client approval: sync, improve, delete, reindex, invite, token creation, seat provisioning.
 - Prefer OAuth 2.1 + Protected Resource Metadata for hosted remote MCP. Local stdio MCP can use env-provided credentials.
-- Never expose one seat's node content to another seat's token.
+- Never expose one seat's node content to another token — seat, service account, or legacy — regardless of allowlist state. Only the owning seat (and audited admin/env bypass) reaches a node.
 
 ## Dashboard Model
 
