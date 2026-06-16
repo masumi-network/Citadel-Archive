@@ -389,6 +389,27 @@ GitHub token can see private repositories, treat the sync as sensitive metadata.
 See [`docs/private-github-sync-security.md`](docs/private-github-sync-security.md)
 before enabling private repo access.
 
+### Deep repository content sync
+
+The activity digest tracks momentum (PRs, commits). A separate connector ingests
+**product knowledge** — READMEs, `SKILL.md`, docs trees — from allowlisted repos,
+runs each file through the Learning Process, and calls Cognee cognify so the
+knowledge graph links concepts instead of storing digest noise.
+
+Default Sokosumi repos: `sokosumi`, `Sokosumi-MCP`, `sokosumi-cli`, `sokosumi-docs`.
+
+```bash
+uv run citadel sync-repo-content --dry-run
+uv run citadel sync-repo-content --force
+curl -fsS -X POST "$CITADEL_BASE_URL/api/repo-content-sync/run" \
+  -H "Authorization: Bearer $CITADEL_ADMIN_KEY" \
+  -H "Content-Type: application/json" \
+  --data '{"force": false, "dry_run": false}'
+```
+
+The learning-agent cron and Railway `pipeline` mode run this after GitHub digest
+sync when `CITADEL_PIPELINE_REPO_CONTENT_SYNC_ENABLED=true`.
+
 Default sync target:
 
 ```bash
