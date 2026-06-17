@@ -1586,10 +1586,12 @@ def test_optimize_endpoint_is_admin_only_bounded_and_audited(
 class MultiSearchCitadel(FakeCitadel):
     def __init__(self) -> None:
         self.search_calls: list[str] = []
+        self.session_calls: dict[str, str | None] = {}
 
     async def search(self, query: str, **kwargs: Any) -> list[dict[str, Any]]:
         dataset = kwargs["dataset"]
         self.search_calls.append(dataset)
+        self.session_calls[dataset] = kwargs.get("session_id")
         return [
             {
                 "query": query,
@@ -1673,6 +1675,12 @@ def test_seat_token_searches_node_and_central(tmp_path: Any) -> None:
     assert payload["results"][0]["dataset"] == "seat:bob"
     assert payload["results"][1]["dataset"] == "masumi-network"
     assert set(app.state.citadel.search_calls) == {"seat:bob", "masumi-network"}
+    # The seat session scopes the private node only; Central must stay
+    # dataset-wide (session_id None) or org-wide hits get hidden.
+    assert app.state.citadel.session_calls == {
+        "seat:bob": "seat-bob",
+        "masumi-network": None,
+    }
 
     assert knowledge.status_code == 200
     assert knowledge.json()["datasets"] == ["seat:bob", "masumi-network"]
@@ -1848,6 +1856,86 @@ def test_seat_direct_central_write_requires_org_tag(tmp_path: Any) -> None:
     assert tagged.json()["dataset"] == "masumi-network"
     # Only the tagged write reached Cognee; the untagged one never ingested.
     assert [call["dataset"] for call in tracking.ingest_calls] == ["masumi-network"]
+
+
+def test_seat_token_defaulting_to_central_still_gated(tmp_path: Any) -> None:
+    # A seat-scoped token whose default_dataset is Central must not slip the
+    # curation gate: the seat node in its allowlist is the authoritative signal,
+    # so raw drops into Central (explicit or via the default target) are blocked.
+    app.state.access_store = AccessStore(tmp_path / "access.json")
+    admin = authed_client()
+    token = admin.post(
+        "/api/access/tokens",
+        json={
+            "name": "seat-defaulting-central",
+            "role": "writer",
+            "kind": "user",
+            "default_dataset": "masumi-network",
+            "allowed_datasets": ["seat:leo", "masumi-network"],
+        },
+    ).json()["token"]
+    tracking = TrackingCitadel()
+    app.state.citadel = tracking
+    app.state.mesh = MeshState()
+    api_client = TestClient(app, base_url="https://testserver")
+
+    explicit = api_client.post(
+        "/ingest",
+        json={"data": "raw drop", "dataset": "masumi-network"},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    # No dataset given -> default target resolves to Central, which must also gate.
+    defaulted = api_client.post(
+        "/ingest",
+        json={"data": "raw default drop"},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    tagged = api_client.post(
+        "/ingest",
+        json={"data": "curated", "dataset": "masumi-network", "tags": ["org-ready"]},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert explicit.status_code == 403
+    assert "org tag" in explicit.json()["detail"]
+    assert defaulted.status_code == 403
+    assert "org tag" in defaulted.json()["detail"]
+    assert tagged.status_code == 200
+    assert [call["dataset"] for call in tracking.ingest_calls] == ["masumi-network"]
+
+
+def test_obsidian_push_routes_org_tagged_docs_through_tags(tmp_path: Any) -> None:
+    # Obsidian sync must route on the document's real tags like /ingest: an
+    # org-bound (promotion) note dual-writes the seat node and Central instead of
+    # being trapped in the node because the resolver was handed empty tags.
+    app.state.access_store = AccessStore(tmp_path / "access.json")
+    app.state.obsidian_sync = ObsidianSyncStore(tmp_path / "obsidian.json")
+    app.state.mesh = MeshState()
+    admin = authed_client()
+    token = admin.post("/api/access/seats", json={"name": "Mia", "slug": "mia"}).json()["token"]
+    tracking = TrackingCitadel()
+    app.state.citadel = tracking
+    api_client = TestClient(app, base_url="https://testserver")
+    headers = {"Authorization": f"Bearer {token}"}
+
+    vault_id = api_client.post(
+        "/api/obsidian/vaults",
+        json={"vault_name": "Mia Vault"},
+        headers=headers,
+    ).json()["vault"]["id"]
+    pushed = api_client.post(
+        "/api/obsidian/sync/push",
+        json={
+            "vault_id": vault_id,
+            "tags": ["org-ready"],
+            "documents": [{"path": "Notes/Share.md", "content": "Org-ready note."}],
+        },
+        headers=headers,
+    )
+
+    assert pushed.status_code == 200
+    datasets = [call["dataset"] for call in tracking.ingest_calls]
+    assert datasets == ["seat:mia", "masumi-network"]
 
 
 def test_create_seat_api_rejects_admin_role(tmp_path: Any) -> None:
