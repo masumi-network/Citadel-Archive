@@ -1988,6 +1988,10 @@ def test_obsidian_push_routes_org_tagged_docs_through_tags(tmp_path: Any) -> Non
     assert pushed.status_code == 200
     datasets = [call["dataset"] for call in tracking.ingest_calls]
     assert datasets == ["seat:mia", "masumi-network"]
+    # The audit records both legs of the dual-write, not just the primary outcome.
+    events = app.state.access_store.snapshot()["audit_events"]
+    push_event = next(e for e in events if e["action"] == "obsidian.sync.push")
+    assert push_event["detail"]["written_datasets"] == ["masumi-network", "seat:mia"]
 
 
 def test_create_seat_api_rejects_admin_role(tmp_path: Any) -> None:

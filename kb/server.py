@@ -1796,6 +1796,7 @@ async def push_obsidian_sync(body: ObsidianPushBody, request: Request) -> Any:
 
     learning = get_learning_process()
     ingest_results: list[dict[str, Any]] = []
+    written_datasets: set[str] = set()
     for accepted in result["accepted"]:
         if accepted.get("deleted"):
             continue
@@ -1834,6 +1835,9 @@ async def push_obsidian_sync(body: ObsidianPushBody, request: Request) -> Any:
                 "tags": list(ingest_result.tags),
             }
         )
+        # A promotion writes more than the primary outcome's dataset, so record
+        # every target (node + Central) for an accurate audit trail.
+        written_datasets.update(target.dataset for target in document_targets)
 
     # Keep every push conflict visible as a Knowledge Conflict (never silently
     # overwritten) and surface detection in the activity stream.
@@ -1864,8 +1868,9 @@ async def push_obsidian_sync(body: ObsidianPushBody, request: Request) -> Any:
             "skipped": len(result["skipped"]),
             "conflicts": len(result["conflicts"]),
             # push_dataset is the vault's home binding; tag routing can additionally
-            # land a note in Central, so record where content actually went.
-            "written_datasets": sorted({entry["dataset"] for entry in ingest_results}),
+            # land a note in Central (and a promotion dual-writes node + Central),
+            # so record every dataset that actually received content.
+            "written_datasets": sorted(written_datasets),
         },
     )
     return {"ok": True, **jsonable_encoder(result), "ingest_results": ingest_results}
