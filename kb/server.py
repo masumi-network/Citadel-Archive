@@ -791,7 +791,25 @@ async def execute_learning_writes(
     return primary, outcomes
 
 
+def assert_requested_session_allowed(identity: AccessIdentity, requested: str | None) -> None:
+    # A session id is private context, and session-scoped recall ignores the
+    # dataset allowlist (Cognee recalls by session without a dataset constraint).
+    # Seat sessions are `seat-{slug}` — derived from a guessable slug — so a caller
+    # who could name another seat's session would read that seat's private node,
+    # sidestepping node isolation. A non-bypass caller may therefore only name
+    # their own default_session; admin/env callers keep full session reach (org
+    # sync sessions, cross-seat support).
+    if not requested:
+        return
+    if can_bypass_dataset_allowlist(identity):
+        return
+    if requested == identity.default_session:
+        return
+    raise HTTPException(status_code=403, detail="Session not allowed.")
+
+
 def resolve_session_id(identity: AccessIdentity, requested: str | None) -> str | None:
+    assert_requested_session_allowed(identity, requested)
     return requested or identity.default_session
 
 
@@ -800,14 +818,25 @@ def resolve_search_sessions(
     requested: str | None,
     datasets: list[str],
 ) -> dict[str, str | None]:
-    # An explicit session request is the caller's deliberate choice and applies to
-    # whatever was searched. The implicit default_session, by contrast, is private
-    # node memory: scope it to the caller's own node only so a seat session can
-    # never filter (and thereby hide org-wide hits in) a shared dataset like Central.
-    if requested:
+    # A session is private node memory. Scope it to the caller's own node only, so
+    # a seat session can never filter (and thereby hide org-wide hits in) a shared
+    # dataset like Central — even when the seat passes its own session explicitly.
+    # Admin/env callers may target any session across whatever they searched.
+    assert_requested_session_allowed(identity, requested)
+    if requested and can_bypass_dataset_allowlist(identity):
         return {dataset: requested for dataset in datasets}
+    session = requested or identity.default_session
+    if not session:
+        return {dataset: None for dataset in datasets}
+    owned = identity.default_dataset
     return {
-        dataset: (identity.default_session if dataset == identity.default_dataset else None)
+        # The session scopes the caller's own node; for a caller with no node of
+        # its own, a single-dataset search still scopes to that one dataset.
+        dataset: (
+            session
+            if dataset == owned or (owned is None and len(datasets) == 1)
+            else None
+        )
         for dataset in datasets
     }
 
@@ -1834,6 +1863,9 @@ async def push_obsidian_sync(body: ObsidianPushBody, request: Request) -> Any:
             "accepted": len(result["accepted"]),
             "skipped": len(result["skipped"]),
             "conflicts": len(result["conflicts"]),
+            # push_dataset is the vault's home binding; tag routing can additionally
+            # land a note in Central, so record where content actually went.
+            "written_datasets": sorted({entry["dataset"] for entry in ingest_results}),
         },
     )
     return {"ok": True, **jsonable_encoder(result), "ingest_results": ingest_results}
