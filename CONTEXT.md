@@ -133,6 +133,8 @@ _Avoid_: merge, overwrite, silent correction
 - An **Organization Update Digest** can be delivered to an external communication surface without becoming **Source Material** itself.
 - A **Security Finding** is separate from an **Organization Update Digest** and should never expose secret values in external communication surfaces.
 - A **Knowledge Conflict** should be shown when source-linked knowledge disagrees.
+- A **Seat** is one human **Principal** that may hold several **Tokens**; **Agent Identities** acting for that human are separate principals that may be granted access to the seat's **Node**.
+- A caller is treated as holding a **Node** when a seat **Node** is in its access scope — this is what subjects it to **Central** curation rules, regardless of whether it is the human seat-holder or one of their agents.
 
 ## Example Dialogue
 
@@ -197,3 +199,4 @@ _Avoid_: merge, overwrite, silent correction
 - "org update" was broader than repository changes; resolved: an **Organization Update Digest** summarizes meaningful source-linked changes, features, decisions, and ongoing work from the **Organization Vault**.
 - "secret reporting" was initially mixed into the update digest; resolved: potential secrets and high-risk issues are **Security Findings**, redacted and handled separately from daily digests.
 - "conflicting knowledge" was unresolved; resolved: prefer newer source-linked repository truth for code behavior, while marking **Knowledge Conflicts** visibly.
+- "is a caller a Seat?" was conflated with principal identity; resolved: for **Central** curation the test is whether a seat **Node** is in the caller's access scope, which covers both the human's **Tokens** and their **Agent Identities** — agents are not the human **Principal** and so carry no seat marker of their own.
