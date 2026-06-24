@@ -552,7 +552,11 @@ def create_mcp_server(
         session_id: str | None = None,
         top_k: int = 10,
     ) -> dict[str, Any]:
-        """Search the Citadel Organization Vault."""
+        """Search the Citadel Organization Vault.
+
+        Searches your personal node and shared Central together by default; pass
+        dataset to narrow. Leave session_id default.
+        """
         return await _call_async(
             "citadel_search",
             lambda: resolve_client(ctx).post(
@@ -617,7 +621,12 @@ def create_mcp_server(
         tags: list[str] | None = None,
         session_id: str | None = None,
     ) -> dict[str, Any]:
-        """Add durable context to the Citadel Organization Vault. Requires writer access."""
+        """Add durable context to the Citadel Organization Vault. Requires writer access.
+
+        Writes to your personal node (seat:{slug}) by default. Add tag org-ready or
+        vault-contribution to also promote to shared Central; set dataset to
+        override. Leave session_id default.
+        """
 
         def post_ingest() -> dict[str, Any]:
             normalized_data = _require_non_empty(data, "data")
@@ -651,7 +660,9 @@ def create_mcp_server(
 
         The easy write path for agents: same route as POST /api/contribute,
         with enrichment (when enabled) and Knowledge Conflict detection on.
-        Requires writer access.
+        Routes through Central promotion via the Learning Process, so the
+        contribution is curated into shared Central rather than left in your
+        personal node. Requires writer access.
         """
 
         def post_contribute() -> dict[str, Any]:

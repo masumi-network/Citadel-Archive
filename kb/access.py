@@ -60,6 +60,7 @@ class AccessIdentity:
     default_dataset: str | None = None
     default_session: str | None = None
     allowed_datasets: tuple[str, ...] = field(default_factory=tuple)
+    seat_slug: str | None = None
 
 
 @dataclass(frozen=True)
@@ -544,6 +545,9 @@ class AccessStore:
             default_dataset=default_dataset,
             default_session=default_session,
             allowed_datasets=allowed_datasets,
+            # Carry the seat marker straight off this token's own principal so a
+            # self-describing scope can never name another seat's slug.
+            seat_slug=principal.seat_slug,
         )
         return TokenSession(identity=identity, token_hash=api_token.token_hash)
 

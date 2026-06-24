@@ -22,6 +22,7 @@ from pydantic import BaseModel, Field
 
 from kb.access import (
     CENTRAL_DATASET,
+    SEAT_DATASET_PREFIX,
     AccessIdentity,
     AccessStore,
     ROLE_ORDER,
@@ -846,16 +847,30 @@ def resolve_search_sessions(
     }
 
 
+def node_label(dataset: str | None) -> str | None:
+    # A friendly, human label for the caller's private Node dataset. Only seat
+    # nodes get a label; shared datasets like Central are not a personal Node.
+    if not is_seat_dataset(dataset):
+        return None
+    slug = dataset[len(SEAT_DATASET_PREFIX) :]
+    return f"{slug}'s private Node"
+
+
 def resolved_memory_scope(
     identity: AccessIdentity,
     config: CitadelConfig,
 ) -> dict[str, Any]:
     search_datasets = resolve_search_datasets(identity, None, config)
+    # Reflect ONLY the authenticated caller's own identity: seat_slug is read
+    # straight off this identity (null for non-seat callers), never another seat.
+    seat_slug = identity.seat_slug
     return {
         "default_dataset": search_datasets[0],
         "default_session": identity.default_session,
         "allowed_datasets": list(identity.allowed_datasets) or None,
         "search_datasets": search_datasets if len(search_datasets) > 1 else None,
+        "seat_slug": seat_slug,
+        "node_label": node_label(identity.default_dataset),
     }
 
 
@@ -1283,6 +1298,56 @@ async def audit_snapshot(
         "audit_events": returned_events,
         "summary": audit_summary(all_events=events, returned_events=returned_events),
     }
+
+
+@app.get("/api/access/seats")
+async def list_access_seats(request: Request) -> dict[str, Any]:
+    require_access(request, "admin", "access:manage")
+    snapshot = get_access_store().snapshot()
+    tokens_by_principal: dict[str, list[dict[str, Any]]] = {}
+    for token in snapshot["tokens"]:
+        tokens_by_principal.setdefault(token["principal_id"], []).append(token)
+    seats: list[dict[str, Any]] = []
+    # A seat is a principal that carries a seat_slug; derive the list purely from
+    # the existing snapshot (no new store schema), joining each seat to its tokens.
+    for principal in snapshot["principals"]:
+        if not principal.get("seat_slug"):
+            continue
+        seat_tokens = sorted(
+            tokens_by_principal.get(principal["id"], []),
+            key=lambda token: token.get("created_at") or "",
+        )
+        token_rows = [
+            {
+                "id": token["id"],
+                "name": token["name"],
+                "role": token["role"],
+                # prefix is the masked, non-secret head already stored at rest.
+                "prefix": token["prefix"],
+                "revoked": bool(token.get("revoked_at")),
+                "revoked_at": token.get("revoked_at"),
+                "last_used_at": token.get("last_used_at"),
+                "created_at": token.get("created_at"),
+            }
+            for token in seat_tokens
+        ]
+        active_tokens = sum(1 for token in token_rows if not token["revoked"])
+        seats.append(
+            {
+                "principal_id": principal["id"],
+                "name": principal["name"],
+                "seat_slug": principal["seat_slug"],
+                "node_dataset": principal.get("default_dataset"),
+                "email": principal.get("email"),
+                "role": principal["role"],
+                "disabled": bool(principal.get("disabled_at")),
+                "active_token_count": active_tokens,
+                "token_count": len(token_rows),
+                "tokens": token_rows,
+            }
+        )
+    seats.sort(key=lambda seat: seat["seat_slug"])
+    return {"ok": True, "seats": seats}
 
 
 @app.post("/api/access/seats")

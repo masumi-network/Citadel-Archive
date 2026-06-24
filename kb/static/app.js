@@ -62,6 +62,8 @@ const feedbackResult = document.getElementById("feedbackResult");
 const accessTokenStatus = document.getElementById("accessTokenStatus");
 const accessPrincipalList = document.getElementById("accessPrincipalList");
 const accessTokenList = document.getElementById("accessTokenList");
+const accessSeatsList = document.getElementById("accessSeatsList");
+const accessSeatsStatus = document.getElementById("accessSeatsStatus");
 const accessAuditList = document.getElementById("accessAuditList");
 const newAccessToken = document.getElementById("newAccessToken");
 const dashboardCronStatus = document.getElementById("dashboardCronStatus");
@@ -2192,6 +2194,10 @@ async function loadAccess() {
     }
     accessPrincipalList.innerHTML = "";
     accessPrincipalList.append(emptyState("Could not load access", error.message));
+    if (accessSeatsList) {
+      accessSeatsList.innerHTML = "";
+      accessSeatsList.append(emptyState("Could not load seats", error.message));
+    }
     if (agentsTokenList) {
       agentsTokenList.innerHTML = "";
       agentsTokenList.append(emptyState("Could not load agents", error.message));
@@ -2209,6 +2215,7 @@ function renderAccess(snapshot) {
   accessAuditList.innerHTML = "";
   renderDashboardMcpAccess(snapshot);
   renderAgents(snapshot);
+  loadSeats();
   renderAuditAccessEvents(snapshot.audit_events || []);
 
   if (!snapshot.principals?.length) {
@@ -2299,6 +2306,73 @@ function renderAgents(snapshot) {
       <span class="status-chip ${revoked ? "status-error" : "status-enabled"}">${escapeHtml(revoked ? "revoked" : token.prefix + "...")}</span>
     `;
     agentsTokenList.append(item);
+  });
+}
+
+async function loadSeats() {
+  if (!accessSeatsList) return;
+  if (accessSeatsStatus) {
+    accessSeatsStatus.textContent = "Loading";
+    accessSeatsStatus.className = "status-chip status-standby";
+  }
+  try {
+    const response = await api("/api/access/seats");
+    renderSeats(response.seats || []);
+    if (accessSeatsStatus) {
+      const count = (response.seats || []).length;
+      accessSeatsStatus.textContent = `${count} seat${count === 1 ? "" : "s"}`;
+      accessSeatsStatus.className = `status-chip ${count ? "status-enabled" : "status-standby"}`;
+    }
+  } catch (error) {
+    accessSeatsList.innerHTML = "";
+    accessSeatsList.append(emptyState("Could not load seats", error.message));
+    if (accessSeatsStatus) {
+      accessSeatsStatus.textContent = "Error";
+      accessSeatsStatus.className = "status-chip status-error";
+    }
+  }
+}
+
+function renderSeats(seats = []) {
+  accessSeatsList.innerHTML = "";
+  if (!seats.length) {
+    accessSeatsList.append(emptyState("No seats yet", "Create a seat to provision a private node."));
+    return;
+  }
+  seats.forEach((seat) => {
+    const item = document.createElement("div");
+    item.className = "entity-item";
+    const meta = document.createElement("div");
+    meta.innerHTML = `
+      <strong>${escapeHtml(seat.name)}</strong>
+      <p>Seat ${escapeHtml(seat.seat_slug)} - ${escapeHtml(seat.node_dataset || "unset")}</p>
+      <p>${escapeHtml(roleLabel(seat.role))} - ${seat.active_token_count} active / ${seat.token_count} token${seat.token_count === 1 ? "" : "s"}</p>
+    `;
+    item.append(meta);
+    const tokens = seat.tokens || [];
+    if (!tokens.length) {
+      const chip = document.createElement("span");
+      chip.className = "status-chip status-standby";
+      chip.textContent = "no token";
+      item.append(chip);
+    } else {
+      const actions = document.createElement("div");
+      actions.className = "seat-token-actions";
+      tokens.forEach((token) => {
+        const action = document.createElement("button");
+        action.className = "secondary-button compact-button";
+        action.type = "button";
+        const revoked = Boolean(token.revoked);
+        action.textContent = revoked ? `${token.prefix}... revoked` : `Revoke ${token.prefix}...`;
+        action.disabled = revoked;
+        action.title = revoked ? "Revoked" : `Last used ${formatDate(token.last_used_at)}`;
+        // Reuse the existing token revoke flow + endpoint.
+        action.addEventListener("click", () => revokeAccessToken(token.id));
+        actions.append(action);
+      });
+      item.append(actions);
+    }
+    accessSeatsList.append(item);
   });
 }
 
@@ -2764,6 +2838,105 @@ document.getElementById("obsidianVaultForm").addEventListener("submit", async (e
   }
 });
 
+function mcpEndpointUrl() {
+  // Derive from the current origin so the snippet always points at this host.
+  return `${window.location.origin}/mcp/`;
+}
+
+function renderMcpSnippetCard(containerId, label, chip, snippet) {
+  const container = document.getElementById(containerId);
+  if (!container) return;
+  const codeId = `${containerId}Code`;
+  container.innerHTML = `
+    <article class="mcp-snippet-card">
+      <div class="event-row">
+        <strong>${escapeHtml(label)}</strong>
+        <div class="mcp-snippet-actions">
+          <span class="status-chip">${escapeHtml(chip)}</span>
+          <button type="button" class="copy-button" data-copy-target="${codeId}">Copy</button>
+        </div>
+      </div>
+      <pre><code id="${codeId}">${escapeHtml(snippet)}</code></pre>
+    </article>
+  `;
+  const button = container.querySelector(".copy-button");
+  button.addEventListener("click", () => copyMcpSnippet(codeId));
+}
+
+function renderStorageScopeGuide(seatResponse) {
+  const container = document.getElementById("storageScopeGuide");
+  if (!container) return;
+  const slug = seatResponse.principal.seat_slug || "";
+  const nodeDataset = seatResponse.principal.default_dataset || `seat:${slug}`;
+  container.innerHTML = `
+    <p class="storage-scope-explainer">
+      This seat's <code>${escapeHtml(nodeDataset)}</code> Node is private agent
+      memory; add tag <code>org-ready</code> or <code>vault-contribution</code> to
+      a write to also promote it into shared Central.
+    </p>
+  `;
+}
+
+function renderTeammateOnboarding(seatResponse) {
+  // The snippet token is the seat-scoped writer token from create_seat
+  // (allowed_datasets = seat:{slug} + Central). create_seat forbids the admin
+  // role, so this is never an admin token. It is shown once: only the hash is
+  // stored, and it is unrecoverable if not copied now.
+  const reveal = document.getElementById("newSeatToken");
+  const token = seatResponse.token;
+  const nodeDataset = seatResponse.principal.default_dataset;
+  const endpoint = mcpEndpointUrl();
+  reveal.hidden = false;
+  reveal.innerHTML = `
+    <strong>Seat created</strong>
+    <p>Node dataset: ${escapeHtml(nodeDataset)}</p>
+    <p>One-time writer token. Citadel stores only the hash; if you do not copy it
+      now it cannot be recovered and you will need to re-issue.</p>
+    <code>${escapeHtml(token)}</code>
+  `;
+
+  const claudeSnippet = `{
+  "mcpServers": {
+    "citadel": {
+      "type": "http",
+      "url": "${endpoint}",
+      "headers": {
+        "Authorization": "Bearer ${token}"
+      }
+    }
+  }
+}`;
+  const codexSnippet = `[mcp_servers.citadel]
+command = "npx"
+args = [
+  "-y", "mcp-remote",
+  "${endpoint}",
+  "--header", "Authorization: Bearer ${token}"
+]`;
+  renderMcpSnippetCard("mcpSnippetClaude", "Claude Code", "http", claudeSnippet);
+  renderMcpSnippetCard("mcpSnippetCodex", "Codex", "hosted", codexSnippet);
+  renderStorageScopeGuide(seatResponse);
+}
+
+async function copyMcpSnippet(elementId) {
+  const node = document.getElementById(elementId);
+  if (!node) return;
+  const text = node.textContent || "";
+  const button = document.querySelector(`[data-copy-target="${elementId}"]`);
+  try {
+    await navigator.clipboard.writeText(text);
+    if (button) {
+      const original = button.textContent;
+      button.textContent = "Copied";
+      window.setTimeout(() => {
+        button.textContent = original;
+      }, 1500);
+    }
+  } catch (error) {
+    if (button) button.textContent = "Copy failed";
+  }
+}
+
 document.getElementById("accessSeatForm").addEventListener("submit", async (event) => {
   event.preventDefault();
   const form = event.currentTarget;
@@ -2777,6 +2950,10 @@ document.getElementById("accessSeatForm").addEventListener("submit", async (even
   error.textContent = "";
   reveal.hidden = true;
   reveal.innerHTML = "";
+  ["mcpSnippetClaude", "mcpSnippetCodex", "storageScopeGuide"].forEach((id) => {
+    const node = document.getElementById(id);
+    if (node) node.innerHTML = "";
+  });
   if (!name || !slug) {
     error.textContent = "Name and seat slug are required.";
     return;
@@ -2795,13 +2972,7 @@ document.getElementById("accessSeatForm").addEventListener("submit", async (even
         issue_token: true,
       }),
     });
-    reveal.hidden = false;
-    reveal.innerHTML = `
-      <strong>Seat created</strong>
-      <p>Node dataset: ${escapeHtml(response.principal.default_dataset)}</p>
-      <p>Copy this writer token now. Citadel stores only the hash.</p>
-      <code>${escapeHtml(response.token)}</code>
-    `;
+    renderTeammateOnboarding(response);
     form.reset();
     await loadAccess();
   } catch (err) {

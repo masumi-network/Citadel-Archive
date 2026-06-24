@@ -2045,6 +2045,112 @@ def test_create_seat_api_rejects_admin_role(tmp_path: Any) -> None:
     assert "admin role" in response.json()["detail"]
 
 
+def test_seat_session_reports_own_seat_slug_and_node(tmp_path: Any) -> None:
+    # A seat's self-describing scope must reflect only the authenticated caller:
+    # its own seat_slug and a friendly label for its private node dataset.
+    app.state.access_store = AccessStore(tmp_path / "access.json")
+    admin = authed_client()
+    token = admin.post(
+        "/api/access/seats",
+        json={"name": "Nora", "slug": "nora"},
+    ).json()["token"]
+    api_client = TestClient(app, base_url="https://testserver")
+
+    session = api_client.get(
+        "/api/session", headers={"Authorization": f"Bearer {token}"}
+    )
+
+    assert session.status_code == 200
+    payload = session.json()
+    assert payload["seat_slug"] == "nora"
+    assert payload["default_dataset"] == "seat:nora"
+    assert payload["node_label"] == "nora's private Node"
+    assert payload["search_datasets"] == ["seat:nora", "masumi-network"]
+
+
+def test_non_seat_token_session_nulls_seat_slug(tmp_path: Any) -> None:
+    # A plain (non-seat) token carries no seat marker; the self-describing scope
+    # must null seat_slug and node_label rather than invent one.
+    app.state.access_store = AccessStore(tmp_path / "access.json")
+    client = authed_client()
+    token = client.post(
+        "/api/access/tokens",
+        json={
+            "name": "plain-reader",
+            "role": "reader",
+            "kind": "service_account",
+            "default_dataset": "personal",
+        },
+    ).json()["token"]
+    api_client = TestClient(app, base_url="https://testserver")
+
+    session = api_client.get(
+        "/api/session", headers={"Authorization": f"Bearer {token}"}
+    )
+
+    assert session.status_code == 200
+    payload = session.json()
+    assert payload["seat_slug"] is None
+    assert payload["node_label"] is None
+
+
+def test_list_seats_returns_active_seats_with_token_counts(tmp_path: Any) -> None:
+    app.state.access_store = AccessStore(tmp_path / "access.json")
+    client = authed_client()
+    created = client.post(
+        "/api/access/seats",
+        json={"name": "Olive", "slug": "olive", "email": "olive@example.com"},
+    ).json()
+    # A non-seat principal/token must never appear in the seat inventory.
+    client.post(
+        "/api/access/tokens",
+        json={"name": "plain-agent", "role": "reader", "kind": "service_account"},
+    )
+
+    listing = client.get("/api/access/seats")
+
+    assert listing.status_code == 200
+    seats = listing.json()["seats"]
+    assert len(seats) == 1
+    seat = seats[0]
+    assert seat["seat_slug"] == "olive"
+    assert seat["node_dataset"] == "seat:olive"
+    assert seat["email"] == "olive@example.com"
+    assert seat["active_token_count"] == 1
+    assert seat["token_count"] == 1
+    assert seat["tokens"][0]["id"] == created["api_token"]["id"]
+    assert seat["tokens"][0]["prefix"] == created["api_token"]["prefix"]
+    assert seat["tokens"][0]["revoked"] is False
+    # The seat list is a redacted aggregation: no token hash leaks through.
+    assert "token_hash" not in seat["tokens"][0]
+
+    # Revoking the seat's token drops the active count to zero but keeps the seat.
+    revoked = client.post(
+        f"/api/access/tokens/{created['api_token']['id']}/revoke"
+    )
+    assert revoked.status_code == 200
+    after = client.get("/api/access/seats").json()["seats"]
+    assert after[0]["active_token_count"] == 0
+    assert after[0]["token_count"] == 1
+    assert after[0]["tokens"][0]["revoked"] is True
+
+
+def test_list_seats_requires_admin(tmp_path: Any) -> None:
+    app.state.access_store = AccessStore(tmp_path / "access.json")
+    admin = authed_client()
+    writer_token = admin.post(
+        "/api/access/tokens",
+        json={"name": "writer-agent", "role": "writer", "kind": "service_account"},
+    ).json()["token"]
+    api_client = TestClient(app, base_url="https://testserver")
+
+    forbidden = api_client.get(
+        "/api/access/seats", headers={"Authorization": f"Bearer {writer_token}"}
+    )
+
+    assert forbidden.status_code == 403
+
+
 def test_admin_scope_override_is_audited(tmp_path: Any) -> None:
     # An admin-role token that carries its own allowlist but reaches outside it
     # bypasses enforcement by design; the bypass must be flagged in the audit log.
