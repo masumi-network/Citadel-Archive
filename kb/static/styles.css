@@ -938,6 +938,76 @@ pre {
   white-space: pre;
 }
 
+.mcp-snippet-card {
+  margin-top: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-raised);
+  overflow-wrap: anywhere;
+}
+
+.mcp-snippet-card pre {
+  max-width: 100%;
+  margin: 8px 0 0;
+  overflow-x: auto;
+  white-space: pre;
+}
+
+.mcp-snippet-card code {
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--primary-strong);
+}
+
+.mcp-snippet-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.copy-button {
+  min-height: 28px;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-raised);
+  color: var(--text);
+  font-size: 12px;
+  cursor: pointer;
+  transition:
+    background-color var(--speed) ease-out,
+    border-color var(--speed) ease-out;
+}
+
+.copy-button:hover {
+  border-color: var(--primary-border);
+  background: var(--surface-hover);
+}
+
+.storage-scope-explainer {
+  margin-top: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--primary-border);
+  border-radius: var(--radius);
+  background: var(--primary-soft);
+  color: var(--text);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.storage-scope-explainer code {
+  font-family: var(--mono);
+  color: var(--primary-strong);
+}
+
+.seat-token-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  align-items: flex-end;
+}
+
 .index-item {
   display: grid;
   grid-template-columns: 1fr auto;
