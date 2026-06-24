@@ -1,0 +1,17 @@
+{
+  "hooks": {
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$CLAUDE_PROJECT_DIR/skills/citadel-proactive-ingest/scripts/sync_session.py\"",
+            "timeout": 20,
+            "allowedEnvVars": ["CITADEL_MCP_ACCESS_TOKEN"]
+          }
+        ]
+      }
+    ]
+  },
+  "httpHookAllowedEnvVars": ["CITADEL_MCP_ACCESS_TOKEN"]
+}
