@@ -1,5 +1,24 @@
 # Citadel Tasks
 
+## Done (2026-06-24 session)
+
+- Fixed broken production ingest: the invalid `LLM_MODEL=openrouter/free` (every
+  cognify call failed) -> `openrouter/openai/gpt-4o-mini`. Verified end-to-end.
+- Upgraded cognee 1.1.2 -> 1.2.1 (PR #2), deployed + verified.
+- Added re-cognify / verify recovery tooling: `POST /api/cognify/run`,
+  `citadel cognify [--verify]`, `CITADEL_RUN_MODE=cognify` / `cognify-verify` (PR #2).
+- Fixed the GitHub-Sync cron 502 (internal domain + `*_TIMEOUT_SECONDS=2400`).
+- Shipped per-seat onboarding (PR #3): connect wizard, self-describing seat
+  (`resolved_memory_scope` + tool docstrings), admin `GET /api/access/seats`.
+- Shipped autonomous personal-KB sync (PR #4): `citadel-proactive-ingest` skill +
+  a project-committed Claude Code `SessionEnd` hook (`sync_session.py`) +
+  `docs/onboarding/citadel-autosync.md`. Teammates are headless (token + MCP +
+  skill, no dashboard login).
+- Backprop-fixed the time-dependent `test_github_sync` PR-window test.
+- Started the knowledge-graph redesign (`feat/graph-logseq`, Phase 1): vendored 2D
+  `force-graph` replacing the Three.js scene, shared Central pinned as the center hub.
+- Tests 312 -> 328. See `docs/progress.md` (2026-06-24) for detail.
+
 ## Done
 
 - Repo reset from Cognee fork -> clean Citadel wrapper.
@@ -175,36 +194,38 @@
 
 ## Current Railway State
 
-- Web service is live:
-  - `https://citadel-archive-production.up.railway.app/healthz`
-  - `https://citadel-archive-production.up.railway.app/`
-- Web service auto-deploys `main`; health was verified after the progress
-  documentation rollout.
-- Cron service `Citadel-GitHub-Sync` has schedule `0 3 * * *` and the
-  2026-06-03 scheduled run completed with ingestion accepted.
-- Production web is deployed at commit `3c70e92` and serves the hosted MCP,
-  discovery, skill hashing, audit, and backup-mirror API changes.
-- OpenRouter is configured through `OPENROUTER_API_KEY` and
-  `LLM_MODEL=openrouter/free` on both Railway services.
+- Web service `Citadel-Archive` is live and auto-deploys `main`:
+  - `https://citadel-archive-production.up.railway.app/healthz` (200)
+  - `https://citadel-archive-production.up.railway.app/` and `/mcp/`
+- Running **cognee 1.2.1** (upgraded + deployed + verified 2026-06-24).
+- `LLM_MODEL=openrouter/openai/gpt-4o-mini` on the web service (was the invalid
+  `openrouter/free`, which had silently broken all cognify; fixed 2026-06-24).
+  `EMBEDDING_PROVIDER=fastembed`, `VECTOR_DB_PROVIDER=pgvector`,
+  `GRAPH_DATABASE_PROVIDER=kuzu`, `CITADEL_SEARCH_DEFAULT_DATASET=masumi-network`.
+- Cron `Citadel-GitHub-Sync` (schedule `0 3 * * *`): now targets the internal
+  domain `http://citadel-archive.railway.internal:8080` with
+  `CITADEL_GITHUB_SYNC_TIMEOUT_SECONDS=2400` to avoid the public-proxy 5-min 502 on
+  the ~26-min sync (fixed 2026-06-24). Its own stale `LLM_MODEL=openrouter/free` is
+  moot in this mode (cognify runs in the web service).
+- Postgres healthy; pgvector working (ingest -> cognify -> search verified
+  end-to-end 2026-06-24).
 
 ## Needed From User
 
-- OpenRouter model/key config is done:
-  - `OPENROUTER_API_KEY` is set on `Citadel-Archive`.
-  - `Citadel-GitHub-Sync` references the same key.
-  - Citadel maps `OPENROUTER_API_KEY` to Cognee's expected `LLM_API_KEY`
-    at runtime.
-  - `LLM_PROVIDER=custom`
-  - `LLM_ENDPOINT=https://openrouter.ai/api/v1`
-  - `LLM_MODEL=openrouter/free`
-- Enable pgvector in Railway Postgres.
-  - Run in DB console/psql:
-
-```sql
-CREATE EXTENSION IF NOT EXISTS vector;
-```
-
-- Optional: rotate `CITADEL_ADMIN_KEY` after first login test.
+- **Operational rollout of autonomous sync** (not code): provision a seat per dev
+  via the connect wizard, then each dev exports their `CITADEL_MCP_ACCESS_TOKEN` and
+  copies `skills/citadel-proactive-ingest/templates/claude-settings.json` into their
+  org repos' `.claude/settings.json`. See `docs/onboarding/citadel-autosync.md`.
+- **Rotate `CITADEL_ADMIN_KEY`** — it was used over the wire during the 2026-06-24
+  debugging; rotate it (and consider rotating the GitHub PAT + OpenRouter key, which
+  live in plaintext Railway env).
+- OpenRouter model/key config (done):
+  - `OPENROUTER_API_KEY` set on `Citadel-Archive`; `Citadel-GitHub-Sync` references
+    the same key; Citadel maps it to Cognee's `LLM_API_KEY` at runtime.
+  - `LLM_PROVIDER=custom`, `LLM_ENDPOINT=https://openrouter.ai/api/v1`,
+    `LLM_MODEL=openrouter/openai/gpt-4o-mini` (web service).
+- pgvector: working (cognify + search verified end-to-end). The earlier
+  `CREATE EXTENSION IF NOT EXISTS vector` step is no longer outstanding.
 
 ## Research-Backed Direction
 

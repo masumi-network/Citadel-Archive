@@ -1,6 +1,60 @@
 # Citadel Progress
 
-Last updated: 2026-06-17.
+Last updated: 2026-06-24.
+
+## 2026-06-24
+
+Major session: fixed broken ingest, upgraded the engine, shipped the per-seat
+SaaS onboarding + autonomous sync, and started the knowledge-graph redesign.
+
+- **Ingest was broken in production — root-caused and fixed.** `cognee.add`
+  stored items but `cognee.cognify` failed on every one (empty knowledge graph,
+  searches returned nothing). Cause: the Railway env var `LLM_MODEL=openrouter/free`
+  is not a valid model id, so every litellm call during cognify returned
+  `OpenrouterException - Invalid URL`. Fixed by setting
+  `LLM_MODEL=openrouter/openai/gpt-4o-mini` on the web service (config only).
+  Verified end-to-end: a marker note ingests (`cognee_result.status=completed`,
+  `error=null`) and is found by search.
+- **cognee 1.1.2 -> 1.2.1** (PR #2). Clean lock re-resolution; the `cognee_client`
+  call surface is version-defensive and the breaking env renames in the window are
+  unused by Citadel. Deployed and verified live (clean boot, no Kuzu/auth-flip
+  errors, data survived the upgrade).
+- **Re-cognify / verify recovery tooling** (PR #2). New admin `POST /api/cognify/run`,
+  CLI `citadel cognify [--verify]`, and `CITADEL_RUN_MODE=cognify` / `cognify-verify`
+  run-modes that re-cognify already-added-but-uncognified data and (in verify mode)
+  ingest + cognify + search a marker as an end-to-end health check. An adversarial
+  review caught a bug where verify skipped the recovery cognify; fixed so verify is
+  a superset.
+- **GitHub-Sync cron 502 fixed** (env only). The daily cron invoked a ~26-min sync
+  as one synchronous HTTP call to the public domain (proxy kills idle connections at
+  ~5 min). Pointed it at the internal domain `http://citadel-archive.railway.internal:8080`
+  with `CITADEL_GITHUB_SYNC_TIMEOUT_SECONDS=2400`; cognify runs in the fixed web
+  service. Heals the items stranded during the broken era on its next run.
+- **Per-seat onboarding** (PR #3), on the existing seat/node/Central engine:
+  - **Connect wizard** — Create Seat renders a ready-to-paste `.mcp.json` (Claude
+    Code + Codex) with the seat's scoped writer token + origin-derived `/mcp/` URL +
+    copy buttons + a personal-vs-shared explainer.
+  - **Self-describing seat** — `resolved_memory_scope` surfaces the caller's own
+    `seat_slug` + node label (out through `/api/session` + `citadel_session`);
+    `citadel_ingest`/`search`/`contribute` docstrings state personal-by-default,
+    tag-to-share.
+  - **Seat inventory** — admin `GET /api/access/seats` + per-seat revoke in the UI.
+- **Autonomous personal-KB sync** (PR #4). A project-committed Claude Code `SessionEnd`
+  hook (`skills/citadel-proactive-ingest/`) runs a stdlib-only `sync_session.py` that
+  distills a dev's session and POSTs it to their private seat node — reusing the one
+  `CITADEL_MCP_ACCESS_TOKEN` they already set for MCP, personal-by-default, HTTPS-only,
+  refuses redirects, fail-silent. Plus a proactive-ingest skill + dev onboarding docs.
+  Zero per-session steps; the only one-time step is exporting the token (the wizard
+  delivers it). Teammates are headless (token + MCP + skill, no dashboard login).
+- **Knowledge-graph redesign — Phase 1 in progress** (`feat/graph-logseq`). Replacing
+  the hand-rolled Three.js 3D concentric-ring scene with a vendored 2D `force-graph`
+  (Logseq-style): shared Central pinned at the center as the hub, seat vaults clustered
+  around it, knowledge nodes nesting off each, with hover-highlight, click-to-inspect,
+  and labels-on-zoom. Operator/admin-facing. Phase 2 will add explicit Central<->vault
+  spokes, local/global + depth, and a personal/shared scope filter.
+- **Backprop:** `test_github_sync_returns_open_and_merged_pull_requests` hardcoded
+  absolute PR dates that aged out of the reporting window; made it time-relative.
+- Tests: 312 -> 328 passing across the session; every adversarial-review finding fixed.
 
 ## 2026-06-17
 
