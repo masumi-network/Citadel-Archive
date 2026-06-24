@@ -775,7 +775,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "cognee", extras = ["fastembed", "postgres-binary"], specifier = ">=1.1.0,<2.0.0" },
+    { name = "cognee", extras = ["fastembed", "postgres-binary"], specifier = ">=1.2.1,<2.0.0" },
     { name = "fastapi", specifier = ">=0.116.2,<1.0.0" },
     { name = "google-auth", specifier = ">=2.40.0,<3.0.0" },
     { name = "mcp", specifier = ">=1.23.0,<2.0.0" },
@@ -806,7 +806,7 @@ wheels = [
 
 [[package]]
 name = "cognee"
-version = "1.1.2"
+version = "1.2.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "aiofiles" },
@@ -820,6 +820,7 @@ dependencies = [
     { name = "fakeredis", extra = ["lua"] },
     { name = "fastapi" },
     { name = "fastapi-users", extra = ["sqlalchemy"] },
+    { name = "filelock" },
     { name = "filetype" },
     { name = "gunicorn" },
     { name = "instructor" },
@@ -854,9 +855,9 @@ dependencies = [
     { name = "uvicorn" },
     { name = "websockets" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/23/b1/1f2ad87bc25a64a62781f23f299d58f9502804b705ee87d364d3efbb0564/cognee-1.1.2.tar.gz", hash = "sha256:ef80b8da94ad148b32deb6a9ba1315bc7105508d741a47eff70c6645b30485bf", size = 18954198, upload-time = "2026-05-30T18:14:03.861Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/64/f1/7eca21f6bb468a86d0f57cefcae642382b614b3af3da8b7c83f90a3f1aa4/cognee-1.2.1.tar.gz", hash = "sha256:c527d3b58978759a73079fbb7e081620499f2bd8d80dc01dd4466971123b9a81", size = 19272567, upload-time = "2026-06-21T18:30:04.128Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/a1/fa/a74f83a7dc19b52056c18afaf60b6c3ee4f56a5521a6b6cbdace1e9164d1/cognee-1.1.2-py3-none-any.whl", hash = "sha256:0d092f84c4df2c2a418ca1ddfaab64e28878ee620b6728c95d1b080a93f48f97", size = 2473205, upload-time = "2026-05-30T18:14:00.306Z" },
+    { url = "https://files.pythonhosted.org/packages/1f/4a/ccdb4b5a6256559cf8bcdb13b483cade9a5c7432a2a65d01dd13c1ccb56d/cognee-1.2.1-py3-none-any.whl", hash = "sha256:4d3248d7551ae07b5248dd82ca2756e75e2c8891404e8823e524c0d00cf718d1", size = 2830094, upload-time = "2026-06-21T18:30:00.918Z" },
 ]
 
 [package.optional-dependencies]
@@ -3493,16 +3494,16 @@ wheels = [
 
 [[package]]
 name = "pydantic-settings"
-version = "2.14.1"
+version = "2.14.2"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "pydantic" },
     { name = "python-dotenv" },
     { name = "typing-inspection" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/07/60/1d1e59c9c90d54591469ada7d268251f71c24bdb765f1a8a832cee8c6653/pydantic_settings-2.14.1.tar.gz", hash = "sha256:e874d3bec7e787b0c9958277956ed9b4dd5de6a80e162188fdaff7c5e26fd5fa", size = 235551, upload-time = "2026-05-08T13:40:06.542Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/5c/b5/8f48e906c3e0205276e8bd8cb7512217a87b2685304d64be27cad5b3019f/pydantic_settings-2.14.2.tar.gz", hash = "sha256:c19dd64b19097f1de80184f0cc7b0272a13ae6e170cbf240a3e27e381ed14a5f", size = 237700, upload-time = "2026-06-19T13:44:56.324Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/ae/8d/f1af3832f5e6eb13ba94ee809e72b8ecb5eef226d27ee0bef7d963d943c7/pydantic_settings-2.14.1-py3-none-any.whl", hash = "sha256:6e3c7edfd8277687cdc598f56e5cff0e9bfff0910a3749deaa8d4401c3a2b9de", size = 60964, upload-time = "2026-05-08T13:40:04.958Z" },
+    { url = "https://files.pythonhosted.org/packages/77/c1/6e422f34e569cf8e18df68d1939c81c099d2b61e4f7d9621c8a77560799c/pydantic_settings-2.14.2-py3-none-any.whl", hash = "sha256:a20c97b37910b6550d5ea50fbcc2d4187defe58cd57070b73863d069419c9440", size = 61715, upload-time = "2026-06-19T13:44:55.02Z" },
 ]
 
 [[package]]
