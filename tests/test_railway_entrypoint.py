@@ -76,6 +76,42 @@ def test_backup_mirror_mode_runs_backup_job(monkeypatch: Any) -> None:
     assert calls == ["backup-mirror"]
 
 
+def test_cognify_mode_runs_cognify_without_verify(monkeypatch: Any) -> None:
+    calls: list[dict[str, Any]] = []
+
+    class FakeCitadel:
+        async def cognify_dataset(self, *, dataset: Any, verify: bool) -> dict[str, Any]:
+            calls.append({"dataset": dataset, "verify": verify})
+            return {"ok": True, "dataset": dataset, "graph_grew": True, "verify": verify}
+
+    import kb.service as service
+
+    monkeypatch.setattr(service.Citadel, "from_env", classmethod(lambda cls: FakeCitadel()))
+    monkeypatch.delenv("CITADEL_COGNIFY_DATASET", raising=False)
+
+    assert run_railway.run("cognify") == 0
+    assert calls == [{"dataset": None, "verify": False}]
+
+
+def test_cognify_verify_mode_fails_when_verification_fails(monkeypatch: Any) -> None:
+    class FakeCitadel:
+        async def cognify_dataset(self, *, dataset: Any, verify: bool) -> dict[str, Any]:
+            return {
+                "ok": True,
+                "dataset": dataset,
+                "graph_grew": False,
+                "verify": verify,
+                "verification": {"ok": False, "search_hit": False, "graph_grew": False},
+            }
+
+    import kb.service as service
+
+    monkeypatch.setattr(service.Citadel, "from_env", classmethod(lambda cls: FakeCitadel()))
+    monkeypatch.delenv("CITADEL_COGNIFY_DATASET", raising=False)
+
+    assert run_railway.run("cognify-verify") == 1
+
+
 def test_unknown_mode_fails() -> None:
     assert run_railway.run("not-real") == 1
 

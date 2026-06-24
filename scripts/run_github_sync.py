@@ -240,6 +240,7 @@ def run() -> int:
         "include_digest_preview": include_digest_preview,
     }
     endpoint = _target_endpoint()
+    logger.info("GitHub sync mode: %s", "HTTP endpoint" if endpoint else "in-process")
 
     if endpoint:
         access_key = _access_key()

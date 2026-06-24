@@ -40,6 +40,21 @@ class FakeCitadel:
     async def improve(self, **kwargs: Any) -> dict[str, Any]:
         return {"dataset": kwargs["dataset"], "session_ids": kwargs["session_ids"]}
 
+    async def cognify_dataset(self, *, dataset: Any = None, verify: bool = False) -> dict[str, Any]:
+        return {
+            "ok": True,
+            "dataset": dataset or self.config.default_dataset,
+            "graph_before": {"nodes": 0, "edges": 0},
+            "graph_after": {"nodes": 5, "edges": 7},
+            "graph_grew": True,
+            "verify": verify,
+            "verification": (
+                {"marker": "COGNIFY_TEST_MARKER_x", "search_hit": True, "graph_grew": True, "ok": True}
+                if verify
+                else None
+            ),
+        }
+
 
 class FakeGitHubSyncer:
     async def status(self) -> dict[str, Any]:
@@ -337,6 +352,29 @@ def test_api_uses_configured_citadel_service() -> None:
     assert updated_mesh.status_code == 200
     assert updated_mesh.json()["stats"]["feedback"] == 1
     assert upgrade.status_code == 200
+
+
+def test_admin_can_run_cognify_recovery_and_verification() -> None:
+    client = authed_client()
+
+    recover = client.post("/api/cognify/run", json={"dataset": "masumi-network"})
+    verify = client.post("/api/cognify/run", json={"verify": True})
+
+    assert recover.status_code == 200
+    assert recover.json()["dataset"] == "masumi-network"
+    assert recover.json()["graph_grew"] is True
+    assert recover.json()["verification"] is None
+    assert verify.status_code == 200
+    assert verify.json()["verify"] is True
+    assert verify.json()["verification"]["ok"] is True
+
+
+def test_cognify_run_requires_admin() -> None:
+    client = authed_client("test-writer")
+
+    response = client.post("/api/cognify/run", json={})
+
+    assert response.status_code == 403
 
 
 def test_knowledge_events_api_returns_resumable_timeline() -> None:
