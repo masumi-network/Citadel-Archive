@@ -6,6 +6,10 @@ Modes (via ``CITADEL_RUN_MODE``):
 - ``web`` (default): the FastAPI Organization Vault service.
 - ``github-sync`` / ``learning-agent``: the single GitHub org learning job.
 - ``backup-mirror``: the single Vault Backup Mirror export job.
+- ``cognify`` / ``cognify-verify``: re-cognify already-added data in a dataset
+  (``CITADEL_COGNIFY_DATASET``, default dataset otherwise) to recover data that
+  was added but never cognified; ``cognify-verify`` also ingests a unique marker
+  and confirms it lands in the graph.
 - ``pipeline`` (also ``all``/``cron``): the full scheduled pipeline —
   GitHub org sync, skills catalog refresh, self-improvement pass, and backup
   mirror export. Each stage is toggleable via env, logs a per-stage summary
@@ -92,6 +96,25 @@ def _repo_content_sync_stage() -> int:
         result.get("files_skipped"),
         result.get("improved"),
     )
+    return 0
+
+
+def _cognify_mode(*, verify: bool) -> int:
+    from kb.service import Citadel
+
+    dataset = os.getenv("CITADEL_COGNIFY_DATASET") or None
+    result = asyncio.run(Citadel.from_env().cognify_dataset(dataset=dataset, verify=verify))
+    logger.info(
+        "Cognify finished: dataset=%s graph_before=%s graph_after=%s grew=%s verify=%s",
+        result.get("dataset"),
+        result.get("graph_before"),
+        result.get("graph_after"),
+        result.get("graph_grew"),
+        (result.get("verification") or {}).get("ok") if verify else result.get("verify"),
+    )
+    if verify and not (result.get("verification") or {}).get("ok"):
+        logger.error("Cognify verification failed: %s", result.get("verification"))
+        return 1
     return 0
 
 
@@ -190,6 +213,8 @@ def run(mode: str | None = None) -> int:
         from scripts.run_backup_mirror import run as run_backup_mirror
 
         return run_backup_mirror()
+    if resolved_mode in {"cognify", "cognify-verify"}:
+        return _cognify_mode(verify=resolved_mode == "cognify-verify")
     if resolved_mode in {"pipeline", "all", "cron"}:
         return run_pipeline()
     print(f"Unsupported CITADEL_RUN_MODE: {resolved_mode}", file=sys.stderr)

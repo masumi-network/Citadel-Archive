@@ -15,9 +15,16 @@ class FakeCognee:
         self.remember_calls: list[dict[str, Any]] = []
         self.feedback_calls: list[dict[str, Any]] = []
         self.improve_calls: list[dict[str, Any]] = []
+        self.cognify_calls: list[dict[str, Any]] = []
+        self.nodes: list[Any] = []
+        self.edges: list[Any] = []
+        self._pending: list[Any] = []
 
     async def remember(self, data: Any, **kwargs: Any) -> dict[str, Any]:
         self.remember_calls.append({"data": data, **kwargs})
+        # Cognee.add stores data, but it only enters the graph once cognify
+        # runs — the modern remember path does not cognify inline.
+        self._pending.append(data)
         return {"ok": True}
 
     async def recall(self, query: str, **kwargs: Any) -> list[dict[str, Any]]:
@@ -30,6 +37,16 @@ class FakeCognee:
     async def improve(self, **kwargs: Any) -> dict[str, Any]:
         self.improve_calls.append(kwargs)
         return {"improved": True}
+
+    async def cognify(self, **kwargs: Any) -> dict[str, Any]:
+        self.cognify_calls.append(kwargs)
+        # Cognify turns added-but-uncognified data into graph nodes.
+        self.nodes.extend(self._pending)
+        self._pending.clear()
+        return {"cognified": True}
+
+    async def graph_data(self) -> tuple[list[Any], list[Any]]:
+        return list(self.nodes), list(self.edges)
 
 
 class EmptyCognee(FakeCognee):
@@ -114,6 +131,45 @@ async def test_search_falls_back_to_persisted_github_digest(tmp_path: Any) -> No
     assert result[0]["source"] == "github_sync_state"
     assert result[0]["metadata"]["org"] == "masumi-network"
     assert any("organization seat assignment" in item["content"] for item in result)
+
+
+@pytest.mark.asyncio
+async def test_cognify_dataset_reports_graph_growth() -> None:
+    fake = FakeCognee()
+    kb = Citadel(CitadelConfig(default_dataset="masumi-network"), cognee=fake)
+
+    result = await kb.cognify_dataset()
+
+    assert result["ok"]
+    assert result["dataset"] == "masumi-network"
+    assert result["verify"] is False
+    assert fake.cognify_calls == [{"datasets": ["masumi-network"]}]
+    assert result["graph_before"] == {"nodes": 0, "edges": 0}
+
+
+@pytest.mark.asyncio
+async def test_cognify_dataset_verify_ingests_marker_and_confirms_hit() -> None:
+    class RecallingCognee(FakeCognee):
+        async def recall(self, query: str, **kwargs: Any) -> list[dict[str, Any]]:
+            return [{"content": query}]
+
+    fake = RecallingCognee()
+    kb = Citadel(CitadelConfig(default_dataset="masumi-network"), cognee=fake)
+
+    result = await kb.cognify_dataset(verify=True)
+
+    assert result["verify"] is True
+    marker = fake.remember_calls[0]["data"]
+    assert marker.startswith("COGNIFY_TEST_MARKER_")
+    assert result["verification"]["search_hit"] is True
+    assert result["verification"]["graph_grew"] is True
+    assert result["verification"]["ok"] is True
+    # verify is a superset: recovery cognify + an explicit cognify of the marker
+    # (remember does not cognify inline on the modern Cognee path).
+    assert fake.cognify_calls == [
+        {"datasets": ["masumi-network"]},
+        {"datasets": ["masumi-network"]},
+    ]
 
 
 @pytest.mark.asyncio

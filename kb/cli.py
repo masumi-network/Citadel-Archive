@@ -58,6 +58,12 @@ async def _improve(args: argparse.Namespace) -> None:
     _print_json(result)
 
 
+async def _cognify(args: argparse.Namespace) -> None:
+    kb = Citadel.from_env()
+    result = await kb.cognify_dataset(dataset=args.dataset, verify=args.verify)
+    _print_json(result)
+
+
 async def _sync_github(args: argparse.Namespace) -> None:
     syncer = GitHubOrgSyncer(
         Citadel.from_env(),
@@ -121,6 +127,18 @@ def build_parser() -> argparse.ArgumentParser:
     improve.add_argument("--dataset")
     improve.add_argument("--session-id", action="append")
     improve.set_defaults(handler=_improve)
+
+    cognify = subcommands.add_parser(
+        "cognify",
+        help="Cognify already-added data in a dataset (recover uncognified data)",
+    )
+    cognify.add_argument("--dataset")
+    cognify.add_argument(
+        "--verify",
+        action="store_true",
+        help="Ingest a unique marker, cognify, and confirm it lands in the graph",
+    )
+    cognify.set_defaults(handler=_cognify)
 
     sync_github = subcommands.add_parser(
         "sync-github",

@@ -210,6 +210,11 @@ class BackupMirrorRunBody(BaseModel):
     dry_run: bool = True
 
 
+class CognifyRunBody(BaseModel):
+    dataset: str | None = None
+    verify: bool = False
+
+
 class AccessTokenBody(BaseModel):
     name: str = Field(min_length=1, max_length=120)
     role: str = Field(default="reader")
@@ -2067,6 +2072,64 @@ async def run_learning_agent(body: LearningAgentRunBody, request: Request) -> An
             "google_chat_sent": (
                 (result.get("notifications") or {}).get("google_chat") or {}
             ).get("sent"),
+        },
+    )
+    return jsonable_encoder(result)
+
+
+@app.post("/api/cognify/run")
+async def run_cognify(body: CognifyRunBody, request: Request) -> Any:
+    actor = require_access(request, "admin", "sources:sync")
+    citadel = get_citadel()
+    dataset = body.dataset or citadel.config.default_dataset
+    try:
+        result = await citadel.cognify_dataset(dataset=dataset, verify=body.verify)
+    except Exception as exc:  # pragma: no cover - depends on Cognee config.
+        logger.error("Cognify run failed: %s", exc.__class__.__name__)
+        get_access_store().record_event(
+            action="cognify.run",
+            actor=actor,
+            success=False,
+            dataset=dataset,
+            detail={"verify": body.verify, "error": str(exc)},
+        )
+        record_mcp_audit(
+            request,
+            actor=actor,
+            success=False,
+            dataset=dataset,
+            detail={
+                "operation": "cognify.run",
+                "verify": body.verify,
+                "error_type": exc.__class__.__name__,
+            },
+        )
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    verification = result.get("verification") or {}
+    get_access_store().record_event(
+        action="cognify.run",
+        actor=actor,
+        success=True,
+        dataset=dataset,
+        detail={
+            "verify": body.verify,
+            "graph_grew": result.get("graph_grew"),
+            "graph_before": result.get("graph_before"),
+            "graph_after": result.get("graph_after"),
+            "verification_ok": verification.get("ok") if body.verify else None,
+        },
+    )
+    record_mcp_audit(
+        request,
+        actor=actor,
+        success=True,
+        dataset=dataset,
+        detail={
+            "operation": "cognify.run",
+            "verify": body.verify,
+            "graph_grew": result.get("graph_grew"),
+            "verification_ok": verification.get("ok") if body.verify else None,
         },
     )
     return jsonable_encoder(result)

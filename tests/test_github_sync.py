@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -247,6 +248,15 @@ async def test_github_sync_can_skip_unchanged_ingest(tmp_path: Any) -> None:
 
 @pytest.mark.asyncio
 async def test_github_sync_returns_open_and_merged_pull_requests(tmp_path: Any) -> None:
+    def hours_ago(hours: int) -> str:
+        # Relative to now so the PRs always fall inside the reporting window
+        # (hardcoded absolute dates silently age out and break this test).
+        return (
+            (datetime.now(UTC) - timedelta(hours=hours))
+            .isoformat(timespec="seconds")
+            .replace("+00:00", "Z")
+        )
+
     class PullRequestGitHubClient(FakeGitHubClient):
         def fetch_pull_requests(
             self,
@@ -263,8 +273,8 @@ async def test_github_sync_returns_open_and_merged_pull_requests(tmp_path: Any) 
                     state="open",
                     draft=False,
                     user_login="sarthib7",
-                    created_at="2026-06-03T07:00:00Z",
-                    updated_at="2026-06-03T08:00:00Z",
+                    created_at=hours_ago(26),
+                    updated_at=hours_ago(1),
                     merged_at=None,
                 ),
                 GitHubPullRequest(
@@ -275,9 +285,9 @@ async def test_github_sync_returns_open_and_merged_pull_requests(tmp_path: Any) 
                     state="closed",
                     draft=False,
                     user_login="sarthib7",
-                    created_at="2026-06-02T07:00:00Z",
-                    updated_at="2026-06-03T08:00:00Z",
-                    merged_at="2026-06-03T08:30:00Z",
+                    created_at=hours_ago(48),
+                    updated_at=hours_ago(2),
+                    merged_at=hours_ago(2),
                 ),
             ][:max_pull_requests]
 

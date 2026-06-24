@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Iterable
 from hashlib import sha256
 import logging
+from uuid import uuid4
 from typing import Any
 
 from kb.cognee_client import CogneeGateway, CogneePublicClient
@@ -121,3 +122,65 @@ class Citadel:
             session_ids=session_ids,
             build_global_context_index=self.config.build_global_context_index,
         )
+
+    async def _graph_counts(self) -> dict[str, int]:
+        nodes, edges = await self.cognee.graph_data()
+        return {"nodes": len(nodes), "edges": len(edges)}
+
+    async def cognify_dataset(
+        self,
+        *,
+        dataset: str | None = None,
+        verify: bool = False,
+    ) -> dict[str, Any]:
+        """Cognify already-added data in ``dataset`` and report graph growth.
+
+        This recovers data that was added but never cognified. ``cognee.cognify``
+        only processes uncognified data (incremental by default), so re-running is
+        safe and idempotent. ``verify=True`` is a superset: it runs the same
+        recovery cognify and *also* ingests a unique marker, cognifies it, and
+        searches for it — an end-to-end health check that ingest + cognify fills
+        the graph. The marker is cognified explicitly because the modern Cognee
+        ``remember`` path does not cognify inline.
+        """
+        target_dataset = dataset or self.config.default_dataset
+        before = await self._graph_counts()
+
+        # Recovery: cognify already-added-but-uncognified data for the dataset.
+        await self.cognee.cognify(datasets=[target_dataset])
+
+        verification: dict[str, Any] | None = None
+        if verify:
+            marker = f"COGNIFY_TEST_MARKER_{uuid4().hex}"
+            await self.ingest(marker, dataset=target_dataset)
+            await self.cognee.cognify(datasets=[target_dataset])
+            matches = await self.search(marker, dataset=target_dataset, top_k=10)
+            verification = {
+                "marker": marker,
+                "search_hit": _marker_in_results(marker, matches),
+            }
+
+        after = await self._graph_counts()
+        graph_grew = (
+            after["nodes"] > before["nodes"] or after["edges"] > before["edges"]
+        )
+        if verification is not None:
+            verification["graph_grew"] = graph_grew
+            verification["ok"] = bool(verification["search_hit"] or graph_grew)
+
+        return {
+            "ok": True,
+            "dataset": target_dataset,
+            "graph_before": before,
+            "graph_after": after,
+            "graph_grew": graph_grew,
+            "verify": verify,
+            "verification": verification,
+        }
+
+
+def _marker_in_results(marker: str, results: list[Any]) -> bool:
+    for item in results:
+        if marker in str(item):
+            return True
+    return False

@@ -272,6 +272,33 @@ async def test_cognee_public_client_falls_back_when_session_has_no_data(
     assert received["search"]["datasets"] == ["notes"]
 
 
+@pytest.mark.asyncio
+async def test_cognee_public_client_cognify_wraps_cognee_cognify(monkeypatch: Any) -> None:
+    received: dict[str, Any] = {}
+
+    async def run_startup_migrations() -> None:
+        return None
+
+    async def cognify(**kwargs: Any) -> dict[str, Any]:
+        received["kwargs"] = kwargs
+        return {"cognified": True}
+
+    monkeypatch.setitem(
+        sys.modules,
+        "cognee",
+        SimpleNamespace(
+            run_startup_migrations=run_startup_migrations,
+            cognify=cognify,
+        ),
+    )
+    client = CogneePublicClient()
+
+    result = await client.cognify(datasets=["masumi-network"])
+
+    assert result == {"cognified": True}
+    assert received["kwargs"] == {"datasets": ["masumi-network"]}
+
+
 def test_cognee_public_client_derives_db_env_from_database_url(monkeypatch: Any) -> None:
     monkeypatch.setenv("DATABASE_URL", "postgresql://db_user:db%23pass@db.example:6543/citadel")
     monkeypatch.setenv("VECTOR_DB_PROVIDER", "pgvector")
