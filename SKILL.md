@@ -90,11 +90,15 @@ client at the hosted `/mcp/` URL and send the token in the `Authorization` heade
 | `citadel_search` | reader | Search the Organization Vault |
 | `citadel_get_document` | reader | Fetch a full document by a search hit `id` |
 | `citadel_get_mesh` | reader | Get the current knowledge mesh snapshot |
-| `citadel_list_sources` | reader | GitHub sync state, learning status, indexes |
+| `citadel_list_sources` | reader | GitHub sync state, Linear sync, learning status, indexes |
+| `citadel_linear_my_issues` | reader | Your assigned Linear tasks (**Seat-Scoped Mirror** in your **Node**) |
+| `citadel_linear_search` | reader | Org-wide Linear context in **Central** |
+| `citadel_recent_contributions` | reader | Recent vault contributions (`mine=true` for yours) |
 | `citadel_ingest` | writer | Add durable context to the vault |
-| `citadel_contribute` | writer | Add a titled Vault Contribution (enrichment + conflict detection on) |
+| `citadel_contribute` | writer | Add a titled Vault Contribution **→ shared Central** (enrichment + conflict detection on; writes org-wide, **not** your personal node) |
 | `citadel_record_feedback` | writer | Record feedback for a QA result |
 | `citadel_run_learning_agent` | admin | Run the GitHub source-learning agent |
+| `citadel_run_repo_content_sync` | admin | Sync READMEs/skills/docs from allowlisted repos |
 | `citadel_backup_mirror_status` | admin | Inspect Vault Backup Mirror manifest status |
 | `citadel_run_backup_mirror` | admin | Run Vault Backup Mirror manifest export |
 | `citadel_audit_events` | admin | Inspect bounded audit events |
@@ -139,10 +143,12 @@ POST /ingest   {data, dataset, tags}   # add context
 POST /api/contribute {title, content, tags?, source_url?}  # easy write path (writer)
 POST /feedback {qa_id, score, text}    # record QA feedback
 POST /improve  {dataset, session_ids}  # run improvement (admin)
+POST /api/cognify/run {dataset, verify?}  # rebuild embeddings/graph for a dataset (admin)
 POST /api/conflicts/{id}/resolve       # resolve a Knowledge Conflict (writer)
 POST /api/learning-agent/run           # run learning agent (admin)
 POST /api/learning-agent/optimize      # bounded self-improvement pass (admin)
 POST /api/github-sync/run              # run GitHub sync (admin)
+POST /api/linear-sync/run              # run Linear sync (admin)
 POST /api/backup-mirror/run            # run mirror manifest export (admin)
 POST /api/access/tokens                # create token (admin)
 POST /api/access/tokens/{id}/revoke    # revoke token (admin)
@@ -199,6 +205,9 @@ uv run citadel learn --force
 - Use `citadel_search` with specific queries. Include `dataset` when targeting a known dataset (e.g. `masumi-network`).
 - Use `citadel_get_mesh` to understand the current knowledge graph relationships.
 - Use `citadel_list_sources` to check GitHub sync status and index health.
+- Use `citadel_linear_my_issues` when the user asks about their assigned tasks
+  (**Seat-Scoped Mirror** from the latest Linear cron sync).
+- Use `citadel_linear_search` for org-wide Linear context in **Central**.
 - Use MCP resources (`citadel://discovery`, `citadel://session`,
   `citadel://sources`, etc.) for lightweight context that doesn't need a full
   search.
@@ -210,6 +219,14 @@ uv run citadel learn --force
 
 ### Writing to Citadel
 
+- **Ingest is a two-stage write.** `citadel_ingest` / `POST /ingest` only *stages*
+  the note into the session store (Cognee returns `status: session_stored`);
+  it does **not** build embeddings or graph edges, so the note is **not yet
+  searchable**. A separate cognify pass (`POST /api/cognify/run`) or improvement
+  cycle (`POST /improve` / `citadel_improve`) indexes it. Both are **admin-only** —
+  a writer seat **cannot** index its own note. Expect a freshly-ingested note to
+  return 0 search results until the next admin/cron cognify runs; that is expected,
+  not a failure. (Personal notes stay in `seat:{slug}`; they are never lost.)
 - **Only write when the user explicitly asks** to preserve durable context.
 - Good candidates for ingestion: architecture decisions, ADRs, source facts, implementation notes, reusable runbooks, operational playbooks, onboarding context.
 - Keep payloads small and curated. Summarize key decisions and facts rather than dumping raw transcripts.
@@ -218,7 +235,9 @@ uv run citadel learn --force
 
 ### Admin Operations
 
-- **Only use admin tools when the user explicitly requests them.**
+- **Only use admin tools when the user explicitly requests them.** Do not
+  trigger GitHub or Linear sync proactively — Railway cron handles scheduled
+  org-wide sync; dev-side git/session hooks handle personal **Node** capture.
 - Explain the intended action before calling `citadel_run_learning_agent`,
   `citadel_run_backup_mirror`, or `citadel_improve`.
 - Use `dry_run=true` first when testing learning-agent or backup-mirror behavior.
@@ -268,10 +287,46 @@ Summary:
    `citadel_discovery`, then `citadel_session`. If both work, try a small
    `citadel_search`.
 7. **Debug.** If the server fails: run `uv sync --dev` in the repo, check the token is present, check the URL is reachable. Do not print the token.
+8. **Autonomous capture.** For personal **Node** sync, run
+   `skills/citadel-proactive-ingest/scripts/install_autosync.sh` once per clone.
+   Onboarding: [`docs/onboarding/teammate-rollout.md`](docs/onboarding/teammate-rollout.md).
 
-Current production verification: hosted MCP was tested on 2026-06-02 at commit
-`7a4a1d9`; `citadel_session`, `citadel_search`, and `citadel_ingest` all
-returned successfully with a writer token.
+## Autonomous Sync (Phase 2)
+
+Background capture requires **no per-session dev steps** after one-time setup.
+
+**Dev-side (personal Node):**
+
+| Layer | Trigger | Install |
+|---|---|---|
+| Git pre-push hook | every `git push` | `install_autosync.sh` (universal — Cursor, Codex, Claude) |
+| SessionEnd hook | Claude Code session close | `templates/claude-settings.json` → `.claude/settings.json` |
+
+Both hooks use `CITADEL_MCP_ACCESS_TOKEN`, send no `dataset` field (routes to
+`seat:{slug}`), and **fail silently** — never block push or session close.
+
+**Server-side (Central + Seat-Scoped Mirrors):**
+
+Railway cron keeps org memory fresh. Devs never trigger these.
+
+| `CITADEL_RUN_MODE` | Syncs |
+|---|---|
+| `learning-agent` / `github-sync` | GitHub org digest → **Central** |
+| `linear-sync` | Linear workspace → **Central**; assignee issues **Seat-Scoped Mirror** → each **Node** |
+| `pipeline` | GitHub + skills refresh + self-improve + backup mirror |
+
+**Agent policy:** read via `citadel_search` / `citadel_linear_my_issues`; write
+via `citadel_ingest` when durable facts crystallize; **do not** trigger admin
+sync unless the user explicitly asks.
+
+Skill: `https://citadel-archive-production.up.railway.app/skills/proactive-ingest`
+
+Current production verification: hosted MCP (Citadel Archive v1.28.0) verified
+end-to-end on 2026-06-25 with a writer seat — `citadel_session` (role +
+capabilities), `citadel_search`, and `citadel_ingest` (accepted into
+`seat:{slug}`) all succeed. Phase 2 (autonomous Node sync, Linear mirror, graph
+UI) is ~98% shipped; live Linear sync is pending an operator-set
+`CITADEL_LINEAR_API_KEY`.
 
 ## Architecture Context
 
@@ -279,6 +334,8 @@ returned successfully with a writer token.
 - **Storage**: PostgreSQL + pgvector for vectors, Kuzu for graph/mesh
 - **Hosting**: Railway (web service + cron service + Postgres + volume)
 - **Source sync**: Daily GitHub org digest → Cognee ingest → improvement cycle
+- **Linear sync**: Read-only workspace → **Central**; assignee issues **Seat-Scoped Mirror** → seat **Nodes** (`CITADEL_RUN_MODE=linear-sync`)
+- **Autonomous Node capture**: Git pre-push + optional SessionEnd hooks → seat **Nodes** (fail-silent, personal-by-default)
 - **Scheduled pipeline**: `CITADEL_RUN_MODE=pipeline` runs GitHub org sync, skills
   catalog refresh, an optional self-improvement pass, and backup mirror export;
   each stage is env-toggleable and a failed stage never blocks later stages
@@ -313,6 +370,8 @@ When talking about Citadel, use these terms:
 | Vault Member | user |
 | Agent Identity | bot |
 | Access Token | MCP key, API secret |
+| Seat / Node / Central | user account, personal vault, shared DB |
+| Seat-Scoped Mirror | personal vault, full Central duplicate |
 | Repository Daily Update | employee report |
 
 Full domain language: [`CONTEXT.md`](CONTEXT.md)
