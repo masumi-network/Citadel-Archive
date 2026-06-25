@@ -35,6 +35,7 @@ from kb.conflicts import KnowledgeConflictStore, obsidian_push_conflict_candidat
 from kb.tags import normalize_tags
 from kb.config import CitadelConfig
 from kb.github_sync import GitHubOrgSyncer
+from kb.linear_sync import LinearSyncer
 from kb.knowledge_mesh import KnowledgeMesh
 from kb.learning import LearningOutcome, LearningProcess
 from kb.learning_agent import LearningAgent
@@ -191,6 +192,10 @@ class GitHubSyncBody(BaseModel):
     force: bool = False
 
 
+class LinearSyncBody(BaseModel):
+    force: bool = False
+
+
 class RepoContentSyncBody(BaseModel):
     force: bool = False
     dry_run: bool = False
@@ -305,6 +310,12 @@ def get_repo_content_syncer() -> RepoContentSyncer:
     if hasattr(app.state, "repo_content_syncer"):
         return app.state.repo_content_syncer
     return RepoContentSyncer(get_citadel())
+
+
+def get_linear_syncer() -> LinearSyncer:
+    if hasattr(app.state, "linear_syncer"):
+        return app.state.linear_syncer
+    return LinearSyncer(get_citadel(), access_store=get_access_store())
 
 
 def get_learning_agent() -> LearningAgent:
@@ -1711,12 +1722,28 @@ async def sources(request: Request, type: str | None = None) -> Any:
         )
         summary["repo_content_files"] = repo_content_status.get("tracked_files", 0)
 
+    if type in {None, "linear"}:
+        linear_status = await get_linear_syncer().status()
+        sources_payload.append(
+            {
+                "id": "linear-workspace",
+                "source_type": "linear",
+                "name": "Linear workspace",
+                "status": "tracked" if linear_status.get("last_synced_at") else "ready",
+                "last_checked_at": linear_status.get("last_synced_at"),
+                "documents": linear_status.get("issue_count", 0),
+                "open_conflicts": 0,
+                "metadata": linear_status,
+            }
+        )
+        summary["linear_issues"] = linear_status.get("issue_count", 0)
+
     if type in {None, "obsidian_vault"}:
         obsidian_status = get_obsidian_sync().source_status(source_type="obsidian_vault")
         sources_payload.extend(obsidian_status["sources"])
         summary.update(obsidian_status["summary"])
 
-    if type not in {None, "github", "github_repo_content", "obsidian_vault"}:
+    if type not in {None, "github", "github_repo_content", "linear", "obsidian_vault"}:
         raise HTTPException(status_code=422, detail="Unsupported source type.")
 
     return {"ok": True, "sources": sources_payload, "summary": summary}
@@ -1734,6 +1761,42 @@ async def run_github_sync(body: GitHubSyncBody, request: Request) -> Any:
         await mesh_state.record_error(citadel.config, operation="github_sync", error=str(exc))
         raise HTTPException(status_code=500, detail=str(exc)) from exc
     await mesh_state.record_github_sync(citadel.config, result)
+    return jsonable_encoder(result)
+
+
+@app.get("/api/linear-sync")
+async def linear_sync_status(request: Request) -> Any:
+    require_access(request, "reader", "sources:read")
+    return jsonable_encoder(await get_linear_syncer().status())
+
+
+@app.get("/api/linear-sync/issues")
+async def linear_sync_issues(
+    request: Request,
+    scope: str = Query(default="my", pattern="^(my|org)$"),
+) -> dict[str, Any]:
+    identity = require_access(request, "reader", "kb:read")
+    syncer = get_linear_syncer()
+    seat_dataset_name = identity.default_dataset if is_seat_dataset(identity.default_dataset) else None
+    if scope == "my" and not seat_dataset_name:
+        return {"ok": True, "scope": scope, "issues": [], "count": 0}
+    issues = syncer.issues_for_scope(scope=scope, seat_dataset_name=seat_dataset_name)
+    return {"ok": True, "scope": scope, "issues": issues, "count": len(issues)}
+
+
+@app.post("/api/linear-sync/run")
+async def run_linear_sync(body: LinearSyncBody, request: Request) -> Any:
+    require_access(request, "admin", "sources:sync")
+    citadel = get_citadel()
+    mesh_state = get_mesh()
+    try:
+        result = await get_linear_syncer().run(force=body.force)
+    except Exception as exc:  # pragma: no cover - depends on Linear API and runtime Cognee config.
+        logger.error("Linear sync run failed: %s", exc.__class__.__name__)
+        await mesh_state.record_error(citadel.config, operation="linear_sync", error=str(exc))
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    if not result.get("ok"):
+        raise HTTPException(status_code=503, detail=result.get("reason", "Linear sync unavailable"))
     return jsonable_encoder(result)
 
 

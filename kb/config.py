@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
+import json
 import os
 from pathlib import Path
 from typing import Iterable
@@ -84,6 +85,29 @@ def _conflicts_store_path(value: str | None) -> str:
         or ("/data/.citadel" if Path("/data").exists() else ".citadel")
     )
     return str(Path(root) / "conflicts.json")
+
+
+def _linear_sync_state_path(value: str | None) -> str:
+    if value:
+        return value
+    root = (
+        os.getenv("CITADEL_STATE_DIRECTORY")
+        or os.getenv("SYSTEM_ROOT_DIRECTORY")
+        or ("/data/.citadel" if Path("/data").exists() else ".citadel")
+    )
+    return str(Path(root) / "linear_sync_state.json")
+
+
+def _linear_user_map(value: str | None) -> dict[str, str]:
+    if not value:
+        return {}
+    try:
+        parsed = json.loads(value)
+    except json.JSONDecodeError:
+        return {}
+    if not isinstance(parsed, dict):
+        return {}
+    return {str(key): str(item) for key, item in parsed.items() if item}
 
 
 def _backup_mirror_root_path(value: str | None) -> str:
@@ -173,6 +197,13 @@ class CitadelConfig:
     backup_mirror_branch: str = "main"
     backup_mirror_root_path: str = ".citadel/backup_mirror"
     backup_mirror_token: str | None = None
+    linear_api_key: str | None = None
+    linear_sync_dataset: str = "masumi-network"
+    linear_sync_session: str = "masumi-linear"
+    linear_sync_state_path: str = ".citadel/linear_sync_state.json"
+    linear_sync_max_issues: int = 200
+    linear_sync_run_improve: bool = False
+    linear_user_map: dict[str, str] = field(default_factory=dict)
 
     @classmethod
     def from_env(cls, *, env_file: str | None = ".env") -> "CitadelConfig":
@@ -364,6 +395,15 @@ class CitadelConfig:
                 or os.getenv("CITADEL_BACKUP_MIRROR_GITHUB_TOKEN")
                 or None
             ),
+            linear_api_key=os.getenv("CITADEL_LINEAR_API_KEY") or os.getenv("LINEAR_API_KEY") or None,
+            linear_sync_dataset=os.getenv("CITADEL_LINEAR_SYNC_DATASET", "masumi-network"),
+            linear_sync_session=os.getenv("CITADEL_LINEAR_SYNC_SESSION", "masumi-linear"),
+            linear_sync_state_path=_linear_sync_state_path(
+                os.getenv("CITADEL_LINEAR_SYNC_STATE_PATH")
+            ),
+            linear_sync_max_issues=_int(os.getenv("CITADEL_LINEAR_SYNC_MAX_ISSUES"), default=200),
+            linear_sync_run_improve=_bool(os.getenv("CITADEL_LINEAR_SYNC_RUN_IMPROVE")),
+            linear_user_map=_linear_user_map(os.getenv("CITADEL_LINEAR_USER_MAP")),
         )
 
     def with_tags(self, tags: Iterable[str]) -> "CitadelConfig":

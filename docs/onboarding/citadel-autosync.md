@@ -22,8 +22,9 @@ environment.
 ## What auto-syncs, and when
 
 - **Session close (Claude Code):** once on every `SessionEnd` — see below.
-- **Git push (planned, Phase 2 M1):** commit snapshot on every push — universal
-  across Cursor, Codex, and Claude. See [`docs/phase-2-shipping-plan.md`](../phase-2-shipping-plan.md).
+- **Git push:** commit snapshot on every push — universal across Cursor, Codex,
+  and Claude. Install `templates/git-pre-push.sh` as `.git/hooks/pre-push`.
+  See [`docs/phase-2-shipping-plan.md`](../phase-2-shipping-plan.md).
 
 ### Session close (today)
 
@@ -33,6 +34,19 @@ environment.
 - **Tags:** `dev-session`, your git branch, and the repo name.
 - **How it behaves:** non-blocking and fail-silent. If Citadel is down or the
   token is unset, your session still closes instantly — nothing breaks.
+
+### Git push (all IDEs)
+
+```bash
+cp skills/citadel-proactive-ingest/templates/git-pre-push.sh .git/hooks/pre-push
+chmod +x .git/hooks/pre-push
+```
+
+- **When:** on every `git push` (pre-push hook).
+- **What:** commit hash, message, author, branch, and changed file paths — not
+  raw diffs.
+- **Tags:** `git-push`, branch name, repo name.
+- **How it behaves:** non-blocking and fail-silent; push always succeeds.
 
 ## Personal vs shared
 

@@ -18,6 +18,10 @@ const state = {
   settingsSnapshot: null,
   auditFilter: "all",
   graphMode: "live",
+  graphScope: "all",
+  graphDepth: 0,
+  graphSpokes: true,
+  memoryScope: null,
   realGraph: null,
   realGraphLoading: false,
   conflicts: [],
@@ -107,6 +111,8 @@ const conflictsList = document.getElementById("conflictsList");
 const conflictNavBadge = document.getElementById("conflictNavBadge");
 const conflictFilterButtons = Array.from(document.querySelectorAll("[data-conflict-filter]"));
 const graphModeButtons = Array.from(document.querySelectorAll("[data-graph-mode]"));
+const graphScopeButtons = Array.from(document.querySelectorAll("[data-graph-scope]"));
+const graphDepthInput = document.getElementById("graphDepthInput");
 const realGraphEmpty = document.getElementById("realGraphEmpty");
 const toastStack = document.getElementById("toastStack");
 const searchResultStatus = document.getElementById("searchResultStatus");
@@ -199,11 +205,103 @@ function nodeValue(node) {
   return clamp(2 + degree * 1.4, 2, 9);
 }
 
+function nodeDataset(node) {
+  return node.metadata?.dataset || node.label || "";
+}
+
+function applyGraphScope(nodes, links) {
+  if (state.graphScope === "all") return { nodes, links };
+  const seatDs = state.memoryScope?.default_dataset || "";
+  const keep = new Set();
+  for (const node of nodes) {
+    const dataset = nodeDataset(node);
+    if (state.graphScope === "node") {
+      if (seatDs && (dataset === seatDs || node.label === seatDs)) keep.add(node.id);
+    } else if (state.graphScope === "central") {
+      if (dataset === CENTRAL_DATASET || node.label === CENTRAL_DATASET || node.id === graph.centralId) {
+        keep.add(node.id);
+      }
+    }
+  }
+  if (!keep.size) return { nodes, links };
+  for (const link of links) {
+    if (keep.has(link.source) || keep.has(link.target)) {
+      keep.add(link.source);
+      keep.add(link.target);
+    }
+  }
+  const filteredNodes = nodes.filter((node) => keep.has(node.id));
+  const filteredLinks = links.filter((link) => keep.has(link.source) && keep.has(link.target));
+  return { nodes: filteredNodes, links: filteredLinks };
+}
+
+function applyGraphDepth(nodes, links, byId) {
+  const depth = Number(state.graphDepth) || 0;
+  if (depth <= 0) return { nodes, links };
+  const focusId = state.selectedId || graph.centralId;
+  if (!focusId || !byId.has(focusId)) return { nodes, links };
+  const keep = new Set([focusId]);
+  let frontier = [focusId];
+  for (let hop = 0; hop < depth; hop += 1) {
+    const next = [];
+    for (const nodeId of frontier) {
+      const node = byId.get(nodeId);
+      if (!node) continue;
+      for (const neighbor of node.neighbors || []) {
+        if (!keep.has(neighbor.id)) {
+          keep.add(neighbor.id);
+          next.push(neighbor.id);
+        }
+      }
+    }
+    frontier = next;
+    if (!frontier.length) break;
+  }
+  return {
+    nodes: nodes.filter((node) => keep.has(node.id)),
+    links: links.filter((link) => keep.has(link.source) && keep.has(link.target)),
+  };
+}
+
+function applyHubSpokes(nodes, links, byId) {
+  if (!state.graphSpokes || !graph.centralId || !byId.has(graph.centralId)) {
+    return { nodes, links };
+  }
+  const nextLinks = [...links];
+  const existing = new Set(nextLinks.map((link) => `${link.source}|${link.target}`));
+  for (const node of nodes) {
+    if (!isSeatNode(node) || node.id === graph.centralId) continue;
+    const key = `${graph.centralId}|${node.id}`;
+    if (existing.has(key)) continue;
+    existing.add(key);
+    nextLinks.push({ source: graph.centralId, target: node.id, label: "hub", synthetic: true });
+  }
+  return { nodes, links: nextLinks };
+}
+
+function rebuildNeighborLinks(nodes, links) {
+  for (const node of nodes) {
+    node.neighbors = [];
+    node.links = [];
+  }
+  const byId = new Map(nodes.map((node) => [node.id, node]));
+  for (const edge of links) {
+    const sourceNode = byId.get(edge.source);
+    const targetNode = byId.get(edge.target);
+    if (!sourceNode || !targetNode) continue;
+    sourceNode.neighbors.push(targetNode);
+    targetNode.neighbors.push(sourceNode);
+    sourceNode.links.push(edge);
+    targetNode.links.push(edge);
+  }
+  return byId;
+}
+
 // Map the active {nodes,edges} into force-graph graphData and precompute
 // node.neighbors + node.links once for fast hover highlighting.
 function buildForceGraphData() {
   const source = activeGraphData();
-  const nodes = Array.from(source.nodes.values()).map((node) => ({
+  let nodes = Array.from(source.nodes.values()).map((node) => ({
     id: node.id,
     label: node.label || node.id,
     type: node.type || "other",
@@ -213,20 +311,17 @@ function buildForceGraphData() {
     neighbors: [],
     links: [],
   }));
-  const byId = new Map(nodes.map((node) => [node.id, node]));
-  const links = [];
+  let links = [];
   for (const edge of source.edges) {
-    const sourceNode = byId.get(edge.source);
-    const targetNode = byId.get(edge.target);
-    if (!sourceNode || !targetNode) continue;
-    const link = { source: edge.source, target: edge.target, label: edge.label };
-    links.push(link);
-    sourceNode.neighbors.push(targetNode);
-    targetNode.neighbors.push(sourceNode);
-    sourceNode.links.push(link);
-    targetNode.links.push(link);
+    links.push({ source: edge.source, target: edge.target, label: edge.label });
   }
   graph.centralId = resolveCentralId(nodes);
+  ({ nodes, links } = applyGraphScope(nodes, links));
+  let byId = rebuildNeighborLinks(nodes, links);
+  ({ nodes, links } = applyGraphDepth(nodes, links, byId));
+  byId = rebuildNeighborLinks(nodes, links);
+  ({ nodes, links } = applyHubSpokes(nodes, links, byId));
+  byId = rebuildNeighborLinks(nodes, links);
   return { nodes, links, byId };
 }
 
@@ -340,6 +435,11 @@ async function loadSession() {
   try {
     const session = await api("/api/session");
     state.role = session.role;
+    state.memoryScope = {
+      default_dataset: session.default_dataset || null,
+      seat_slug: session.seat_slug || null,
+      node_label: session.node_label || null,
+    };
     applyAccessControls();
   } catch {
     window.location.assign("/login");
@@ -1361,6 +1461,9 @@ function selectNode(node) {
     <p>${escapeHtml(formatDetails(node.metadata || {}))}</p>
   `;
   updateNodeSelection();
+  if (state.graphDepth > 0) {
+    buildGraphScene();
+  }
 }
 
 async function loadMesh(showConnection = true) {
@@ -1485,6 +1588,18 @@ async function loadKnowledgeGraph(force = false) {
   } finally {
     state.realGraphLoading = false;
   }
+}
+
+function setGraphScope(scope) {
+  if (state.graphScope === scope) return;
+  state.graphScope = scope;
+  graphScopeButtons.forEach((button) => {
+    const active = button.dataset.graphScope === scope;
+    button.classList.toggle("active", active);
+    button.setAttribute("aria-pressed", active ? "true" : "false");
+  });
+  buildGraphScene();
+  resetGraphView();
 }
 
 function setGraphMode(mode) {
@@ -2376,6 +2491,18 @@ conflictFilterButtons.forEach((button) => {
 graphModeButtons.forEach((button) => {
   button.addEventListener("click", () => setGraphMode(button.dataset.graphMode || "live"));
 });
+
+graphScopeButtons.forEach((button) => {
+  button.addEventListener("click", () => setGraphScope(button.dataset.graphScope || "all"));
+});
+
+if (graphDepthInput) {
+  graphDepthInput.addEventListener("input", (event) => {
+    state.graphDepth = Number(event.currentTarget.value) || 0;
+    buildGraphScene();
+    if (state.graphDepth > 0) resetGraphView();
+  });
+}
 
 // Pan, zoom, drag, hover, and click are handled natively by force-graph on the
 // canvas it owns; keyboard re-frame via the canvas container.

@@ -108,6 +108,28 @@ TOOL_POLICIES: dict[str, ToolPolicy] = {
             openWorldHint=True,
         ),
     ),
+    "citadel_linear_my_issues": ToolPolicy(
+        role="reader",
+        scope="kb:read",
+        risk="read_untrusted_content",
+        annotations=ToolAnnotations(
+            readOnlyHint=True,
+            destructiveHint=False,
+            idempotentHint=True,
+            openWorldHint=False,
+        ),
+    ),
+    "citadel_linear_search": ToolPolicy(
+        role="reader",
+        scope="kb:search",
+        risk="read_untrusted_content",
+        annotations=ToolAnnotations(
+            readOnlyHint=True,
+            destructiveHint=False,
+            idempotentHint=True,
+            openWorldHint=True,
+        ),
+    ),
     "citadel_ingest": ToolPolicy(
         role="writer",
         scope="kb:ingest",
@@ -603,6 +625,7 @@ def create_mcp_server(
                     tool_name="citadel_list_sources",
                 ),
                 "github_sync": http.get("/api/github-sync", tool_name="citadel_list_sources"),
+                "linear_sync": http.get("/api/linear-sync", tool_name="citadel_list_sources"),
                 "repo_content_sync": http.get(
                     "/api/repo-content-sync",
                     tool_name="citadel_list_sources",
@@ -612,6 +635,41 @@ def create_mcp_server(
             }
 
         return await _call_async("citadel_list_sources", list_sources)
+
+    @mcp.tool(annotations=TOOL_POLICIES["citadel_linear_my_issues"].annotations)
+    async def citadel_linear_my_issues(ctx: Context, limit: int = 20) -> dict[str, Any]:
+        """Return Linear issues assigned to you (Seat-Scoped Mirror in your Node)."""
+        capped = _clamp_top_k(limit)
+
+        def fetch() -> dict[str, Any]:
+            payload = resolve_client(ctx).get(
+                "/api/linear-sync/issues?scope=my",
+                tool_name="citadel_linear_my_issues",
+            )
+            issues = list(payload.get("issues") or [])[:capped]
+            return {**payload, "issues": issues, "count": len(issues)}
+
+        return await _call_async("citadel_linear_my_issues", fetch)
+
+    @mcp.tool(annotations=TOOL_POLICIES["citadel_linear_search"].annotations)
+    async def citadel_linear_search(
+        query: str,
+        ctx: Context,
+        top_k: int = 10,
+    ) -> dict[str, Any]:
+        """Search org-wide Linear issues synced to shared Central."""
+        return await _call_async(
+            "citadel_linear_search",
+            lambda: resolve_client(ctx).post(
+                "/search",
+                {
+                    "query": _require_non_empty(query, "query"),
+                    "dataset": "masumi-network",
+                    "top_k": _clamp_top_k(top_k),
+                },
+                tool_name="citadel_linear_search",
+            ),
+        )
 
     @mcp.tool(annotations=TOOL_POLICIES["citadel_ingest"].annotations)
     async def citadel_ingest(

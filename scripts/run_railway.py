@@ -15,6 +15,8 @@ Modes (via ``CITADEL_RUN_MODE``):
   mirror export. Each stage is toggleable via env, logs a per-stage summary
   line, and a failed stage never stops the stages after it. The process exits
   nonzero only when every enabled stage fails.
+- ``linear-sync``: sync the Linear workspace to Central and mirror assignee
+  issues into seat Nodes (requires ``CITADEL_LINEAR_API_KEY``).
 """
 
 from __future__ import annotations
@@ -217,6 +219,23 @@ def run(mode: str | None = None) -> int:
         return _cognify_mode(verify=resolved_mode == "cognify-verify")
     if resolved_mode in {"pipeline", "all", "cron"}:
         return run_pipeline()
+    if resolved_mode == "linear-sync":
+        from kb.linear_sync import LinearSyncer
+        from kb.service import Citadel
+
+        async def _run() -> int:
+            result = await LinearSyncer(Citadel.from_env()).run(force=True)
+            if not result.get("ok"):
+                logger.error("Linear sync failed: %s", result.get("reason"))
+                return 1
+            logger.info(
+                "Linear sync finished: issues=%s mirrored=%s",
+                result.get("issue_count"),
+                result.get("mirrored_count"),
+            )
+            return 0
+
+        return asyncio.run(_run())
     print(f"Unsupported CITADEL_RUN_MODE: {resolved_mode}", file=sys.stderr)
     return 1
 

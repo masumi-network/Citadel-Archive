@@ -63,7 +63,9 @@ Use:
 - `citadel_session` to verify the connection and check your role.
 - `citadel_search` for vault search. Include `dataset` when targeting a known dataset.
 - `citadel_get_mesh` for the current knowledge mesh state.
-- `citadel_list_sources` for GitHub/source-learning/index status.
+- `citadel_list_sources` for GitHub/Linear/source-learning/index status.
+- `citadel_linear_my_issues` for your assigned Linear tasks (Node mirror).
+- `citadel_linear_search` for org-wide Linear context in Central.
 - `citadel_recent_contributions` for recent teammate vault contributions (`mine=true` for yours).
 - `citadel://discovery`, `citadel://session`, `citadel://sources`,
   `citadel://indexes`, or `citadel://events/recent` for lightweight context.

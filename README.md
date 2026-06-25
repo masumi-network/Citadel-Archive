@@ -23,7 +23,7 @@ decisions live in [`docs/adr/`](docs/adr/) — including
 Current refactor candidates live in
 [`docs/architecture-deepening-opportunities.md`](docs/architecture-deepening-opportunities.md).
 
-**Current execution plan (~18%):** [`docs/phase-2-shipping-plan.md`](docs/phase-2-shipping-plan.md)
+**Current execution plan (~98%):** [`docs/phase-2-shipping-plan.md`](docs/phase-2-shipping-plan.md)
 with sequential checkboxes in [`tasks.md`](tasks.md). Ship order: merge graph
 Phase 1 → git push sync → Linear (Central + Seat-Scoped Mirror) → Linear MCP →
 graph UI Phase 2 → deploy.

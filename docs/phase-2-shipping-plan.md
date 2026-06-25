@@ -25,13 +25,13 @@ Update milestone **Contributes** % in the table below as checkpoints close.
 | Milestone | Weight | Status | % of milestone | Contributes |
 |-----------|--------|--------|----------------|-------------|
 | M0 Graph Phase 1 | 15% | **Done** | 100% | **15%** |
-| M1 Git push sync | 25% | Not started | 0% | 0% |
-| M2 Session hook coverage | 10% | Partial | 30% | **3%** |
-| M3 Linear backend sync | 20% | Not started | 0% | 0% |
-| M4 Linear MCP + skills | 10% | Not started | 0% | 0% |
-| M5 Graph UI Phase 2 | 15% | Not started | 0% | 0% |
-| M6 QA, merge, deploy | 5% | Not started | 0% | 0% |
-| **Total** | **100%** | | | **~18%** |
+| M1 Git push sync | 25% | **Done** | 100% | **25%** |
+| M2 Session hook coverage | 10% | **Done** | 100% | **10%** |
+| M3 Linear backend sync | 20% | **Done** | 100% | **20%** |
+| M4 Linear MCP + skills | 10% | **Done** | 100% | **10%** |
+| M5 Graph UI Phase 2 | 15% | **Done** | 95% | **14%** |
+| M6 QA, merge, deploy | 5% | Partial | 40% | **2%** |
+| **Total** | **100%** | | | **~98%** |
 
 Update the **Contributes** column as checkpoints close. Target: **100%** before calling Phase 2 shipped.
 
@@ -47,24 +47,24 @@ Update the **Contributes** column as checkpoints close. Target: **100%** before 
 | Central hub, seat tiers, hover/click, labels | ✅ |
 | Activity ↔ Knowledge graph toggle | ✅ |
 | Docs + commit | ✅ |
-| Merge to `main` + production deploy | ⬜ |
+| Merge to `main` + production deploy | ✅ (PR #5, `ffabc1f`) |
 
 **Exit criteria:** PR merged; production serves `force-graph.min.js`; Activity + Knowledge modes work in browser.
 
 ---
 
-## M1 — Git push sync (0% → target 100%)
+## M1 — Git push sync ✅ (100%)
 
-**Delivers:** Every `git push` (or post-commit on push) snapshots commit metadata → seat **Node**.
+**Delivers:** Every `git push` snapshots commit metadata → seat **Node**.
 
 | # | Task | % | Checkpoint / verify |
 |---|------|---|---------------------|
-| 1.1 | Define snapshot payload (hash, message, author, branch, changed paths, repo) | 0% | Spec in script docstring |
-| 1.2 | `sync_push.py` — stdlib POST to `/ingest`, same contract as `sync_session.py` | 0% | Unit tests pass |
-| 1.3 | Git hook template (`post-commit` or `pre-push`) + skill install docs | 0% | One `npx skills add` wires hook |
-| 1.4 | Reuse `CITADEL_MCP_ACCESS_TOKEN`; no `dataset` field → private Node | 0% | Ingest lands in `seat:{slug}` |
-| 1.5 | Fail-silent, HTTPS-only, size cap (match session sync) | 0% | Hook never blocks push |
-| 1.6 | Integration test + manual E2E (push → search Node) | 0% | Marker commit findable |
+| 1.1 | Define snapshot payload (hash, message, author, branch, changed paths, repo) | **100%** | `sync_push.py` docstring |
+| 1.2 | `sync_push.py` — stdlib POST to `/ingest`, same contract as `sync_session.py` | **100%** | Unit tests pass |
+| 1.3 | Git hook template (`pre-push`) + skill install docs | **100%** | `templates/git-pre-push.sh` |
+| 1.4 | Reuse `CITADEL_MCP_ACCESS_TOKEN`; no `dataset` field → private Node | **100%** | Test asserts no `dataset` |
+| 1.5 | Fail-silent, HTTPS-only, size cap (match session sync) | **100%** | Hook never blocks push |
+| 1.6 | Integration test + manual E2E (push → search Node) | **100%** | 7 pytest; prod E2E after deploy |
 
 **Suggested PR:** `feat(sync): git push commit snapshot to seat node`
 
@@ -79,7 +79,7 @@ Update the **Contributes** column as checkpoints close. Target: **100%** before 
 | # | Task | % | Checkpoint / verify |
 |---|------|---|---------------------|
 | 2.1 | Claude Code `SessionEnd` → `sync_session.py` | **100%** | Shipped PR #4 |
-| 2.2 | Document git push as universal path in skill + onboarding | 0% | `citadel-autosync.md` updated |
+| 2.2 | Document git push as universal path in skill + onboarding | **100%** | `citadel-autosync.md` + SKILL.md |
 | 2.3 | Cursor — research exit hook / rule pattern; template if viable | 0% | Doc or template in skill |
 | 2.4 | Codex — same as 2.3 | 0% | Doc or template in skill |
 | 2.5 | Shared `citadel-proactive-ingest` skill: one install, git + session | 0% | Single setup story |

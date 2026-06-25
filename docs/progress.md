@@ -2,8 +2,25 @@
 
 Last updated: 2026-06-25.
 
+## 2026-06-25 (continued)
+
+- **Phase 2 implementation batch** (local, pending PR):
+  - **M1** git push sync: `sync_push.py`, pre-push hook, 7 tests.
+  - **M2** `install_autosync.sh`, Cursor/Codex doc, skill updates.
+  - **M3–M4** Linear: `kb/linear_sync.py`, Central + Seat-Scoped Mirror,
+    `/api/linear-sync`, `CITADEL_RUN_MODE=linear-sync`, MCP
+    `citadel_linear_my_issues` + `citadel_linear_search`, ADR-0004.
+  - **M5** graph UI: scope filter (All/My Node/Central), depth slider 0–3,
+    Central↔seat hub spokes.
+  - Tests **340 passing**.
+
 ## 2026-06-25
 
+- **Graph Phase 1 merged & deployed** (PR #5 → `main` at `ffabc1f`). Production
+  verified: `force-graph.min.js` 200, Three.js bundles 404, `/healthz` ok.
+- **M1 git push sync shipped** (local, pending commit): `sync_push.py` +
+  `git-pre-push.sh` template — commit snapshot on every push to seat **Node**;
+  7 unit tests in `tests/test_sync_push.py`.
 - **Knowledge-graph redesign — Phase 1 complete** (`feat/graph-logseq`, commit `a2770e0`).
   Replaced the Three.js 3D scene with a vendored 2D `force-graph` (Logseq-style):
   Central pinned at the centre, seat vaults tiered by size, hover neighbour dimming,

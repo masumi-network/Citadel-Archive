@@ -10,9 +10,11 @@ per-session ceremony. Two layers:
 
 1. **Mid-session, agent-driven.** While working, the agent proactively calls
    `citadel_ingest` for durable facts and decisions. Personal-by-default.
-2. **SessionEnd, hook-driven.** On every session close, a non-blocking hook
-   distills the transcript and POSTs a short note to the dev's PRIVATE node —
-   zero per-session steps after a one-time token export.
+2. **SessionEnd, hook-driven.** On every session close (Claude Code), a
+   non-blocking hook distills the transcript and POSTs a short note to the
+   dev's PRIVATE node — zero per-session steps after a one-time token export.
+3. **Git push, hook-driven.** On every `git push` (all IDEs), a pre-push hook
+   snapshots commit metadata to the dev's PRIVATE node — install once per clone.
 
 ```
 Personal node:  seat:{slug}   (the dev's private Citadel node — default target)
@@ -116,6 +118,28 @@ auto-syncs to your private node. With it unset, the hook is a clean no-op.
 Copy `templates/claude-settings.json` into the repo's `.claude/settings.json`
 (point the command at this skill's `scripts/sync_session.py`). See
 `README.md` in this skill for the drop-in steps and opt-out.
+
+## Layer 3 — Git push auto-sync (universal)
+
+`scripts/sync_push.py` runs from a git **pre-push** hook (`templates/git-pre-push.sh`).
+On every push it:
+
+1. reads pre-push ref lines from STDIN (or HEAD when invoked manually);
+2. collects commit hash, message, author, branch, and changed file paths — **no
+   raw diffs**;
+3. POSTs `{data, tags}` with `tags = ["git-push", <branch>, <repo>]` (NO
+   `dataset` → personal node), HTTPS only;
+4. **fails silently** — always exits 0, never blocks `git push`.
+
+Install once per clone:
+
+```bash
+cp skills/citadel-proactive-ingest/templates/git-pre-push.sh .git/hooks/pre-push
+chmod +x .git/hooks/pre-push
+```
+
+Same `CITADEL_MCP_ACCESS_TOKEN` as SessionEnd and MCP. Works in Cursor, Codex,
+and Claude — any tool that uses git.
 
 ## Privacy posture
 

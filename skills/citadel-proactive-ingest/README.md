@@ -1,16 +1,18 @@
 # citadel-proactive-ingest — org repo setup
 
-Add autonomous personal-KB sync to a project repo so that every Claude Code
-session a dev runs auto-syncs a distilled note to **their** private Citadel node
-(`seat:{slug}`). One-time token setup per dev, zero per-session steps.
+Add autonomous personal-KB sync to a project repo: **SessionEnd** distill (Claude
+Code) and **git push** commit snapshots (all IDEs) auto-sync to **their**
+private Citadel node (`seat:{slug}`). One-time token setup per dev.
 
 ## What ships in this skill
 
 | Path | Purpose |
 |---|---|
 | `SKILL.md` | Agent behavior + auto-sync docs |
-| `scripts/sync_session.py` | The distill + POST script the hook runs (stdlib only) |
+| `scripts/sync_session.py` | SessionEnd distill + POST (stdlib only) |
+| `scripts/sync_push.py` | Git pre-push commit snapshot + POST (stdlib only) |
 | `templates/claude-settings.json` | Drop-in `.claude/settings.json` SessionEnd hook |
+| `templates/git-pre-push.sh` | Installable `.git/hooks/pre-push` for push sync |
 | `README.md` | This file |
 
 ## 1. Add the skill to the repo
@@ -74,7 +76,22 @@ export to `~/.zshrc` / `~/.bashrc` to make it durable across shells.
 Optional: set `CITADEL_BASE_URL` to override the hosted base (defaults to the
 production URL). It must be `https://`.
 
-## 4. Opt-out
+## 4. Git push hook (universal — Cursor, Codex, Claude)
+
+Install once per clone so every **push** snapshots commit metadata to your
+private node:
+
+```bash
+cp skills/citadel-proactive-ingest/templates/git-pre-push.sh .git/hooks/pre-push
+chmod +x .git/hooks/pre-push
+```
+
+The hook runs `scripts/sync_push.py` on pre-push. It captures commit hash,
+message, author, branch, and changed file paths (not raw diffs). Same token,
+same personal-by-default routing — **no `dataset` field**. Always exits 0; never
+blocks push.
+
+## 5. Opt-out
 
 Either is enough:
 

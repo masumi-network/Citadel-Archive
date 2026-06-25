@@ -1,92 +1,29 @@
 # Citadel Tasks
 
-## Phase 2 execution — sequential (~18% overall)
+## Phase 2 execution — sequential (~98% overall)
 
 **Plan:** [`docs/phase-2-shipping-plan.md`](docs/phase-2-shipping-plan.md)
 
-Execute in order. Check off as each checkpoint ships. Update progress % in the plan doc.
+M0–M5 implemented locally; M6 deploy pending (PR merge + Linear API key).
 
-### M0 — Graph Phase 1 (15% weight, milestone 100%, pending merge)
+### Checkpoints
 
-- [x] Vendored `force-graph`; removed Three.js
-- [x] Central hub, seat tiers, hover/click, labels-on-zoom
-- [x] Activity ↔ Knowledge graph toggle
-- [x] Edge-case fixes + docs + commit (`a2770e0`)
-- [ ] **M0.4** Open PR, review, merge `feat/graph-logseq` → `main`, deploy
-
-### M1 — Git push sync (25% weight, milestone 0%)
-
-- [ ] **M1.1** Define commit snapshot payload spec
-- [ ] **M1.2** Implement `sync_push.py` (stdlib, same contract as `sync_session.py`)
-- [ ] **M1.3** Git hook template + skill install docs (`citadel-proactive-ingest`)
-- [ ] **M1.4** Verify ingest routes to `seat:{slug}` via token (no `dataset` field)
-- [ ] **M1.5** Fail-silent, HTTPS-only, size cap; hook never blocks push
-- [ ] **M1.6** Unit tests + E2E (push → search Node finds marker)
-
-### M2 — Session hook coverage (10% weight, milestone 30%)
-
-- [x] **M2.1** Claude Code `SessionEnd` → `sync_session.py` (PR #4)
-- [ ] **M2.2** Document git push as universal path in skill + `citadel-autosync.md`
-- [ ] **M2.3** Cursor exit-hook research + template (if API exists)
-- [ ] **M2.4** Codex exit-hook research + template (if API exists)
-- [ ] **M2.5** Single install story: one skill, git hook + session hook
-
-### M3 — Linear backend sync (20% weight, milestone 0%)
-
-- [ ] **M3.1** ADR/plan: Central + Seat-Scoped Mirror routing (read-only)
-- [ ] **M3.2** `kb/linear_sync.py` — fetch issues/projects via Linear API
-- [ ] **M3.3** Config: `CITADEL_LINEAR_API_KEY` (+ optional team filter)
-- [ ] **M3.4** Ingest org-wide digest → `masumi-network` (Central)
-- [ ] **M3.5** Mirror assignee issues → `seat:{slug}` per seat
-- [ ] **M3.6** Seat ↔ Linear user mapping (email or admin config)
-- [ ] **M3.7** Run mode / admin endpoint / cron (`CITADEL_RUN_MODE=linear-sync`)
-- [ ] **M3.8** Tests (`tests/test_linear_sync.py`)
-
-**Blocked on:** operator provides Linear API key + workspace ID.
-
-### M4 — Linear MCP + skills (10% weight, milestone 0%)
-
-- [ ] **M4.1** MCP tool: `citadel_linear_my_issues` (seat-scoped, Node mirror)
-- [ ] **M4.2** MCP tool: org issue search (Central, reader+)
-- [ ] **M4.3** Audit + scope enforcement
-- [ ] **M4.4** Update `citadel-vault` / connector skills
-- [ ] **M4.5** Document stale-cache / optional on-demand refresh
-
-### M5 — Graph UI Phase 2 (15% weight, milestone 0%)
-
-- [ ] **M5.1** Scope filter: My Node / Central / Both
-- [ ] **M5.2** Local graph + depth slider (1–3 hops)
-- [ ] **M5.3** Explicit Central ↔ `seat:` vault spokes
-- [ ] **M5.4** Activity vs Knowledge mode parity for filters
-- [ ] **M5.5** Browser QA (Fit, Pause, mode switch, mobile)
-
-### M6 — QA, merge, deploy (5% weight, milestone 0%)
-
-- [ ] **M6.1** All milestone PRs merged to `main`
-- [ ] **M6.2** Full pytest suite green (328+)
-- [ ] **M6.3** Production: re-cognify if needed; Linear key configured
-- [ ] **M6.4** Mark Phase 2 shipped in `docs/progress.md` + README
-- [ ] **M6.5** Teammate rollout one-pager (token + skill + git hook)
-
-### Final verification gate
-
-- [ ] Git push → note in seat **Node** without manual ingest
-- [ ] SessionEnd → distill in **Node** (existing)
-- [ ] Linear sync → issues in **Central**; assignee mirror in **Node**
-- [ ] MCP "what do I need to do?" → tasks from **Node** mirror
-- [ ] Graph scope filter + local depth work
-- [ ] All sync failures fail-silent
+- [x] M0 Graph Phase 1 merged (PR #5)
+- [x] M1 Git push sync (`sync_push.py`, 7 tests)
+- [x] M2 Session + IDE docs, `install_autosync.sh`
+- [x] M3 Linear backend (ADR-0004, `/api/linear-sync`)
+- [x] M4 MCP `citadel_linear_my_issues`, `citadel_linear_search`
+- [x] M5 Graph scope / depth / spokes
+- [ ] M5.5 Browser QA; M6 production rollout
 
 ---
 
-## Done (2026-06-25 session)
+## Done (2026-06-25 session — Phase 2 implementation)
 
-- Phase 2 design session: autonomous sync model, Linear routing, execution plan.
-- Glossary: **Seat-Scoped Mirror** added to `CONTEXT.md`.
-- Plan doc: `docs/phase-2-shipping-plan.md`; sequential todos in this file.
-- Graph Phase 1 committed on `feat/graph-logseq` (`a2770e0`).
+- Graph Phase 1 production (PR #5). Git push sync, Linear sync + mirror, graph UI
+  Phase 2, MCP tools, IDE onboarding. Tests 340 passing.
 
-## Done (2026-06-24 session)
+## Done (2026-06-25 session — planning)
 
 - Fixed broken production ingest: the invalid `LLM_MODEL=openrouter/free` (every
   cognify call failed) -> `openrouter/openai/gpt-4o-mini`. Verified end-to-end.
@@ -353,9 +290,8 @@ Execute in order. Check off as each checkpoint ships. Update progress % in the p
 
 ## Next
 
-Execute Phase 2 sequentially — start with **M0.4** (merge graph Phase 1 PR).
-See [`docs/phase-2-shipping-plan.md`](docs/phase-2-shipping-plan.md) and the
-Phase 2 execution section at the top of this file.
+Open PR for Phase 2 → merge → set `CITADEL_LINEAR_API_KEY` on Railway →
+`POST /api/linear-sync/run` → per-dev `install_autosync.sh`.
 
 ## Next: Team Access
 
