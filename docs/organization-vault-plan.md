@@ -133,24 +133,34 @@ Proves Citadel as a hosted organization vault with per-token memory scope.
 
 Phase 1 access tokens still grant role-constrained vault access; dataset scoping is the first step toward seat/node isolation without yet requiring admin seat UI.
 
-### Phase 2: Admin Seat UI, Multi-Dataset Search, Tag Routing (planned)
+### Phase 2: Autonomous Sync, Linear, Graph UI (in progress — ~18%)
 
-- **Admin seat UI:** create seats, assign `seat:{slug}` nodes, issue and rotate tokens, view seat inventory.
-- **Multi-dataset search:** search own node + Central (and other allowed datasets) in one query; enforce `allowed_datasets` at query time.
-- **Tag routing:** tags separate automatic (node) vs curated (Central) lanes — e.g. org tags route to Central, session tags stay in node.
-- Tiered ingestion enforcement at ingest routing layer.
+See [`docs/phase-2-shipping-plan.md`](../docs/phase-2-shipping-plan.md) for checkpoints.
 
-**Not in Phase 2:** Linear sync, external notification adapters, physical DB-per-seat isolation.
+- **Autonomous capture:** git push commit snapshots + IDE session hooks → seat **Nodes**.
+- **Linear integration:** workspace → **Central**; assignee **Seat-Scoped Mirror** → **Nodes**.
+- **Graph UI Phase 2:** scope filter, local depth, Central↔vault spokes.
+- **Multi-dataset search + tag routing** (original org-vault Phase 2) remain planned; not in the current shipping sequence.
 
-### Phase 3: Linear Sync (planned)
+**Not in this phase:** external notification adapters, physical DB-per-seat isolation.
 
-Read-only Linear API integration. Scope (subject to implementation planning, not yet ADR'd):
+### Phase 2 (org access): Admin Seat UI, Multi-Dataset Search, Tag Routing (planned, deferred)
 
-- Whole Linear workspace content syncs to **Central** (org-wide visibility).
-- Issues assigned to a seat may copy relevant context into that seat's **node** for agent working memory.
-- MCP activity notifications when Linear-linked knowledge changes.
+- **Admin seat UI:** largely shipped (connect wizard, seat inventory); rotation polish remains.
+- **Multi-dataset search:** search own node + Central in one query.
+- **Tag routing:** org tags → Central; session tags stay in node.
 
-Linear remains read-only from Citadel's perspective in this phase — no write-back to Linear.
+### Phase 3: Linear Sync (merged into Phase 2 shipping plan)
+
+Linear is pulled forward into the current Phase 2 execution plan (2026-06-25 design session).
+Read-only Linear API integration:
+
+- Whole Linear workspace syncs to **Central** (`masumi-network`).
+- Issues assigned to a seat-holder are **Seat-Scoped Mirrored** into that seat's **Node**.
+- MCP tools for personal task queries and org-wide issue search.
+- MCP activity notifications when Linear-linked knowledge changes (optional, M4+).
+
+Linear remains read-only from Citadel — no write-back to Linear.
 
 ### Phase 4: External Notify And Hard Isolation (planned)
 
@@ -198,9 +208,10 @@ Agent-to-agent communication through Masumi Agent Messenger remains separate fro
 
 ## Immediate Build Priorities
 
-1. Commit and ship Phase 1 token scoping (`default_dataset`, `default_session`, `allowed_datasets`).
-2. Document and smoke-test seat/node/Central access rules against existing MCP tools.
-3. Design Phase 2 admin seat UI and multi-dataset search API.
-4. Keep polishing the hosted dashboard around source status, access, audit, and search.
-5. Smoke-test MCP search and ingest from Claude Code and Codex with scoped tokens.
-6. Verify private GitHub repository sync with a fine-grained token into Central.
+1. Execute [`docs/phase-2-shipping-plan.md`](phase-2-shipping-plan.md) sequentially (M0→M6).
+2. Merge graph Phase 1 (`feat/graph-logseq`) to `main`.
+3. Ship git push autonomous sync (M1) — universal baseline for all IDEs.
+4. Ship Linear sync + Seat-Scoped Mirror + MCP tools (M3–M4).
+5. Ship graph UI Phase 2 — scope, depth, spokes (M5).
+6. QA, deploy, teammate rollout (M6).
+7. Later: multi-dataset search, tag routing, backup-mirror cron (see `tasks.md` backlog).

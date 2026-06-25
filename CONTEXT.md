@@ -89,8 +89,12 @@ A curated copy of content from a seat **Node** into **Central**. Dual-write: the
 _Avoid_: move, delete original, automatic merge
 
 **Automatic + Curated Sync**:
-Default agent memory stays in the seat **Node**; org-bound content (pipelines, tagged contributions) also lands in **Central** per curation rules.
+Default agent memory stays in the seat **Node**; org-bound content (pipelines, tagged contributions) also lands in **Central** per curation rules. Integration sources (e.g. Linear) sync org-wide into **Central**; seat-relevant subsets (e.g. issues assigned to that seat-holder) are also **Mirrored** into that seat's **Node**.
 _Avoid_: full vault mirror, seat-to-seat sync, chat log sync
+
+**Seat-Scoped Mirror**:
+A filtered copy of **Central** content relevant to one **Seat** (e.g. Linear issues assigned to that seat-holder) stored in that seat's **Node** so personal agent queries stay local without re-querying **Central**.
+_Avoid_: full Central duplicate, seat-to-seat sync, personal vault
 
 **Repository Daily Update**:
 A source-linked summary of meaningful changes in one repository over a day.
@@ -135,6 +139,7 @@ _Avoid_: merge, overwrite, silent correction
 - A **Knowledge Conflict** should be shown when source-linked knowledge disagrees.
 - A **Seat** is one human **Principal** that may hold several **Tokens**; **Agent Identities** acting for that human are separate principals that may be granted access to the seat's **Node**.
 - A caller is treated as holding a **Node** when a seat **Node** is in its access scope — this is what subjects it to **Central** curation rules, regardless of whether it is the human seat-holder or one of their agents.
+- Integration sources (e.g. Linear) sync org-wide into **Central**; **Seat-Scoped Mirrors** copy assignee-relevant subsets into each seat's **Node** (e.g. John's assigned Linear issues appear in John's **Node** and in **Central**).
 
 ## Example Dialogue
 
