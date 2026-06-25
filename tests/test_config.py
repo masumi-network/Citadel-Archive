@@ -1,0 +1,34 @@
+from __future__ import annotations
+
+import os
+
+from kb.access import CENTRAL_DATASET
+from kb.config import CitadelConfig
+
+
+def test_defaults_resolve_to_central_dataset() -> None:
+    """The server-level defaults must be the shared Central dataset, not the
+    literal "personal" string. Otherwise the mesh creates a phantom "personal"
+    dataset node next to Central and /readyz reports tenant "personal"."""
+    config = CitadelConfig()
+    assert config.tenant_id == CENTRAL_DATASET
+    assert config.default_dataset == CENTRAL_DATASET
+    assert config.tenant_id != "personal"
+    assert config.default_dataset != "personal"
+
+
+def test_from_env_defaults_to_central_when_unset(monkeypatch) -> None:
+    monkeypatch.delenv("CITADEL_TENANT_ID", raising=False)
+    monkeypatch.delenv("CITADEL_DEFAULT_DATASET", raising=False)
+    config = CitadelConfig.from_env()
+    assert config.tenant_id == CENTRAL_DATASET
+    assert config.default_dataset == CENTRAL_DATASET
+
+
+def test_from_env_env_vars_still_override(monkeypatch) -> None:
+    """Explicit env vars still win over the Central default."""
+    monkeypatch.setenv("CITADEL_TENANT_ID", "explicit-org")
+    monkeypatch.setenv("CITADEL_DEFAULT_DATASET", "explicit-dataset")
+    config = CitadelConfig.from_env()
+    assert config.tenant_id == "explicit-org"
+    assert config.default_dataset == "explicit-dataset"

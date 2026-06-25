@@ -6,6 +6,8 @@ import os
 from pathlib import Path
 from typing import Iterable
 
+from kb.access import CENTRAL_DATASET
+
 try:
     from dotenv import load_dotenv
 except ImportError:  # pragma: no cover - exercised only before dependencies are installed.
@@ -123,7 +125,7 @@ def _backup_mirror_root_path(value: str | None) -> str:
 
 @dataclass(frozen=True)
 class CitadelConfig:
-    tenant_id: str = "personal"
+    tenant_id: str = CENTRAL_DATASET
     user_id: str = "local"
     admin_key: str | None = None
     reader_keys: tuple[str, ...] = field(default_factory=tuple)
@@ -134,7 +136,7 @@ class CitadelConfig:
     conflicts_max_records: int = 500
     mesh_graph_max_nodes: int = 200
     audit_max_events: int = 1000
-    default_dataset: str = "personal"
+    default_dataset: str = CENTRAL_DATASET
     search_default_dataset: str | None = None
     default_session: str = "personal-session"
     default_tags: tuple[str, ...] = field(default_factory=tuple)
@@ -211,7 +213,7 @@ class CitadelConfig:
             load_dotenv(env_file, override=False)
 
         return cls(
-            tenant_id=os.getenv("CITADEL_TENANT_ID", "personal"),
+            tenant_id=os.getenv("CITADEL_TENANT_ID", CENTRAL_DATASET),
             user_id=os.getenv("CITADEL_USER_ID", "local"),
             admin_key=os.getenv("CITADEL_ADMIN_KEY") or None,
             reader_keys=tuple(_csv(os.getenv("CITADEL_READER_KEYS"))),
@@ -232,7 +234,7 @@ class CitadelConfig:
                 default=200,
             ),
             audit_max_events=_int(os.getenv("CITADEL_AUDIT_MAX_EVENTS"), default=1000),
-            default_dataset=os.getenv("CITADEL_DEFAULT_DATASET", "personal"),
+            default_dataset=os.getenv("CITADEL_DEFAULT_DATASET", CENTRAL_DATASET),
             search_default_dataset=os.getenv("CITADEL_SEARCH_DEFAULT_DATASET") or None,
             default_session=os.getenv("CITADEL_DEFAULT_SESSION", "personal-session"),
             default_tags=tuple(_csv(os.getenv("CITADEL_DEFAULT_TAGS"))),
