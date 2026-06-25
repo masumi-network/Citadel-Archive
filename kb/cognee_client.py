@@ -48,7 +48,7 @@ class CogneeGateway(Protocol):
     ) -> Any:
         ...
 
-    async def cognify(self, *, datasets: list[str]) -> Any:
+    async def cognify(self, *, datasets: list[str], force: bool = False) -> Any:
         ...
 
 
@@ -275,19 +275,22 @@ class CogneePublicClient:
         nodes, edges = await engine.get_graph_data()
         return list(nodes), list(edges)
 
-    async def cognify(self, *, datasets: list[str]) -> Any:
+    async def cognify(self, *, datasets: list[str], force: bool = False) -> Any:
         """Cognify already-added data in ``datasets``.
 
         ``cognee.cognify`` defaults to ``incremental_loading=True``, so this only
         processes uncognified data and is idempotent over a dataset. It exists to
         recover data that was added but never cognified (e.g. a prior cognify
-        failed with a bad LLM config).
+        failed with a bad LLM config). Pass ``force=True`` to set
+        ``incremental_loading=False`` and reprocess data Cognee has marked
+        "already processed" (use when the graph store is empty but the dataset
+        reports as processed).
         """
         self._prepare_cognee_environment()
         import cognee
 
         await self._ensure_cognee_ready(cognee)
-        return await cognee.cognify(datasets=datasets)
+        return await cognee.cognify(datasets=datasets, incremental_loading=not force)
 
     async def add_feedback(
         self,

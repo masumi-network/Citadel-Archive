@@ -143,7 +143,7 @@ async def test_cognify_dataset_reports_graph_growth() -> None:
     assert result["ok"]
     assert result["dataset"] == "masumi-network"
     assert result["verify"] is False
-    assert fake.cognify_calls == [{"datasets": ["masumi-network"]}]
+    assert fake.cognify_calls == [{"datasets": ["masumi-network"], "force": False}]
     assert result["graph_before"] == {"nodes": 0, "edges": 0}
 
 
@@ -167,9 +167,21 @@ async def test_cognify_dataset_verify_ingests_marker_and_confirms_hit() -> None:
     # verify is a superset: recovery cognify + an explicit cognify of the marker
     # (remember does not cognify inline on the modern Cognee path).
     assert fake.cognify_calls == [
-        {"datasets": ["masumi-network"]},
-        {"datasets": ["masumi-network"]},
+        {"datasets": ["masumi-network"], "force": False},
+        {"datasets": ["masumi-network"], "force": False},
     ]
+
+
+@pytest.mark.asyncio
+async def test_cognify_dataset_force_passes_incremental_loading_false() -> None:
+    """force=True must propagate as incremental_loading=False so Cognee reprocesses
+    a dataset it has marked "already processed" (the empty-graph recovery case)."""
+    fake = FakeCognee()
+    kb = Citadel(CitadelConfig(default_dataset="masumi-network"), cognee=fake)
+
+    await kb.cognify_dataset(force=True)
+
+    assert fake.cognify_calls == [{"datasets": ["masumi-network"], "force": True}]
 
 
 @pytest.mark.asyncio

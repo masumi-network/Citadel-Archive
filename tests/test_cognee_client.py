@@ -296,7 +296,7 @@ async def test_cognee_public_client_cognify_wraps_cognee_cognify(monkeypatch: An
     result = await client.cognify(datasets=["masumi-network"])
 
     assert result == {"cognified": True}
-    assert received["kwargs"] == {"datasets": ["masumi-network"]}
+    assert received["kwargs"] == {"datasets": ["masumi-network"], "incremental_loading": True}
 
 
 def test_cognee_public_client_derives_db_env_from_database_url(monkeypatch: Any) -> None:

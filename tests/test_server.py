@@ -40,7 +40,7 @@ class FakeCitadel:
     async def improve(self, **kwargs: Any) -> dict[str, Any]:
         return {"dataset": kwargs["dataset"], "session_ids": kwargs["session_ids"]}
 
-    async def cognify_dataset(self, *, dataset: Any = None, verify: bool = False) -> dict[str, Any]:
+    async def cognify_dataset(self, *, dataset: Any = None, verify: bool = False, force: bool = False) -> dict[str, Any]:
         return {
             "ok": True,
             "dataset": dataset or self.config.default_dataset,

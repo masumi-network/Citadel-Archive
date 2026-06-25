@@ -132,28 +132,32 @@ class Citadel:
         *,
         dataset: str | None = None,
         verify: bool = False,
+        force: bool = False,
     ) -> dict[str, Any]:
         """Cognify already-added data in ``dataset`` and report graph growth.
 
         This recovers data that was added but never cognified. ``cognee.cognify``
         only processes uncognified data (incremental by default), so re-running is
-        safe and idempotent. ``verify=True`` is a superset: it runs the same
-        recovery cognify and *also* ingests a unique marker, cognifies it, and
-        searches for it — an end-to-end health check that ingest + cognify fills
-        the graph. The marker is cognified explicitly because the modern Cognee
-        ``remember`` path does not cognify inline.
+        safe and idempotent. ``force=True`` overrides the incremental guard by
+        passing ``incremental_loading=False`` — use it when Cognee marks a
+        dataset "already processed" but the graph store is empty (e.g. the graph
+        DB was reset while Cognee's processed-flag persisted). ``verify=True`` is
+        a superset: it runs the same recovery cognify and *also* ingests a unique
+        marker, cognifies it, and searches for it — an end-to-end health check
+        that ingest + cognify fills the graph. The marker is cognified explicitly
+        because the modern Cognee ``remember`` path does not cognify inline.
         """
         target_dataset = dataset or self.config.default_dataset
         before = await self._graph_counts()
 
         # Recovery: cognify already-added-but-uncognified data for the dataset.
-        await self.cognee.cognify(datasets=[target_dataset])
+        await self.cognee.cognify(datasets=[target_dataset], force=force)
 
         verification: dict[str, Any] | None = None
         if verify:
             marker = f"COGNIFY_TEST_MARKER_{uuid4().hex}"
             await self.ingest(marker, dataset=target_dataset)
-            await self.cognee.cognify(datasets=[target_dataset])
+            await self.cognee.cognify(datasets=[target_dataset], force=force)
             matches = await self.search(marker, dataset=target_dataset, top_k=10)
             verification = {
                 "marker": marker,

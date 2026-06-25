@@ -219,6 +219,7 @@ class BackupMirrorRunBody(BaseModel):
 class CognifyRunBody(BaseModel):
     dataset: str | None = None
     verify: bool = False
+    force: bool = False
 
 
 class AccessTokenBody(BaseModel):
@@ -2211,7 +2212,7 @@ async def run_cognify(body: CognifyRunBody, request: Request) -> Any:
     citadel = get_citadel()
     dataset = body.dataset or citadel.config.default_dataset
     try:
-        result = await citadel.cognify_dataset(dataset=dataset, verify=body.verify)
+        result = await citadel.cognify_dataset(dataset=dataset, verify=body.verify, force=body.force)
     except Exception as exc:  # pragma: no cover - depends on Cognee config.
         logger.error("Cognify run failed: %s", exc.__class__.__name__)
         get_access_store().record_event(
@@ -2219,7 +2220,7 @@ async def run_cognify(body: CognifyRunBody, request: Request) -> Any:
             actor=actor,
             success=False,
             dataset=dataset,
-            detail={"verify": body.verify, "error": str(exc)},
+            detail={"verify": body.verify, "force": body.force, "error": str(exc)},
         )
         record_mcp_audit(
             request,
@@ -2229,6 +2230,7 @@ async def run_cognify(body: CognifyRunBody, request: Request) -> Any:
             detail={
                 "operation": "cognify.run",
                 "verify": body.verify,
+                "force": body.force,
                 "error_type": exc.__class__.__name__,
             },
         )
@@ -2242,6 +2244,7 @@ async def run_cognify(body: CognifyRunBody, request: Request) -> Any:
         dataset=dataset,
         detail={
             "verify": body.verify,
+            "force": body.force,
             "graph_grew": result.get("graph_grew"),
             "graph_before": result.get("graph_before"),
             "graph_after": result.get("graph_after"),
@@ -2256,6 +2259,7 @@ async def run_cognify(body: CognifyRunBody, request: Request) -> Any:
         detail={
             "operation": "cognify.run",
             "verify": body.verify,
+            "force": body.force,
             "graph_grew": result.get("graph_grew"),
             "verification_ok": verification.get("ok") if body.verify else None,
         },
