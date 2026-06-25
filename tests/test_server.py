@@ -56,6 +56,42 @@ class FakeCitadel:
         }
 
 
+class FakeLinearSyncer:
+    async def status(self) -> dict[str, Any]:
+        return {
+            "enabled": True,
+            "dataset": "masumi-network",
+            "last_synced_at": "2026-05-21T00:00:00Z",
+            "issue_count": 2,
+            "mirror_count": 1,
+            "state_path": "/tmp/linear-state.json",
+        }
+
+    async def run(self, *, force: bool = False) -> dict[str, Any]:
+        return {
+            "ok": True,
+            "enabled": True,
+            "ingested": True,
+            "issue_count": 2 if force else 0,
+            "mirror_count": 1,
+        }
+
+    def issues_for_scope(
+        self,
+        *,
+        scope: str,
+        seat_dataset_name: str | None,
+    ) -> list[dict[str, Any]]:
+        if scope == "org":
+            return [
+                {"identifier": "MAS-1", "title": "Org issue"},
+                {"identifier": "MAS-2", "title": "Another org issue"},
+            ]
+        if scope == "my" and seat_dataset_name:
+            return [{"identifier": "MAS-1", "title": "My mirrored issue"}]
+        return []
+
+
 class FakeGitHubSyncer:
     async def status(self) -> dict[str, Any]:
         return {
@@ -196,6 +232,7 @@ def authed_client(access_key: str = "test-admin") -> TestClient:
     app.state.citadel = FakeCitadel()
     app.state.mesh = MeshState()
     app.state.github_syncer = FakeGitHubSyncer()
+    app.state.linear_syncer = FakeLinearSyncer()
     app.state.learning_agent = FakeLearningAgent()
     # Keep knowledge-conflict state out of the repo-local .citadel directory.
     app.state.conflict_store = KnowledgeConflictStore(
@@ -352,6 +389,31 @@ def test_api_uses_configured_citadel_service() -> None:
     assert updated_mesh.status_code == 200
     assert updated_mesh.json()["stats"]["feedback"] == 1
     assert upgrade.status_code == 200
+
+
+def test_linear_sync_api_endpoints() -> None:
+    client = authed_client()
+
+    status = client.get("/api/linear-sync")
+    org_issues = client.get("/api/linear-sync/issues?scope=org")
+    my_issues = client.get("/api/linear-sync/issues?scope=my")
+    sync_run = client.post("/api/linear-sync/run", json={"force": True})
+    sources = client.get("/api/sources?type=linear")
+
+    assert status.status_code == 200
+    assert status.json()["enabled"] is True
+    assert status.json()["issue_count"] == 2
+    assert org_issues.status_code == 200
+    assert org_issues.json()["count"] == 2
+    assert my_issues.status_code == 200
+    assert my_issues.json()["count"] == 0
+    assert sync_run.status_code == 200
+    assert sync_run.json()["issue_count"] == 2
+    assert sources.status_code == 200
+    assert sources.json()["summary"]["linear_issues"] == 2
+    linear_source = sources.json()["sources"][0]
+    assert linear_source["source_type"] == "linear"
+    assert linear_source["documents"] == 2
 
 
 def test_admin_can_run_cognify_recovery_and_verification() -> None:
