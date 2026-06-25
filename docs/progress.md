@@ -4,12 +4,23 @@ Last updated: 2026-06-25.
 
 ## 2026-06-25
 
-- **Knowledge-graph redesign — Phase 1 complete** (`feat/graph-logseq`). Replaced
-  the hand-rolled Three.js 3D scene with a vendored 2D `force-graph` (Logseq-style):
+- **Knowledge-graph redesign — Phase 1 complete** (`feat/graph-logseq`, commit `a2770e0`).
+  Replaced the Three.js 3D scene with a vendored 2D `force-graph` (Logseq-style):
   Central pinned at the centre, seat vaults tiered by size, hover neighbour dimming,
   click-to-inspect, labels-on-zoom, Fit/Pause controls, and Activity ↔ Knowledge
   graph toggle. Removed dead 3D layout code; timeline graph focus works in both modes.
-  Phase 2 (explicit Central↔vault spokes, depth/scope controls) deferred.
+  Pending: merge PR to `main` (M0.4).
+- **Phase 2 design session — autonomous sync + graph.** Locked the execution plan
+  in [`docs/phase-2-shipping-plan.md`](phase-2-shipping-plan.md) (~18% overall):
+  - **Autonomous Node Sync** — background, fail-silent, zero extra dev steps.
+  - **Git push** — universal commit snapshot → seat **Node** (Cursor, Codex, Claude).
+  - **Session hooks** — supplementary (`SessionEnd` for Claude Code already shipped).
+  - **Linear** — full workspace → **Central**; assignee issues **Seat-Scoped Mirror**
+    → each seat's **Node** (John's tasks in his Node for "what do I need to do?").
+  - **Graph UI Phase 2** — scope filter, local depth, Central↔vault spokes (after Nodes
+    have content from sync).
+  - Glossary updated: **Seat-Scoped Mirror** in `CONTEXT.md`.
+  - Ship order: M0 merge → M1 git push → M3 Linear → M4 Linear MCP → M5 graph → M6 deploy.
 
 ## 2026-06-24
 
