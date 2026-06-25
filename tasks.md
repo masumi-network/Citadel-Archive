@@ -1,5 +1,91 @@
 # Citadel Tasks
 
+## Phase 2 execution — sequential (~18% overall)
+
+**Plan:** [`docs/phase-2-shipping-plan.md`](docs/phase-2-shipping-plan.md)
+
+Execute in order. Check off as each checkpoint ships. Update progress % in the plan doc.
+
+### M0 — Graph Phase 1 (15% weight, milestone 100%, pending merge)
+
+- [x] Vendored `force-graph`; removed Three.js
+- [x] Central hub, seat tiers, hover/click, labels-on-zoom
+- [x] Activity ↔ Knowledge graph toggle
+- [x] Edge-case fixes + docs + commit (`a2770e0`)
+- [ ] **M0.4** Open PR, review, merge `feat/graph-logseq` → `main`, deploy
+
+### M1 — Git push sync (25% weight, milestone 0%)
+
+- [ ] **M1.1** Define commit snapshot payload spec
+- [ ] **M1.2** Implement `sync_push.py` (stdlib, same contract as `sync_session.py`)
+- [ ] **M1.3** Git hook template + skill install docs (`citadel-proactive-ingest`)
+- [ ] **M1.4** Verify ingest routes to `seat:{slug}` via token (no `dataset` field)
+- [ ] **M1.5** Fail-silent, HTTPS-only, size cap; hook never blocks push
+- [ ] **M1.6** Unit tests + E2E (push → search Node finds marker)
+
+### M2 — Session hook coverage (10% weight, milestone 30%)
+
+- [x] **M2.1** Claude Code `SessionEnd` → `sync_session.py` (PR #4)
+- [ ] **M2.2** Document git push as universal path in skill + `citadel-autosync.md`
+- [ ] **M2.3** Cursor exit-hook research + template (if API exists)
+- [ ] **M2.4** Codex exit-hook research + template (if API exists)
+- [ ] **M2.5** Single install story: one skill, git hook + session hook
+
+### M3 — Linear backend sync (20% weight, milestone 0%)
+
+- [ ] **M3.1** ADR/plan: Central + Seat-Scoped Mirror routing (read-only)
+- [ ] **M3.2** `kb/linear_sync.py` — fetch issues/projects via Linear API
+- [ ] **M3.3** Config: `CITADEL_LINEAR_API_KEY` (+ optional team filter)
+- [ ] **M3.4** Ingest org-wide digest → `masumi-network` (Central)
+- [ ] **M3.5** Mirror assignee issues → `seat:{slug}` per seat
+- [ ] **M3.6** Seat ↔ Linear user mapping (email or admin config)
+- [ ] **M3.7** Run mode / admin endpoint / cron (`CITADEL_RUN_MODE=linear-sync`)
+- [ ] **M3.8** Tests (`tests/test_linear_sync.py`)
+
+**Blocked on:** operator provides Linear API key + workspace ID.
+
+### M4 — Linear MCP + skills (10% weight, milestone 0%)
+
+- [ ] **M4.1** MCP tool: `citadel_linear_my_issues` (seat-scoped, Node mirror)
+- [ ] **M4.2** MCP tool: org issue search (Central, reader+)
+- [ ] **M4.3** Audit + scope enforcement
+- [ ] **M4.4** Update `citadel-vault` / connector skills
+- [ ] **M4.5** Document stale-cache / optional on-demand refresh
+
+### M5 — Graph UI Phase 2 (15% weight, milestone 0%)
+
+- [ ] **M5.1** Scope filter: My Node / Central / Both
+- [ ] **M5.2** Local graph + depth slider (1–3 hops)
+- [ ] **M5.3** Explicit Central ↔ `seat:` vault spokes
+- [ ] **M5.4** Activity vs Knowledge mode parity for filters
+- [ ] **M5.5** Browser QA (Fit, Pause, mode switch, mobile)
+
+### M6 — QA, merge, deploy (5% weight, milestone 0%)
+
+- [ ] **M6.1** All milestone PRs merged to `main`
+- [ ] **M6.2** Full pytest suite green (328+)
+- [ ] **M6.3** Production: re-cognify if needed; Linear key configured
+- [ ] **M6.4** Mark Phase 2 shipped in `docs/progress.md` + README
+- [ ] **M6.5** Teammate rollout one-pager (token + skill + git hook)
+
+### Final verification gate
+
+- [ ] Git push → note in seat **Node** without manual ingest
+- [ ] SessionEnd → distill in **Node** (existing)
+- [ ] Linear sync → issues in **Central**; assignee mirror in **Node**
+- [ ] MCP "what do I need to do?" → tasks from **Node** mirror
+- [ ] Graph scope filter + local depth work
+- [ ] All sync failures fail-silent
+
+---
+
+## Done (2026-06-25 session)
+
+- Phase 2 design session: autonomous sync model, Linear routing, execution plan.
+- Glossary: **Seat-Scoped Mirror** added to `CONTEXT.md`.
+- Plan doc: `docs/phase-2-shipping-plan.md`; sequential todos in this file.
+- Graph Phase 1 committed on `feat/graph-logseq` (`a2770e0`).
+
 ## Done (2026-06-24 session)
 
 - Fixed broken production ingest: the invalid `LLM_MODEL=openrouter/free` (every
@@ -256,24 +342,20 @@
   Citadel Archive is public. Large blobs should move to object storage if the
   mirror approaches GitHub repository limits.
 
-## Next
+## Backlog (after Phase 2 ships)
 
 - Create the Railway `backup-mirror` cron service after deciding whether the
   first scheduled runs should stay dry-run or write local manifests.
-- Verify admin key unlocks UI.
-- Verify `/api/github-sync` in the hosted UI.
-- Continue testing real Cognee vector/graph search. Current live company MCP
-  search returns results through the GitHub sync state fallback for
-  `masumi-network`.
-- Test hosted feedback with a real Cognee QA ID.
-- Test self-upgrade.
-- Issue fresh per-teammate/per-agent tokens for rollout; use reader by default
-  and writer/admin only when those roles are needed.
-- Create the Railway `backup-mirror` cron service using
-  `CITADEL_RUN_MODE=backup-mirror` and a mounted `/data` volume.
-- Configure a dedicated `CITADEL_BACKUP_MIRROR_TOKEN`, enable
-  `CITADEL_BACKUP_MIRROR_PUSH_ENABLED=true`, and verify the first private mirror
-  commit only contains manifest JSON.
+- Multi-dataset search (own node + Central in one query).
+- Tag routing for node vs Central lanes.
+- Verify admin key unlocks UI; test hosted feedback with real Cognee QA ID.
+- Issue fresh per-teammate/per-agent tokens for rollout.
+
+## Next
+
+Execute Phase 2 sequentially — start with **M0.4** (merge graph Phase 1 PR).
+See [`docs/phase-2-shipping-plan.md`](docs/phase-2-shipping-plan.md) and the
+Phase 2 execution section at the top of this file.
 
 ## Next: Team Access
 

@@ -21,6 +21,12 @@ environment.
 
 ## What auto-syncs, and when
 
+- **Session close (Claude Code):** once on every `SessionEnd` — see below.
+- **Git push (planned, Phase 2 M1):** commit snapshot on every push — universal
+  across Cursor, Codex, and Claude. See [`docs/phase-2-shipping-plan.md`](../phase-2-shipping-plan.md).
+
+### Session close (today)
+
 - **When:** once, on every Claude Code `SessionEnd` (session close).
 - **What:** a short distilled note — a 1-2 line recap, key decisions, files
   changed, notable facts. **Not** the raw transcript.
