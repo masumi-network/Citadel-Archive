@@ -1,6 +1,15 @@
 # Citadel Progress
 
-Last updated: 2026-06-24.
+Last updated: 2026-06-25.
+
+## 2026-06-25
+
+- **Knowledge-graph redesign — Phase 1 complete** (`feat/graph-logseq`). Replaced
+  the hand-rolled Three.js 3D scene with a vendored 2D `force-graph` (Logseq-style):
+  Central pinned at the centre, seat vaults tiered by size, hover neighbour dimming,
+  click-to-inspect, labels-on-zoom, Fit/Pause controls, and Activity ↔ Knowledge
+  graph toggle. Removed dead 3D layout code; timeline graph focus works in both modes.
+  Phase 2 (explicit Central↔vault spokes, depth/scope controls) deferred.
 
 ## 2026-06-24
 
@@ -46,12 +55,8 @@ SaaS onboarding + autonomous sync, and started the knowledge-graph redesign.
   refuses redirects, fail-silent. Plus a proactive-ingest skill + dev onboarding docs.
   Zero per-session steps; the only one-time step is exporting the token (the wizard
   delivers it). Teammates are headless (token + MCP + skill, no dashboard login).
-- **Knowledge-graph redesign — Phase 1 in progress** (`feat/graph-logseq`). Replacing
-  the hand-rolled Three.js 3D concentric-ring scene with a vendored 2D `force-graph`
-  (Logseq-style): shared Central pinned at the center as the hub, seat vaults clustered
-  around it, knowledge nodes nesting off each, with hover-highlight, click-to-inspect,
-  and labels-on-zoom. Operator/admin-facing. Phase 2 will add explicit Central<->vault
-  spokes, local/global + depth, and a personal/shared scope filter.
+- **Knowledge-graph redesign — Phase 1 started** (`feat/graph-logseq`). See
+  2026-06-25 entry for completion.
 - **Backprop:** `test_github_sync_returns_open_and_merged_pull_requests` hardcoded
   absolute PR dates that aged out of the reporting window; made it time-relative.
 - Tests: 312 -> 328 passing across the session; every adversarial-review finding fixed.

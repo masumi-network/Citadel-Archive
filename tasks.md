@@ -15,8 +15,9 @@
   `docs/onboarding/citadel-autosync.md`. Teammates are headless (token + MCP +
   skill, no dashboard login).
 - Backprop-fixed the time-dependent `test_github_sync` PR-window test.
-- Started the knowledge-graph redesign (`feat/graph-logseq`, Phase 1): vendored 2D
-  `force-graph` replacing the Three.js scene, shared Central pinned as the center hub.
+- Completed knowledge-graph redesign Phase 1 (`feat/graph-logseq`): vendored 2D
+  `force-graph` replacing the Three.js scene, shared Central pinned as the center hub,
+  hover/click/labels, Activity + Knowledge graph modes.
 - Tests 312 -> 328. See `docs/progress.md` (2026-06-24) for detail.
 
 ## Done

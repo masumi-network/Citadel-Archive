@@ -187,13 +187,12 @@
                   </button>
                 </div>
                 <div class="canvas-wrap">
-                  <canvas
+                  <div
                     id="graphCanvas"
-                    width="1200"
-                    height="800"
                     tabindex="0"
+                    role="img"
                     aria-label="Live knowledge graph visualization"
-                  ></canvas>
+                  ></div>
                   <div id="canvasEmpty" class="canvas-empty" hidden>
                     <h3>No graph notes yet</h3>
                     <p>Ingest a memory or run source sync to create the first linked nodes.</p>
@@ -1296,6 +1295,7 @@ args = [
 
     <div id="toastStack" class="toast-stack" role="status" aria-live="polite"></div>
 
-    <script src="/static/app.js" type="module"></script>
+    <script src="/static/vendor/force-graph.min.js"></script>
+    <script src="/static/app.js"></script>
   </body>
 </html>

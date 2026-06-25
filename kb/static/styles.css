@@ -704,7 +704,8 @@ pre {
 }
 
 #graphCanvas {
-  position: relative;
+  position: absolute;
+  inset: 0;
   z-index: 1;
   display: block;
   width: 100%;
@@ -714,8 +715,8 @@ pre {
   touch-action: none;
 }
 
-#graphCanvas.dragging {
-  cursor: grabbing;
+#graphCanvas canvas {
+  display: block;
 }
 
 #graphCanvas.is-paused {
