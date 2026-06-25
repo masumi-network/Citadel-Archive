@@ -16,7 +16,7 @@ def test_list_skills() -> None:
     payload = response.json()
     assert payload["ok"] is True
     slugs = {item["slug"] for item in payload["skills"]}
-    assert slugs == {"boundary", "connect", "vault"}
+    assert slugs == {"boundary", "connect", "proactive-ingest", "vault"}
     connect = next(item for item in payload["skills"] if item["slug"] == "connect")
     assert connect["url"] == "https://citadel.example/skills/connect"
     assert "mcp" in connect["aliases"]
@@ -180,8 +180,8 @@ def test_refresh_skill_catalog_tracks_changes(tmp_path) -> None:
 
     first = refresh_skill_catalog(state)
     assert first["ok"] is True
-    assert first["skills"] == 3
-    assert first["added"] == ["boundary", "connect", "vault"]
+    assert first["skills"] == 4
+    assert first["added"] == ["boundary", "connect", "proactive-ingest", "vault"]
     assert first["changed"] == []
     assert first["removed"] == []
 
@@ -207,4 +207,4 @@ def test_refresh_skill_catalog_recovers_from_corrupt_state(tmp_path) -> None:
     result = refresh_skill_catalog(state)
 
     assert result["ok"] is True
-    assert result["added"] == ["boundary", "connect", "vault"]
+    assert result["added"] == ["boundary", "connect", "proactive-ingest", "vault"]

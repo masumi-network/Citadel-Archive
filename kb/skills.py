@@ -15,6 +15,7 @@ SKILL_FILES: dict[str, Path] = {
     "connect": REPO_ROOT / "skills/citadel-mcp-connector/SKILL.md",
     "vault": REPO_ROOT / "skills/citadel-vault/SKILL.md",
     "boundary": REPO_ROOT / "skills/citadel-data-boundary/SKILL.md",
+    "proactive-ingest": REPO_ROOT / "skills/citadel-proactive-ingest/SKILL.md",
 }
 
 SKILL_ALIASES: dict[str, str] = {
@@ -26,6 +27,8 @@ SKILL_ALIASES: dict[str, str] = {
     "privacy": "boundary",
     "public-private": "boundary",
     "citadel-data-boundary": "boundary",
+    "autosync": "proactive-ingest",
+    "citadel-proactive-ingest": "proactive-ingest",
 }
 
 
@@ -79,6 +82,7 @@ _SKILL_DESCRIPTIONS: dict[str, str] = {
     "connect": "Set up Citadel MCP in Claude Code, Codex, Cursor, or any MCP agent.",
     "vault": "Search, ingest, and use the Organization Vault after MCP is connected.",
     "boundary": "Public vs private data boundaries for Citadel code, vault, and tokens.",
+    "proactive-ingest": "Autonomous Node sync — git push + Claude SessionEnd hooks to your personal seat.",
 }
 
 
