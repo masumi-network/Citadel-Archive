@@ -1,5 +1,111 @@
 # Citadel Tasks
 
+## Phase 2 execution — sequential (~18% overall)
+
+**Plan:** [`docs/phase-2-shipping-plan.md`](docs/phase-2-shipping-plan.md)
+
+Execute in order. Check off as each checkpoint ships. Update progress % in the plan doc.
+
+### M0 — Graph Phase 1 (15% weight, milestone 100%, pending merge)
+
+- [x] Vendored `force-graph`; removed Three.js
+- [x] Central hub, seat tiers, hover/click, labels-on-zoom
+- [x] Activity ↔ Knowledge graph toggle
+- [x] Edge-case fixes + docs + commit (`a2770e0`)
+- [ ] **M0.4** Open PR, review, merge `feat/graph-logseq` → `main`, deploy
+
+### M1 — Git push sync (25% weight, milestone 0%)
+
+- [ ] **M1.1** Define commit snapshot payload spec
+- [ ] **M1.2** Implement `sync_push.py` (stdlib, same contract as `sync_session.py`)
+- [ ] **M1.3** Git hook template + skill install docs (`citadel-proactive-ingest`)
+- [ ] **M1.4** Verify ingest routes to `seat:{slug}` via token (no `dataset` field)
+- [ ] **M1.5** Fail-silent, HTTPS-only, size cap; hook never blocks push
+- [ ] **M1.6** Unit tests + E2E (push → search Node finds marker)
+
+### M2 — Session hook coverage (10% weight, milestone 30%)
+
+- [x] **M2.1** Claude Code `SessionEnd` → `sync_session.py` (PR #4)
+- [ ] **M2.2** Document git push as universal path in skill + `citadel-autosync.md`
+- [ ] **M2.3** Cursor exit-hook research + template (if API exists)
+- [ ] **M2.4** Codex exit-hook research + template (if API exists)
+- [ ] **M2.5** Single install story: one skill, git hook + session hook
+
+### M3 — Linear backend sync (20% weight, milestone 0%)
+
+- [ ] **M3.1** ADR/plan: Central + Seat-Scoped Mirror routing (read-only)
+- [ ] **M3.2** `kb/linear_sync.py` — fetch issues/projects via Linear API
+- [ ] **M3.3** Config: `CITADEL_LINEAR_API_KEY` (+ optional team filter)
+- [ ] **M3.4** Ingest org-wide digest → `masumi-network` (Central)
+- [ ] **M3.5** Mirror assignee issues → `seat:{slug}` per seat
+- [ ] **M3.6** Seat ↔ Linear user mapping (email or admin config)
+- [ ] **M3.7** Run mode / admin endpoint / cron (`CITADEL_RUN_MODE=linear-sync`)
+- [ ] **M3.8** Tests (`tests/test_linear_sync.py`)
+
+**Blocked on:** operator provides Linear API key + workspace ID.
+
+### M4 — Linear MCP + skills (10% weight, milestone 0%)
+
+- [ ] **M4.1** MCP tool: `citadel_linear_my_issues` (seat-scoped, Node mirror)
+- [ ] **M4.2** MCP tool: org issue search (Central, reader+)
+- [ ] **M4.3** Audit + scope enforcement
+- [ ] **M4.4** Update `citadel-vault` / connector skills
+- [ ] **M4.5** Document stale-cache / optional on-demand refresh
+
+### M5 — Graph UI Phase 2 (15% weight, milestone 0%)
+
+- [ ] **M5.1** Scope filter: My Node / Central / Both
+- [ ] **M5.2** Local graph + depth slider (1–3 hops)
+- [ ] **M5.3** Explicit Central ↔ `seat:` vault spokes
+- [ ] **M5.4** Activity vs Knowledge mode parity for filters
+- [ ] **M5.5** Browser QA (Fit, Pause, mode switch, mobile)
+
+### M6 — QA, merge, deploy (5% weight, milestone 0%)
+
+- [ ] **M6.1** All milestone PRs merged to `main`
+- [ ] **M6.2** Full pytest suite green (328+)
+- [ ] **M6.3** Production: re-cognify if needed; Linear key configured
+- [ ] **M6.4** Mark Phase 2 shipped in `docs/progress.md` + README
+- [ ] **M6.5** Teammate rollout one-pager (token + skill + git hook)
+
+### Final verification gate
+
+- [ ] Git push → note in seat **Node** without manual ingest
+- [ ] SessionEnd → distill in **Node** (existing)
+- [ ] Linear sync → issues in **Central**; assignee mirror in **Node**
+- [ ] MCP "what do I need to do?" → tasks from **Node** mirror
+- [ ] Graph scope filter + local depth work
+- [ ] All sync failures fail-silent
+
+---
+
+## Done (2026-06-25 session)
+
+- Phase 2 design session: autonomous sync model, Linear routing, execution plan.
+- Glossary: **Seat-Scoped Mirror** added to `CONTEXT.md`.
+- Plan doc: `docs/phase-2-shipping-plan.md`; sequential todos in this file.
+- Graph Phase 1 committed on `feat/graph-logseq` (`a2770e0`).
+
+## Done (2026-06-24 session)
+
+- Fixed broken production ingest: the invalid `LLM_MODEL=openrouter/free` (every
+  cognify call failed) -> `openrouter/openai/gpt-4o-mini`. Verified end-to-end.
+- Upgraded cognee 1.1.2 -> 1.2.1 (PR #2), deployed + verified.
+- Added re-cognify / verify recovery tooling: `POST /api/cognify/run`,
+  `citadel cognify [--verify]`, `CITADEL_RUN_MODE=cognify` / `cognify-verify` (PR #2).
+- Fixed the GitHub-Sync cron 502 (internal domain + `*_TIMEOUT_SECONDS=2400`).
+- Shipped per-seat onboarding (PR #3): connect wizard, self-describing seat
+  (`resolved_memory_scope` + tool docstrings), admin `GET /api/access/seats`.
+- Shipped autonomous personal-KB sync (PR #4): `citadel-proactive-ingest` skill +
+  a project-committed Claude Code `SessionEnd` hook (`sync_session.py`) +
+  `docs/onboarding/citadel-autosync.md`. Teammates are headless (token + MCP +
+  skill, no dashboard login).
+- Backprop-fixed the time-dependent `test_github_sync` PR-window test.
+- Completed knowledge-graph redesign Phase 1 (`feat/graph-logseq`): vendored 2D
+  `force-graph` replacing the Three.js scene, shared Central pinned as the center hub,
+  hover/click/labels, Activity + Knowledge graph modes.
+- Tests 312 -> 328. See `docs/progress.md` (2026-06-24) for detail.
+
 ## Done
 
 - Repo reset from Cognee fork -> clean Citadel wrapper.
@@ -175,36 +281,38 @@
 
 ## Current Railway State
 
-- Web service is live:
-  - `https://citadel-archive-production.up.railway.app/healthz`
-  - `https://citadel-archive-production.up.railway.app/`
-- Web service auto-deploys `main`; health was verified after the progress
-  documentation rollout.
-- Cron service `Citadel-GitHub-Sync` has schedule `0 3 * * *` and the
-  2026-06-03 scheduled run completed with ingestion accepted.
-- Production web is deployed at commit `3c70e92` and serves the hosted MCP,
-  discovery, skill hashing, audit, and backup-mirror API changes.
-- OpenRouter is configured through `OPENROUTER_API_KEY` and
-  `LLM_MODEL=openrouter/free` on both Railway services.
+- Web service `Citadel-Archive` is live and auto-deploys `main`:
+  - `https://citadel-archive-production.up.railway.app/healthz` (200)
+  - `https://citadel-archive-production.up.railway.app/` and `/mcp/`
+- Running **cognee 1.2.1** (upgraded + deployed + verified 2026-06-24).
+- `LLM_MODEL=openrouter/openai/gpt-4o-mini` on the web service (was the invalid
+  `openrouter/free`, which had silently broken all cognify; fixed 2026-06-24).
+  `EMBEDDING_PROVIDER=fastembed`, `VECTOR_DB_PROVIDER=pgvector`,
+  `GRAPH_DATABASE_PROVIDER=kuzu`, `CITADEL_SEARCH_DEFAULT_DATASET=masumi-network`.
+- Cron `Citadel-GitHub-Sync` (schedule `0 3 * * *`): now targets the internal
+  domain `http://citadel-archive.railway.internal:8080` with
+  `CITADEL_GITHUB_SYNC_TIMEOUT_SECONDS=2400` to avoid the public-proxy 5-min 502 on
+  the ~26-min sync (fixed 2026-06-24). Its own stale `LLM_MODEL=openrouter/free` is
+  moot in this mode (cognify runs in the web service).
+- Postgres healthy; pgvector working (ingest -> cognify -> search verified
+  end-to-end 2026-06-24).
 
 ## Needed From User
 
-- OpenRouter model/key config is done:
-  - `OPENROUTER_API_KEY` is set on `Citadel-Archive`.
-  - `Citadel-GitHub-Sync` references the same key.
-  - Citadel maps `OPENROUTER_API_KEY` to Cognee's expected `LLM_API_KEY`
-    at runtime.
-  - `LLM_PROVIDER=custom`
-  - `LLM_ENDPOINT=https://openrouter.ai/api/v1`
-  - `LLM_MODEL=openrouter/free`
-- Enable pgvector in Railway Postgres.
-  - Run in DB console/psql:
-
-```sql
-CREATE EXTENSION IF NOT EXISTS vector;
-```
-
-- Optional: rotate `CITADEL_ADMIN_KEY` after first login test.
+- **Operational rollout of autonomous sync** (not code): provision a seat per dev
+  via the connect wizard, then each dev exports their `CITADEL_MCP_ACCESS_TOKEN` and
+  copies `skills/citadel-proactive-ingest/templates/claude-settings.json` into their
+  org repos' `.claude/settings.json`. See `docs/onboarding/citadel-autosync.md`.
+- **Rotate `CITADEL_ADMIN_KEY`** — it was used over the wire during the 2026-06-24
+  debugging; rotate it (and consider rotating the GitHub PAT + OpenRouter key, which
+  live in plaintext Railway env).
+- OpenRouter model/key config (done):
+  - `OPENROUTER_API_KEY` set on `Citadel-Archive`; `Citadel-GitHub-Sync` references
+    the same key; Citadel maps it to Cognee's `LLM_API_KEY` at runtime.
+  - `LLM_PROVIDER=custom`, `LLM_ENDPOINT=https://openrouter.ai/api/v1`,
+    `LLM_MODEL=openrouter/openai/gpt-4o-mini` (web service).
+- pgvector: working (cognify + search verified end-to-end). The earlier
+  `CREATE EXTENSION IF NOT EXISTS vector` step is no longer outstanding.
 
 ## Research-Backed Direction
 
@@ -234,24 +342,20 @@ CREATE EXTENSION IF NOT EXISTS vector;
   Citadel Archive is public. Large blobs should move to object storage if the
   mirror approaches GitHub repository limits.
 
-## Next
+## Backlog (after Phase 2 ships)
 
 - Create the Railway `backup-mirror` cron service after deciding whether the
   first scheduled runs should stay dry-run or write local manifests.
-- Verify admin key unlocks UI.
-- Verify `/api/github-sync` in the hosted UI.
-- Continue testing real Cognee vector/graph search. Current live company MCP
-  search returns results through the GitHub sync state fallback for
-  `masumi-network`.
-- Test hosted feedback with a real Cognee QA ID.
-- Test self-upgrade.
-- Issue fresh per-teammate/per-agent tokens for rollout; use reader by default
-  and writer/admin only when those roles are needed.
-- Create the Railway `backup-mirror` cron service using
-  `CITADEL_RUN_MODE=backup-mirror` and a mounted `/data` volume.
-- Configure a dedicated `CITADEL_BACKUP_MIRROR_TOKEN`, enable
-  `CITADEL_BACKUP_MIRROR_PUSH_ENABLED=true`, and verify the first private mirror
-  commit only contains manifest JSON.
+- Multi-dataset search (own node + Central in one query).
+- Tag routing for node vs Central lanes.
+- Verify admin key unlocks UI; test hosted feedback with real Cognee QA ID.
+- Issue fresh per-teammate/per-agent tokens for rollout.
+
+## Next
+
+Execute Phase 2 sequentially — start with **M0.4** (merge graph Phase 1 PR).
+See [`docs/phase-2-shipping-plan.md`](docs/phase-2-shipping-plan.md) and the
+Phase 2 execution section at the top of this file.
 
 ## Next: Team Access
 

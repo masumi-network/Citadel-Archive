@@ -23,6 +23,11 @@ decisions live in [`docs/adr/`](docs/adr/) — including
 Current refactor candidates live in
 [`docs/architecture-deepening-opportunities.md`](docs/architecture-deepening-opportunities.md).
 
+**Current execution plan (~18%):** [`docs/phase-2-shipping-plan.md`](docs/phase-2-shipping-plan.md)
+with sequential checkboxes in [`tasks.md`](tasks.md). Ship order: merge graph
+Phase 1 → git push sync → Linear (Central + Seat-Scoped Mirror) → Linear MCP →
+graph UI Phase 2 → deploy.
+
 ## Repository layout
 
 | Repo | URL | Role |
@@ -259,8 +264,9 @@ Core API endpoints:
 The hosted UI is served by the same FastAPI process. It includes:
 
 - A live knowledge mesh canvas backed by `/api/mesh`.
-- A stable Three.js 3D mesh view with deterministic node placement, restrained
-  orbit controls, zoom limits, and desktop/mobile canvas coverage checks.
+- A Logseq-style 2D force-directed graph (vendored `force-graph`) with Central
+  pinned as the hub, seat-tier sizing, hover highlight, click-to-inspect, and
+  labels-on-zoom for both Activity and Knowledge graph modes.
 - An OS-style dashboard shell with system chrome, runtime metrics, source
   status, page navigation, access controls, and a persistent status bar.
 - Server-Sent Events at `/events` for real-time ingest, search, feedback, and

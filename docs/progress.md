@@ -1,6 +1,76 @@
 # Citadel Progress
 
-Last updated: 2026-06-17.
+Last updated: 2026-06-25.
+
+## 2026-06-25
+
+- **Knowledge-graph redesign — Phase 1 complete** (`feat/graph-logseq`, commit `a2770e0`).
+  Replaced the Three.js 3D scene with a vendored 2D `force-graph` (Logseq-style):
+  Central pinned at the centre, seat vaults tiered by size, hover neighbour dimming,
+  click-to-inspect, labels-on-zoom, Fit/Pause controls, and Activity ↔ Knowledge
+  graph toggle. Removed dead 3D layout code; timeline graph focus works in both modes.
+  Pending: merge PR to `main` (M0.4).
+- **Phase 2 design session — autonomous sync + graph.** Locked the execution plan
+  in [`docs/phase-2-shipping-plan.md`](phase-2-shipping-plan.md) (~18% overall):
+  - **Autonomous Node Sync** — background, fail-silent, zero extra dev steps.
+  - **Git push** — universal commit snapshot → seat **Node** (Cursor, Codex, Claude).
+  - **Session hooks** — supplementary (`SessionEnd` for Claude Code already shipped).
+  - **Linear** — full workspace → **Central**; assignee issues **Seat-Scoped Mirror**
+    → each seat's **Node** (John's tasks in his Node for "what do I need to do?").
+  - **Graph UI Phase 2** — scope filter, local depth, Central↔vault spokes (after Nodes
+    have content from sync).
+  - Glossary updated: **Seat-Scoped Mirror** in `CONTEXT.md`.
+  - Ship order: M0 merge → M1 git push → M3 Linear → M4 Linear MCP → M5 graph → M6 deploy.
+
+## 2026-06-24
+
+Major session: fixed broken ingest, upgraded the engine, shipped the per-seat
+SaaS onboarding + autonomous sync, and started the knowledge-graph redesign.
+
+- **Ingest was broken in production — root-caused and fixed.** `cognee.add`
+  stored items but `cognee.cognify` failed on every one (empty knowledge graph,
+  searches returned nothing). Cause: the Railway env var `LLM_MODEL=openrouter/free`
+  is not a valid model id, so every litellm call during cognify returned
+  `OpenrouterException - Invalid URL`. Fixed by setting
+  `LLM_MODEL=openrouter/openai/gpt-4o-mini` on the web service (config only).
+  Verified end-to-end: a marker note ingests (`cognee_result.status=completed`,
+  `error=null`) and is found by search.
+- **cognee 1.1.2 -> 1.2.1** (PR #2). Clean lock re-resolution; the `cognee_client`
+  call surface is version-defensive and the breaking env renames in the window are
+  unused by Citadel. Deployed and verified live (clean boot, no Kuzu/auth-flip
+  errors, data survived the upgrade).
+- **Re-cognify / verify recovery tooling** (PR #2). New admin `POST /api/cognify/run`,
+  CLI `citadel cognify [--verify]`, and `CITADEL_RUN_MODE=cognify` / `cognify-verify`
+  run-modes that re-cognify already-added-but-uncognified data and (in verify mode)
+  ingest + cognify + search a marker as an end-to-end health check. An adversarial
+  review caught a bug where verify skipped the recovery cognify; fixed so verify is
+  a superset.
+- **GitHub-Sync cron 502 fixed** (env only). The daily cron invoked a ~26-min sync
+  as one synchronous HTTP call to the public domain (proxy kills idle connections at
+  ~5 min). Pointed it at the internal domain `http://citadel-archive.railway.internal:8080`
+  with `CITADEL_GITHUB_SYNC_TIMEOUT_SECONDS=2400`; cognify runs in the fixed web
+  service. Heals the items stranded during the broken era on its next run.
+- **Per-seat onboarding** (PR #3), on the existing seat/node/Central engine:
+  - **Connect wizard** — Create Seat renders a ready-to-paste `.mcp.json` (Claude
+    Code + Codex) with the seat's scoped writer token + origin-derived `/mcp/` URL +
+    copy buttons + a personal-vs-shared explainer.
+  - **Self-describing seat** — `resolved_memory_scope` surfaces the caller's own
+    `seat_slug` + node label (out through `/api/session` + `citadel_session`);
+    `citadel_ingest`/`search`/`contribute` docstrings state personal-by-default,
+    tag-to-share.
+  - **Seat inventory** — admin `GET /api/access/seats` + per-seat revoke in the UI.
+- **Autonomous personal-KB sync** (PR #4). A project-committed Claude Code `SessionEnd`
+  hook (`skills/citadel-proactive-ingest/`) runs a stdlib-only `sync_session.py` that
+  distills a dev's session and POSTs it to their private seat node — reusing the one
+  `CITADEL_MCP_ACCESS_TOKEN` they already set for MCP, personal-by-default, HTTPS-only,
+  refuses redirects, fail-silent. Plus a proactive-ingest skill + dev onboarding docs.
+  Zero per-session steps; the only one-time step is exporting the token (the wizard
+  delivers it). Teammates are headless (token + MCP + skill, no dashboard login).
+- **Knowledge-graph redesign — Phase 1 started** (`feat/graph-logseq`). See
+  2026-06-25 entry for completion.
+- **Backprop:** `test_github_sync_returns_open_and_merged_pull_requests` hardcoded
+  absolute PR dates that aged out of the reporting window; made it time-relative.
+- Tests: 312 -> 328 passing across the session; every adversarial-review finding fixed.
 
 ## 2026-06-17
 

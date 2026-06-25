@@ -191,8 +191,9 @@ outcomes.
 | Phase | Access deliverables |
 |---|---|
 | **1** (done, uncommitted) | Token `default_dataset`, `default_session`, `allowed_datasets`; role model |
-| **2** (planned) | Admin seat UI, multi-dataset search, tag routing for node vs Central |
-| **3** (planned) | Linear read-only sync → Central; assignee copies → seat node |
+| **2** (in progress, ~18%) | Autonomous sync (git push + session hooks), Linear → Central + Seat-Scoped Mirror, graph UI Phase 2, Linear MCP. Plan: `docs/phase-2-shipping-plan.md` |
+| **2b** (deferred) | Multi-dataset search, tag routing for node vs Central |
+| **3** (merged into Phase 2) | Linear read-only sync — see Phase 2 shipping plan |
 | **4** (planned) | External activity notifications; optional hard isolation |
 
 Future scopes:
