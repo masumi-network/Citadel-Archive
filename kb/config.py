@@ -36,6 +36,15 @@ def _int(value: str | None, *, default: int) -> int:
         return default
 
 
+def _float(value: str | None, *, default: float) -> float:
+    if value is None:
+        return default
+    try:
+        return float(value)
+    except ValueError:
+        return default
+
+
 def _state_root() -> str:
     return (
         os.getenv("CITADEL_STATE_DIRECTORY")
@@ -167,6 +176,9 @@ class CitadelConfig:
     github_sync_security_block_severity: str = "high"
     content_scan_enabled: bool = True
     content_scan_block_severity: str = "high"
+    promotion_enabled: bool = False
+    promotion_relevance_threshold: float = 0.7
+    promotion_max_items: int = 20
     github_token: str | None = None
     repo_content_sync_enabled: bool = True
     repo_content_sync_dataset: str = "masumi-network"
@@ -295,6 +307,18 @@ class CitadelConfig:
             content_scan_block_severity=os.getenv(
                 "CITADEL_CONTENT_SCAN_BLOCK_SEVERITY",
                 "high",
+            ),
+            promotion_enabled=_bool(
+                os.getenv("CITADEL_PROMOTION_ENABLED"),
+                default=False,
+            ),
+            promotion_relevance_threshold=_float(
+                os.getenv("CITADEL_PROMOTION_RELEVANCE_THRESHOLD"),
+                default=0.7,
+            ),
+            promotion_max_items=_int(
+                os.getenv("CITADEL_PROMOTION_MAX_ITEMS"),
+                default=20,
             ),
             github_token=os.getenv("CITADEL_GITHUB_TOKEN") or os.getenv("GITHUB_TOKEN") or None,
             repo_content_sync_enabled=_bool(
