@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import json
+from pathlib import Path
+
 from kb.config import CitadelConfig
 from kb.mesh import MeshState
 from kb.models import FeedbackResult, IngestResult
@@ -152,6 +155,121 @@ async def test_snapshot_always_includes_central_dataset_node() -> None:
         edge["source"] == central_id and edge["target"] == "index:graph"
         for edge in snapshot["edges"]
     )
+
+
+async def test_rehydrate_seeds_graph_and_timestamp_not_counters() -> None:
+    mesh = MeshState()
+
+    await mesh.rehydrate(
+        CONFIG,
+        sources=[
+            {
+                "type": "github",
+                "label": "GitHub / acme",
+                "dataset": "notes",
+                "documents": 4,
+                "last_indexed_at": "2026-06-20T00:00:00Z",
+                "repos": ["acme/one", "acme/two"],
+            },
+            {
+                "type": "linear",
+                "label": "Linear",
+                "dataset": "notes",
+                "documents": 6,
+                "last_indexed_at": "2026-06-25T00:00:00Z",
+                "repos": [],
+            },
+        ],
+    )
+    snapshot = await mesh.snapshot(CONFIG)
+
+    # Counters are NOT seeded (that would double-count the github/repo data the
+    # next live sync re-ingests); the graph projection + last_indexed_at carry it.
+    assert snapshot["stats"]["documents"] == 0
+    assert snapshot["stats"]["indexed_chunks"] == 0
+    assert snapshot["stats"]["last_indexed_at"] == "2026-06-25T00:00:00Z"
+    # Graph projection is non-empty: source + repository nodes survive the "restart".
+    source_nodes = [node for node in snapshot["nodes"] if node["type"] == "source"]
+    repo_nodes = [node for node in snapshot["nodes"] if node["type"] == "repository"]
+    assert len(source_nodes) == 2
+    assert {node["label"] for node in repo_nodes} == {"one", "two"}
+    graph_index = next(index for index in snapshot["indexes"] if index["id"] == "graph")
+    assert graph_index["records"] > 0
+
+
+async def test_rehydrate_baseline_then_live_ingest_does_not_double_count() -> None:
+    mesh = MeshState()
+    baseline = [
+        {
+            "type": "github",
+            "label": "GitHub",
+            "dataset": "notes",
+            "documents": 5,
+            "last_indexed_at": "2026-06-20T00:00:00Z",
+            "repos": [],
+        }
+    ]
+
+    await mesh.rehydrate(CONFIG, sources=baseline)
+    # Second call must be a no-op: the _rehydrated guard prevents baselines stacking.
+    await mesh.rehydrate(CONFIG, sources=baseline)
+    await mesh.record_ingest(
+        CONFIG,
+        IngestResult(True, "accepted", "notes", ("ops",)),
+        data="Runbook: rotate keys",
+        dataset="notes",
+        tags=["ops"],
+    )
+    snapshot = await mesh.snapshot(CONFIG)
+
+    # Counters are not seeded, so a live ingest just adds 1 — the baseline never
+    # double-counts the github/repo data the next live sync will re-ingest.
+    assert snapshot["stats"]["documents"] == 1
+    assert snapshot["stats"]["indexed_chunks"] == 1
+
+
+async def test_rehydrate_reads_state_files_and_tolerates_missing(tmp_path: Path) -> None:
+    github = tmp_path / "github_sync_state.json"
+    github.write_text(
+        json.dumps(
+            {
+                "org": "acme",
+                "last_checked_at": "2026-06-21T00:00:00Z",
+                "repos": {"acme/one": {}, "acme/two": {}},
+            }
+        ),
+        encoding="utf-8",
+    )
+    linear = tmp_path / "linear_sync_state.json"
+    linear.write_text(
+        json.dumps(
+            {
+                "issues": [{"id": 1}, {"id": 2}, {"id": 3}],
+                "last_synced_at": "2026-06-24T00:00:00Z",
+            }
+        ),
+        encoding="utf-8",
+    )
+    config = CitadelConfig(
+        tenant_id="test",
+        default_dataset="notes",
+        github_sync_state_path=str(github),
+        # Repo-content state file is intentionally absent — must be tolerated.
+        repo_content_sync_state_path=str(tmp_path / "missing_repo_state.json"),
+        linear_sync_state_path=str(linear),
+    )
+    mesh = MeshState()
+
+    await mesh.rehydrate(config)
+    snapshot = await mesh.snapshot(config)
+
+    # Counters are not seeded; last_indexed_at + the graph projection carry the
+    # persistent state. Missing repo-content file is tolerated (contributes nothing).
+    assert snapshot["stats"]["documents"] == 0
+    assert snapshot["stats"]["indexed_chunks"] == 0
+    assert snapshot["stats"]["last_indexed_at"] == "2026-06-24T00:00:00Z"
+    source_nodes = [node for node in snapshot["nodes"] if node["type"] == "source"]
+    assert source_nodes  # github + linear sources projected from persistent state
 
 
 async def test_timeline_tracks_chunks_and_resume_filters() -> None:

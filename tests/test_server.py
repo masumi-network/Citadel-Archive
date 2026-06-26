@@ -2397,3 +2397,39 @@ def test_promotion_run_disabled_returns_status_and_audits() -> None:
     events = app.state.access_store.snapshot()["audit_events"]
     runs = [e for e in events if e["action"] == "promotion.run"]
     assert runs and runs[-1]["success"] is True
+
+
+def test_lifespan_rehydrates_mesh_from_source_state(tmp_path: Path) -> None:
+    github = tmp_path / "github_sync_state.json"
+    github.write_text(
+        json.dumps(
+            {
+                "org": "acme",
+                "last_checked_at": "2026-06-22T00:00:00Z",
+                "repos": {"acme/one": {}, "acme/two": {}, "acme/three": {}},
+            }
+        ),
+        encoding="utf-8",
+    )
+    citadel = FakeCitadel()
+    citadel.config = CitadelConfig(
+        tenant_id="test",
+        default_dataset="notes",
+        github_sync_state_path=str(github),
+        repo_content_sync_state_path=str(tmp_path / "absent_repo_state.json"),
+        linear_sync_state_path=str(tmp_path / "absent_linear_state.json"),
+    )
+    app.state.citadel = citadel
+
+    # Entering the TestClient context triggers the lifespan, which builds and seeds
+    # the mesh exactly once before serving requests.
+    with TestClient(app):
+        mesh = app.state.mesh
+
+    assert mesh._rehydrated is True
+    # Counters are not seeded (avoids double-counting live github/repo re-ingests);
+    # last_indexed_at + the source graph projection carry the persistent state.
+    assert mesh.documents == 0
+    assert mesh.indexed_chunks == 0
+    assert mesh.last_indexed_at == "2026-06-22T00:00:00Z"
+    assert any(node["type"] == "source" for node in mesh.nodes.values())
