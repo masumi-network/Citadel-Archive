@@ -26,11 +26,12 @@ pending: Linear read-only key, `linear-sync` cron, Central cognify verify, per-d
 - [x] Phase 2 merged to `main` (`5f6c0ed`+)
 - [x] Cognify **Central** unblocked (`LLM_MODEL` fix 2026-06-24; optional
       `POST /api/cognify/run?force=true` for stale graph store)
-- [ ] **Repopulate the knowledge graph** — `LLM_MODEL` + cognee partitioning
-      fixed (2026-06-26); cognify now builds a graph, but the pre-fix data is
-      stranded in the old partition so `/api/mesh/graph` still reads 0. Re-ingest
-      under the new context: re-run the GitHub sync (`/api/learning-agent/run`
-      force, or `CITADEL_RUN_MODE=github-sync`), then verify `/api/mesh/graph` > 0.
+- [ ] **Full graph repopulation** — fixes verified (2026-06-26):
+      `/api/mesh/graph` now displays (25 nodes) after a partial re-ingest. The
+      complete GitHub re-sync 502s through the public proxy, so run it via the
+      internal cron (`Citadel-GitHub-Sync`, 2400s timeout) or wait for the next
+      scheduled run, then confirm `/api/mesh/graph` climbs toward the full
+      corpus (~214). (Optional cleanup: remove the `COGNIFY_TEST_MARKER` node.)
 - [x] M6.5 teammate one-pager: [`docs/onboarding/teammate-rollout.md`](docs/onboarding/teammate-rollout.md)
 - [ ] Set read-only `CITADEL_LINEAR_API_KEY` (Linear **Read** scope) on Railway web
 - [ ] Create Railway `linear-sync` cron (`CITADEL_RUN_MODE=linear-sync`)
@@ -262,12 +263,12 @@ pending: Linear read-only key, `linear-sync` cron, Central cognify verify, per-d
 - **cognee partitioning disabled:** `ENABLE_BACKEND_ACCESS_CONTROL=false` so the
   org-wide graph read and cognify share one global Kuzu graph (the prior default
   partitioned the built graph into a per-dataset `.pkl` the read never resolved).
-- **Knowledge graph still empty pending re-ingest (verified 2026-06-26):**
-  `/api/mesh/graph` returns `graph_empty`; `/search` works (vector retrieval, 8
-  hits for `masumi`). The 45 GitHub docs were added under the old partition, so a
-  post-fix force cognify builds 0 — the graph needs a **GitHub-sync re-ingest**
-  under the new context, then cognify. No `seat:` nodes exist yet; Linear sync is
-  `enabled:false` (no key).
+- **Knowledge graph display fixed + verified (2026-06-26):** `/api/mesh/graph`
+  returns **25 nodes / 38 edges, `fallback:false`** (was `graph_empty`);
+  `/search` works (vector). 25 nodes is partial (interrupted re-ingest + a verify
+  marker); full repopulation (~214) needs the complete GitHub re-sync via the
+  internal cron (the public proxy 502s on it) or the next scheduled cron run. No
+  `seat:` nodes exist yet; Linear sync is `enabled:false` (no key).
 
 ## Needed From User
 

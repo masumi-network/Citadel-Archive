@@ -69,14 +69,19 @@ not yet *repopulated*. Status below is live-verified — no unverified claims.
   and the read share one global graph — correct for a single-tenant org vault
   (Citadel enforces seat/dataset isolation at its own access layer). Commit
   `171f386`.
-- **Honest current state (live-verified after both fixes):**
-  - `/search` returns results (8 for `masumi`) — **vector retrieval works**.
-  - `/api/mesh/graph` still returns **0 / `graph_empty`**. After the
-    access-control flip, a force cognify built **0 nodes** (`graph_grew:false`,
-    ~9s): the existing data was `add`-ed under the old partition and isn't
-    visible in the new global context. **The knowledge graph is NOT yet
-    populated** — it needs a **data re-ingest** (re-run the GitHub sync) under
-    the new context, then a cognify. This step is still pending.
+- **Graph display — fixed + verified end-to-end.** A re-ingest (force
+  learning-agent run, which 502'd at ~3.5min through the public proxy but added
+  content server-side first) re-added data under the new global context; a
+  force+verify cognify then confirmed it: `/api/mesh/graph` now returns
+  **25 nodes / 38 edges, `fallback:false`** across fresh requests (was
+  `0 / graph_empty`), and a marker round-trips (ingest → cognify → search hit).
+  The dashboard org graph renders. **Partial:** 25 nodes is the interrupted
+  re-ingest + marker, not the full org corpus (~214). Full repopulation needs
+  the complete GitHub re-sync, which 502s through the public proxy, so it must
+  run via the internal cron (`Citadel-GitHub-Sync`, `*_TIMEOUT_SECONDS=2400`)
+  or heal on the next scheduled run. A `COGNIFY_TEST_MARKER` node is present
+  (harmless verify artifact).
+- `/search` returns results (8 for `masumi`) — **vector retrieval works**.
   - deepseek-v4-flash (a reasoning model) shows `InstructorRetryException`
     JSON-validation retries during extraction; it mostly recovers. A/B to
     `openrouter/openai/gpt-4o-mini` is available if extraction needs to be
