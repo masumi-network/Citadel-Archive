@@ -17,6 +17,33 @@ Last updated: 2026-06-26.
   key OK), and agent sync policy (fail-silent; cron owns org sources).
 - Tests **346 passing**.
 
+## 2026-06-26 (continued) — committed, pushed, deployed + live prod audit
+
+- **Committed the local batch in 5 sequential commits** and pushed
+  `b9eccd3..6062e9c` to `main`: `fix(mesh)` always-seed-Central, `feat(ui)`
+  unified org graph + seat-form validation, `fix(linear-sync)` AccessStore in
+  cron mode, `docs:` 2026-06-26 pass, `chore(skills)` skills-lock.json.
+- **Railway redeployed and healthy on the new commit:** web deployment
+  `f7b9d2ad` = `6062e9c` reached `SUCCESS` (prior `b9eccd3` REMOVED);
+  `/healthz` 200.
+- **Live production assessment** (read-only reader-token probe):
+  - **GitHub org sync healthy** — `/api/sources`: 45 documents tracked, 45
+    repos, last sync `2026-06-25T09:00Z`, security scan passed.
+  - **Vector search works** — `/search` returns real `masumi-network` chunks,
+    but the first query after a redeploy takes **>45s** (cold-start model
+    load; earlier attempts returned HTTP 000). A warmup/readiness ping is a
+    follow-up.
+  - **Knowledge graph EMPTY in prod** — `/api/mesh/graph` →
+    `fallback_reason: "graph_empty"`, 0 nodes / 0 edges. Data is `add`-ed
+    (vector index populated) but `cognify` has not built the Kuzu graph: the
+    stranded-data recovery is still outstanding. **Action: run cognify
+    (`POST /api/cognify/run?force=true` or `CITADEL_RUN_MODE=cognify`).**
+  - **No seats provisioned** — mesh shows only Central (`masumi-network`);
+    zero `seat:` nodes. Per-dev seat + token + `install_autosync.sh` pending.
+  - **Linear sync disabled** — `/api/linear-sync` `enabled:false` (no key).
+- Outstanding lint: `ruff` `F401` unused `fnmatchcase`,
+  `kb/repo_content_sync.py:15` (pre-existing).
+
 ## 2026-06-25 (continued)
 
 - **Phase 2 implementation batch** (merged on `main`, `5f6c0ed`+):

@@ -26,6 +26,10 @@ pending: Linear read-only key, `linear-sync` cron, Central cognify verify, per-d
 - [x] Phase 2 merged to `main` (`5f6c0ed`+)
 - [x] Cognify **Central** unblocked (`LLM_MODEL` fix 2026-06-24; optional
       `POST /api/cognify/run?force=true` for stale graph store)
+- [ ] **Run cognify recovery on prod** — graph still empty live (2026-06-26):
+      `/api/mesh/graph` → `graph_empty`, 0 nodes, despite 45 added GitHub docs.
+      Build the Kuzu graph via `POST /api/cognify/run?force=true` (admin) or a
+      one-off `CITADEL_RUN_MODE=cognify` Railway run.
 - [x] M6.5 teammate one-pager: [`docs/onboarding/teammate-rollout.md`](docs/onboarding/teammate-rollout.md)
 - [ ] Set read-only `CITADEL_LINEAR_API_KEY` (Linear **Read** scope) on Railway web
 - [ ] Create Railway `linear-sync` cron (`CITADEL_RUN_MODE=linear-sync`)
@@ -249,9 +253,22 @@ pending: Linear read-only key, `linear-sync` cron, Central cognify verify, per-d
   moot in this mode (cognify runs in the web service).
 - Postgres healthy; pgvector working (ingest -> cognify -> search verified
   end-to-end 2026-06-24).
+- Live deploy is commit `6062e9c` (web deployment `f7b9d2ad`, `SUCCESS`).
+- **Knowledge graph empty in prod (verified 2026-06-26):** `/api/mesh/graph`
+  returns `graph_empty` (0 nodes / 0 edges). The vector index is populated
+  (`/search` returns real chunks; first query after a redeploy is cold-start
+  slow, >45s), but `cognify` has not built the Kuzu graph for the 45 added
+  GitHub docs. Recovery still pending -> run cognify (force). No `seat:` nodes
+  exist yet; Linear sync is `enabled:false` (no key).
 
 ## Needed From User
 
+- **Run the Cognee graph recovery** (confirmed needed 2026-06-26): prod
+  `/api/mesh/graph` is `graph_empty` (0 nodes) despite 45 added GitHub docs, so
+  the knowledge-graph view and graph-backed retrieval are non-functional.
+  Trigger `POST /api/cognify/run?force=true` (admin) or a one-off
+  `CITADEL_RUN_MODE=cognify` Railway run to build the graph. Vector search is
+  unaffected (works today).
 - **Operational rollout of autonomous sync** (not code): provision a seat per dev
   via the connect wizard, then each dev exports `CITADEL_MCP_ACCESS_TOKEN` and runs
   `skills/citadel-proactive-ingest/scripts/install_autosync.sh` per org-repo clone.
