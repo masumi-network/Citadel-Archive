@@ -482,7 +482,7 @@ class MeshState:
             await self._record_event(
                 "error",
                 "Operation failed",
-                {"operation": operation, "error": error[:280]},
+                {"operation": operation, "error": redact_secrets(error[:280])},
             )
 
     def _ensure_base_graph(self, config: CitadelConfig) -> None:

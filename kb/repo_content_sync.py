@@ -12,7 +12,6 @@ import argparse
 import asyncio
 import base64
 from dataclasses import dataclass
-from fnmatch import fnmatchcase
 from hashlib import sha256
 import json
 import logging
