@@ -26,10 +26,11 @@ pending: Linear read-only key, `linear-sync` cron, Central cognify verify, per-d
 - [x] Phase 2 merged to `main` (`5f6c0ed`+)
 - [x] Cognify **Central** unblocked (`LLM_MODEL` fix 2026-06-24; optional
       `POST /api/cognify/run?force=true` for stale graph store)
-- [ ] **Run cognify recovery on prod** — graph still empty live (2026-06-26):
-      `/api/mesh/graph` → `graph_empty`, 0 nodes, despite 45 added GitHub docs.
-      Build the Kuzu graph via `POST /api/cognify/run?force=true` (admin) or a
-      one-off `CITADEL_RUN_MODE=cognify` Railway run.
+- [ ] **Repopulate the knowledge graph** — `LLM_MODEL` + cognee partitioning
+      fixed (2026-06-26); cognify now builds a graph, but the pre-fix data is
+      stranded in the old partition so `/api/mesh/graph` still reads 0. Re-ingest
+      under the new context: re-run the GitHub sync (`/api/learning-agent/run`
+      force, or `CITADEL_RUN_MODE=github-sync`), then verify `/api/mesh/graph` > 0.
 - [x] M6.5 teammate one-pager: [`docs/onboarding/teammate-rollout.md`](docs/onboarding/teammate-rollout.md)
 - [ ] Set read-only `CITADEL_LINEAR_API_KEY` (Linear **Read** scope) on Railway web
 - [ ] Create Railway `linear-sync` cron (`CITADEL_RUN_MODE=linear-sync`)
@@ -253,13 +254,20 @@ pending: Linear read-only key, `linear-sync` cron, Central cognify verify, per-d
   moot in this mode (cognify runs in the web service).
 - Postgres healthy; pgvector working (ingest -> cognify -> search verified
   end-to-end 2026-06-24).
-- Live deploy is commit `6062e9c` (web deployment `f7b9d2ad`, `SUCCESS`).
-- **Knowledge graph empty in prod (verified 2026-06-26):** `/api/mesh/graph`
-  returns `graph_empty` (0 nodes / 0 edges). The vector index is populated
-  (`/search` returns real chunks; first query after a redeploy is cold-start
-  slow, >45s), but `cognify` has not built the Kuzu graph for the 45 added
-  GitHub docs. Recovery still pending -> run cognify (force). No `seat:` nodes
-  exist yet; Linear sync is `enabled:false` (no key).
+- Live deploy is commit `171f386` (web deployment `e225c16a`, `SUCCESS`).
+- **LLM_MODEL fixed (2026-06-26):** was the prefix-less `google/gemini-2.5-flash`
+  (broke all cognify with litellm "LLM Provider NOT provided"); now
+  `openrouter/deepseek/deepseek-v4-flash`. cognify verified to build a
+  214-node / 385-edge graph.
+- **cognee partitioning disabled:** `ENABLE_BACKEND_ACCESS_CONTROL=false` so the
+  org-wide graph read and cognify share one global Kuzu graph (the prior default
+  partitioned the built graph into a per-dataset `.pkl` the read never resolved).
+- **Knowledge graph still empty pending re-ingest (verified 2026-06-26):**
+  `/api/mesh/graph` returns `graph_empty`; `/search` works (vector retrieval, 8
+  hits for `masumi`). The 45 GitHub docs were added under the old partition, so a
+  post-fix force cognify builds 0 — the graph needs a **GitHub-sync re-ingest**
+  under the new context, then cognify. No `seat:` nodes exist yet; Linear sync is
+  `enabled:false` (no key).
 
 ## Needed From User
 

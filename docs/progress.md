@@ -44,6 +44,48 @@ Last updated: 2026-06-26.
 - Outstanding lint: `ruff` `F401` unused `fnmatchcase`,
   `kb/repo_content_sync.py:15` (pre-existing).
 
+## 2026-06-26 (continued — cognify root-cause + LLM/graph fixes)
+
+Two production bugs found and fixed; the knowledge graph is now *buildable* but
+not yet *repopulated*. Status below is live-verified — no unverified claims.
+
+- **LLM model outage (fixed + verified).** Prod `LLM_MODEL` was
+  `google/gemini-2.5-flash` — a bare id with no litellm provider prefix — so
+  every cognify LLM call 500'd (`litellm: LLM Provider NOT provided`). Set prod
+  to `openrouter/deepseek/deepseek-v4-flash` (the repo default). **Verified:** a
+  force cognify then built a **214-node / 385-edge** graph (HTTP 200,
+  `graph_after.nodes=214`) where it previously hard-500'd. Documented the
+  `openrouter/` prefix rule in README + `.env.example`; the enrichment var
+  `CITADEL_LLM_MODEL` stays bare (it calls OpenRouter's HTTP API directly, not
+  litellm). Commit `03fd27c`.
+- **Graph not displaying — root-caused + fixed.** Despite cognify building 214
+  nodes, `/api/mesh/graph` read 0. Cause (cognee-source investigation): cognee's
+  `ENABLE_BACKEND_ACCESS_CONTROL` defaults ON for kuzu+pgvector, partitioning
+  the graph into per-dataset/per-user Kuzu files
+  (`<system>/databases/<user>/<dataset>.pkl`), while Citadel's org-wide
+  `graph_data()` read resolves the global `cognee_graph_kuzu` DB. The built
+  graph was real but stranded in the per-dataset partition. Set
+  `ENABLE_BACKEND_ACCESS_CONTROL=false` (prod env + `.env.example`) so cognify
+  and the read share one global graph — correct for a single-tenant org vault
+  (Citadel enforces seat/dataset isolation at its own access layer). Commit
+  `171f386`.
+- **Honest current state (live-verified after both fixes):**
+  - `/search` returns results (8 for `masumi`) — **vector retrieval works**.
+  - `/api/mesh/graph` still returns **0 / `graph_empty`**. After the
+    access-control flip, a force cognify built **0 nodes** (`graph_grew:false`,
+    ~9s): the existing data was `add`-ed under the old partition and isn't
+    visible in the new global context. **The knowledge graph is NOT yet
+    populated** — it needs a **data re-ingest** (re-run the GitHub sync) under
+    the new context, then a cognify. This step is still pending.
+  - deepseek-v4-flash (a reasoning model) shows `InstructorRetryException`
+    JSON-validation retries during extraction; it mostly recovers. A/B to
+    `openrouter/openai/gpt-4o-mini` is available if extraction needs to be
+    cleaner.
+- Earlier commits this session: live-audit log (`837961d`); README
+  `openrouter/free` landmine fix + `citadel_run_repo_content_sync` SKILL doc +
+  mesh error-event redaction + dropped unused import (`aa227ea`, `caffb95` —
+  the latter clears the only ruff `F401`).
+
 ## 2026-06-25 (continued)
 
 - **Phase 2 implementation batch** (merged on `main`, `5f6c0ed`+):
