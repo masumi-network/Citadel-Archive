@@ -15,6 +15,7 @@ dist/
 build/
 *.egg-info/
 .citadel/
+.claude/
 .cognee_system/
 .data_storage/
 .cognee_cache/
