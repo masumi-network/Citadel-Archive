@@ -2351,3 +2351,49 @@ def test_contribute_blocks_high_severity_secret(tmp_path: Any) -> None:
     assert blocked
     assert blocked[-1]["action"] == "contribute"
     assert blocked[-1]["success"] is False
+
+
+def test_promotion_status_requires_admin_and_reports_config() -> None:
+    client = authed_client()
+
+    response = client.get("/api/promote")
+
+    assert response.status_code == 200
+    body = response.json()
+    # FakeCitadel config leaves promotion opt-in (disabled) by default.
+    assert body["enabled"] is False
+    assert body["dry_run_default"] is True
+    assert body["promotion_tag"] == "org-ready"
+    assert body["max_items"] == 20
+
+
+def test_promotion_run_rejects_non_seat_dataset() -> None:
+    client = authed_client()
+    app.state.access_store = AccessStore(Path(tempfile.mkdtemp()) / "access.json")
+
+    response = client.post(
+        "/api/promote/run",
+        json={"dataset": "masumi-network", "dry_run": True},
+    )
+
+    assert response.status_code == 400
+    assert "seat" in response.json()["detail"].lower()
+
+
+def test_promotion_run_disabled_returns_status_and_audits() -> None:
+    client = authed_client()
+    app.state.access_store = AccessStore(Path(tempfile.mkdtemp()) / "access.json")
+
+    response = client.post(
+        "/api/promote/run",
+        json={"dataset": "seat:alice", "dry_run": True},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["enabled"] is False
+    assert body["reason"] == "disabled"
+    assert body["promoted"] == 0
+    events = app.state.access_store.snapshot()["audit_events"]
+    runs = [e for e in events if e["action"] == "promotion.run"]
+    assert runs and runs[-1]["success"] is True

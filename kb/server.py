@@ -44,6 +44,7 @@ from kb.mcp_server import TOOL_POLICIES, create_mcp_server
 from kb.mesh import MeshState
 from kb.models import FeedbackRequest
 from kb.obsidian_sync import ObsidianSyncStore, SyncPushDocument, normalize_path
+from kb.promotion import PromotionEngine
 from kb.repo_content_sync import RepoContentSyncer
 from kb.security_scan import SecretContentError
 from kb.self_improve import SelfImprovement
@@ -217,6 +218,12 @@ class BackupMirrorRunBody(BaseModel):
     dry_run: bool = True
 
 
+class PromoteRunBody(BaseModel):
+    dataset: str = Field(min_length=1)
+    dry_run: bool = True
+    max_items: int | None = Field(default=None, ge=1, le=200)
+
+
 class CognifyRunBody(BaseModel):
     dataset: str | None = None
     verify: bool = False
@@ -332,6 +339,16 @@ def get_learning_agent() -> LearningAgent:
 
 def get_backup_mirror() -> BackupMirror:
     return BackupMirror(get_citadel().config)
+
+
+def get_promotion_engine() -> PromotionEngine:
+    citadel = get_citadel()
+    return PromotionEngine(
+        citadel,
+        get_learning_process(),
+        get_access_store(),
+        citadel.config,
+    )
 
 
 def get_access_store() -> AccessStore:
@@ -2125,6 +2142,68 @@ async def run_backup_mirror(body: BackupMirrorRunBody, request: Request) -> Any:
             "tracked_files": summary.get("tracked_files"),
             "available_files": summary.get("available_files"),
             "missing_files": summary.get("missing_files"),
+        },
+    )
+    return jsonable_encoder(result)
+
+
+@app.get("/api/promote")
+async def promotion_status(request: Request) -> Any:
+    require_access(request, "admin", "sources:sync")
+    return jsonable_encoder(get_promotion_engine().status())
+
+
+@app.post("/api/promote/run")
+async def run_promotion(body: PromoteRunBody, request: Request) -> Any:
+    actor = require_access(request, "admin", "sources:sync")
+    if not is_seat_dataset(body.dataset):
+        raise HTTPException(
+            status_code=400,
+            detail="dataset must be a seat node (seat:<slug>) to promote from.",
+        )
+    try:
+        result = await get_promotion_engine().run(
+            body.dataset,
+            dry_run=body.dry_run,
+            max_items=body.max_items,
+        )
+    except SecretContentError as exc:
+        get_access_store().record_event(
+            action="promotion.run",
+            actor=actor,
+            success=False,
+            dataset=body.dataset,
+            detail={
+                "dry_run": body.dry_run,
+                "blocked": "secret_content",
+                "highest_severity": exc.highest_severity,
+            },
+        )
+        raise HTTPException(status_code=422, detail=exc.public_message) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:  # pragma: no cover - depends on Cognee runtime.
+        logger.error("Promotion run failed: %s", exc.__class__.__name__)
+        get_access_store().record_event(
+            action="promotion.run",
+            actor=actor,
+            success=False,
+            dataset=body.dataset,
+            detail={"dry_run": body.dry_run, "error_type": exc.__class__.__name__},
+        )
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    get_access_store().record_event(
+        action="promotion.run",
+        actor=actor,
+        success=True,
+        dataset=body.dataset,
+        detail={
+            "dry_run": body.dry_run,
+            "enabled": result.get("enabled"),
+            "candidates": result.get("candidates"),
+            "proposed": result.get("proposed"),
+            "promoted": result.get("promoted"),
+            "max_items": result.get("max_items"),
         },
     )
     return jsonable_encoder(result)
