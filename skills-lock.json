@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "skills": {
+    "citadel-archive": {
+      "source": "masumi-network/Citadel-Archive",
+      "sourceType": "github",
+      "skillPath": "SKILL.md",
+      "computedHash": "519edabf08fe2c621a0bf4c402f0d141bc5bec80beaea55a5e28c3bfc69026ae"
+    }
+  }
+}
