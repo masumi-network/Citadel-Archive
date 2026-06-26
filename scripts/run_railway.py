@@ -220,11 +220,17 @@ def run(mode: str | None = None) -> int:
     if resolved_mode in {"pipeline", "all", "cron"}:
         return run_pipeline()
     if resolved_mode == "linear-sync":
+        from kb.access import AccessStore
         from kb.linear_sync import LinearSyncer
         from kb.service import Citadel
 
         async def _run() -> int:
-            result = await LinearSyncer(Citadel.from_env()).run(force=True)
+            citadel = Citadel.from_env()
+            access_store = AccessStore(citadel.config.access_store_path)
+            result = await LinearSyncer(
+                citadel,
+                access_store=access_store,
+            ).run(force=True)
             if not result.get("ok"):
                 logger.error("Linear sync failed: %s", result.get("reason"))
                 return 1
