@@ -2244,3 +2244,110 @@ def test_admin_scope_override_is_audited(tmp_path: Any) -> None:
     search_events = [event for event in events if event["detail"].get("operation") == "search"]
     assert search_events
     assert search_events[-1]["detail"]["scope_override"] is True
+
+
+class GateCognee:
+    """Minimal Cognee stub so a real Citadel gate runs through the server stack."""
+
+    def __init__(self) -> None:
+        self.remembered: list[str] = []
+
+    async def remember(self, data: str, **kwargs: Any) -> dict[str, Any]:
+        self.remembered.append(data)
+        return {"ok": True}
+
+    async def recall(self, query: str, **kwargs: Any) -> list[dict[str, Any]]:
+        return []
+
+    async def add_feedback(self, **kwargs: Any) -> bool:
+        return True
+
+    async def improve(self, **kwargs: Any) -> dict[str, Any]:
+        return {"ok": True}
+
+    async def cognify(self, **kwargs: Any) -> dict[str, Any]:
+        return {"ok": True}
+
+    async def graph_data(self) -> tuple[list[Any], list[Any]]:
+        return ([], [])
+
+
+def secret_gate_client(tmp_path: Any) -> tuple[TestClient, GateCognee]:
+    """Authed client whose Citadel is real (so the secret gate actually fires)."""
+    from kb.service import Citadel
+
+    cognee = GateCognee()
+    app.state.citadel = Citadel(
+        CitadelConfig(
+            tenant_id="test",
+            default_dataset="notes",
+            admin_key="test-admin",
+            writer_keys=("test-writer",),
+            content_scan_enabled=True,
+        ),
+        cognee=cognee,
+    )
+    app.state.access_store = AccessStore(tmp_path / "access.json")
+    app.state.mesh = MeshState()
+    app.state.conflict_store = KnowledgeConflictStore(tmp_path / "conflicts.json")
+    client = TestClient(app, base_url="https://testserver")
+    assert client.post("/admin/session", json={"access_key": "test-admin"}).status_code == 200
+    return client, cognee
+
+
+def test_ingest_blocks_high_severity_secret(tmp_path: Any) -> None:
+    client, cognee = secret_gate_client(tmp_path)
+
+    response = client.post(
+        "/ingest",
+        json={"data": "deploy key AKIAIOSFODNN7EXAMPLE do not share"},
+    )
+
+    assert response.status_code == 422
+    # The raw secret is never echoed back to the caller.
+    assert "AKIAIOSFODNN7EXAMPLE" not in response.text
+    # Nothing reached the vault.
+    assert cognee.remembered == []
+    # The block is audited via the access store.
+    events = app.state.access_store.snapshot()["audit_events"]
+    blocked = [e for e in events if e["detail"].get("blocked") == "secret_content"]
+    assert blocked
+    assert blocked[-1]["action"] == "ingest"
+    assert blocked[-1]["success"] is False
+
+
+def test_ingest_allows_clean_content(tmp_path: Any) -> None:
+    client, cognee = secret_gate_client(tmp_path)
+
+    response = client.post(
+        "/ingest",
+        json={"data": "A clean engineering note about cache invalidation strategy."},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["accepted"] is True
+    assert cognee.remembered  # stored
+
+
+def test_contribute_blocks_high_severity_secret(tmp_path: Any) -> None:
+    client, cognee = secret_gate_client(tmp_path)
+
+    # Build the key at runtime so the literal is not committed (GitHub push
+    # protection scans literals); the assembled string still trips the scanner.
+    stripe_key = "sk_" + "live_" + "abcdEFGHijklMNOPqrstUVwx"
+    response = client.post(
+        "/api/contribute",
+        json={
+            "title": "Onboarding secret",
+            "content": f"Use this Stripe key {stripe_key} to test.",
+        },
+    )
+
+    assert response.status_code == 422
+    assert stripe_key not in response.text
+    assert cognee.remembered == []
+    events = app.state.access_store.snapshot()["audit_events"]
+    blocked = [e for e in events if e["detail"].get("blocked") == "secret_content"]
+    assert blocked
+    assert blocked[-1]["action"] == "contribute"
+    assert blocked[-1]["success"] is False

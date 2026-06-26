@@ -165,6 +165,8 @@ class CitadelConfig:
     github_sync_repo_denylist: tuple[str, ...] = field(default_factory=tuple)
     github_sync_security_scan_enabled: bool = True
     github_sync_security_block_severity: str = "high"
+    content_scan_enabled: bool = True
+    content_scan_block_severity: str = "high"
     github_token: str | None = None
     repo_content_sync_enabled: bool = True
     repo_content_sync_dataset: str = "masumi-network"
@@ -284,6 +286,14 @@ class CitadelConfig:
             ),
             github_sync_security_block_severity=os.getenv(
                 "CITADEL_GITHUB_SYNC_SECURITY_BLOCK_SEVERITY",
+                "high",
+            ),
+            content_scan_enabled=_bool(
+                os.getenv("CITADEL_CONTENT_SCAN_ENABLED"),
+                default=True,
+            ),
+            content_scan_block_severity=os.getenv(
+                "CITADEL_CONTENT_SCAN_BLOCK_SEVERITY",
                 "high",
             ),
             github_token=os.getenv("CITADEL_GITHUB_TOKEN") or os.getenv("GITHUB_TOKEN") or None,

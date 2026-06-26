@@ -10,6 +10,11 @@ from kb.cognee_client import CogneeGateway, CogneePublicClient
 from kb.config import CitadelConfig
 from kb.filters import PreIngestFilter
 from kb.models import FeedbackRequest, FeedbackResult, IngestResult
+from kb.security_scan import (
+    SecretContentError,
+    SecurityScanEntry,
+    scan_text_entries,
+)
 from kb.source_search import search_github_sync_state
 from kb.tags import merge_tags
 
@@ -57,6 +62,8 @@ class Citadel:
             )
             return IngestResult(False, decision.reason, target_dataset, merged_tags)
 
+        self._guard_content(data, target_dataset)
+
         content_hash = sha256(data.encode("utf-8")).hexdigest()
         if content_hash in self._seen_hashes:
             logger.info(
@@ -72,6 +79,30 @@ class Citadel:
             tags=merged_tags,
         )
         return IngestResult(True, "accepted", target_dataset, merged_tags, result)
+
+    def _guard_content(self, data: str, dataset: str) -> None:
+        """Block storing content that carries a blocking-severity secret.
+
+        Single content-policy chokepoint for every write path: ``/ingest``,
+        ``/api/contribute``, the Obsidian sync, autosync (which POSTs ``/ingest``),
+        and the MCP writer tools (which call the same HTTP API) all funnel through
+        ``ingest``. This scans the exact text about to be stored and raises
+        :class:`SecretContentError` before it can reach the vault (ADR-0005 step 1).
+        Reuses the existing GitHub-sync scanner so detection is not reinvented.
+        """
+        if not self.config.content_scan_enabled:
+            return
+        scan = scan_text_entries(
+            [SecurityScanEntry(source="ingest", location=dataset, text=data)],
+            block_severity=self.config.content_scan_block_severity,
+        )
+        if scan.get("blocked"):
+            raise SecretContentError(
+                dataset=dataset,
+                highest_severity=scan.get("highest_severity"),  # type: ignore[arg-type]
+                block_severity=self.config.content_scan_block_severity,
+                findings=scan.get("findings", []),  # type: ignore[arg-type]
+            )
 
     async def search(
         self,

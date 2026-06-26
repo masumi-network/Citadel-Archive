@@ -7,6 +7,7 @@ import pytest
 
 from kb.config import CitadelConfig
 from kb.models import FeedbackRequest
+from kb.security_scan import SecretContentError
 from kb.service import Citadel
 
 
@@ -65,6 +66,48 @@ async def test_ingest_applies_tags_and_dataset() -> None:
     assert result.tags == ("personal", "ai")
     assert fake.remember_calls[0]["dataset_name"] == "notes"
     assert fake.remember_calls[0]["tags"] == ("personal", "ai")
+
+
+@pytest.mark.asyncio
+async def test_ingest_blocks_high_severity_secret() -> None:
+    fake = FakeCognee()
+    kb = Citadel(CitadelConfig(default_dataset="notes"), cognee=fake)
+
+    with pytest.raises(SecretContentError) as exc_info:
+        await kb.ingest("AWS key AKIAIOSFODNN7EXAMPLE leaked here")
+
+    error = exc_info.value
+    assert error.highest_severity in {"critical", "high"}
+    assert error.findings  # carries redacted finding metadata
+    # The raw secret must never appear in what we surface to callers.
+    assert "AKIAIOSFODNN7EXAMPLE" not in error.public_message
+    # Nothing reached the vault.
+    assert fake.remember_calls == []
+
+
+@pytest.mark.asyncio
+async def test_ingest_allows_clean_content() -> None:
+    fake = FakeCognee()
+    kb = Citadel(CitadelConfig(default_dataset="notes"), cognee=fake)
+
+    result = await kb.ingest("A perfectly ordinary engineering note about caching.")
+
+    assert result.accepted
+    assert len(fake.remember_calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_ingest_scan_can_be_disabled() -> None:
+    fake = FakeCognee()
+    kb = Citadel(
+        CitadelConfig(default_dataset="notes", content_scan_enabled=False),
+        cognee=fake,
+    )
+
+    result = await kb.ingest("AWS key AKIAIOSFODNN7EXAMPLE leaked here")
+
+    assert result.accepted
+    assert len(fake.remember_calls) == 1
 
 
 @pytest.mark.asyncio

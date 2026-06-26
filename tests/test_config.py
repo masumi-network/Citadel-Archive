@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 
 from kb.access import CENTRAL_DATASET
 from kb.config import CitadelConfig
