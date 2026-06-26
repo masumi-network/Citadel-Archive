@@ -11,6 +11,7 @@ private Citadel node (`seat:{slug}`). One-time token setup per dev.
 | `SKILL.md` | Agent behavior + auto-sync docs |
 | `scripts/sync_session.py` | SessionEnd distill + POST (stdlib only) |
 | `scripts/sync_push.py` | Git pre-push commit snapshot + POST (stdlib only) |
+| `scripts/install_autosync.sh` | One-liner: installs pre-push hook + prints setup steps |
 | `templates/claude-settings.json` | Drop-in `.claude/settings.json` SessionEnd hook |
 | `templates/git-pre-push.sh` | Installable `.git/hooks/pre-push` for push sync |
 | `README.md` | This file |
@@ -79,7 +80,13 @@ production URL). It must be `https://`.
 ## 4. Git push hook (universal — Cursor, Codex, Claude)
 
 Install once per clone so every **push** snapshots commit metadata to your
-private node:
+private **Node**:
+
+```bash
+skills/citadel-proactive-ingest/scripts/install_autosync.sh
+```
+
+Or manually:
 
 ```bash
 cp skills/citadel-proactive-ingest/templates/git-pre-push.sh .git/hooks/pre-push
@@ -91,7 +98,22 @@ message, author, branch, and changed file paths (not raw diffs). Same token,
 same personal-by-default routing — **no `dataset` field**. Always exits 0; never
 blocks push.
 
-## 5. Opt-out
+## 5. Server-side cron (operators — not devs)
+
+Railway cron services keep **Central** and **Seat-Scoped Mirrors** fresh. Devs
+do not configure or trigger these.
+
+| Mode | Purpose |
+|---|---|
+| `CITADEL_RUN_MODE=learning-agent` | Daily GitHub org digest → Central |
+| `CITADEL_RUN_MODE=linear-sync` | Linear workspace → Central; assignee issues mirrored to each **Node** |
+| `CITADEL_RUN_MODE=pipeline` | Full scheduled run (GitHub + skills + self-improve + backup mirror) |
+
+See `.env.example` for `CITADEL_LINEAR_*`, `CITADEL_PIPELINE_*`, and
+`CITADEL_GITHUB_SYNC_*` vars. Agents read synced content via MCP — they should
+not trigger admin sync unless the user explicitly asks.
+
+## 6. Opt-out
 
 Either is enough:
 

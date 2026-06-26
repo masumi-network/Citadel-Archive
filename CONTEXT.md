@@ -141,6 +141,35 @@ _Avoid_: merge, overwrite, silent correction
 - A caller is treated as holding a **Node** when a seat **Node** is in its access scope — this is what subjects it to **Central** curation rules, regardless of whether it is the human seat-holder or one of their agents.
 - Integration sources (e.g. Linear) sync org-wide into **Central**; **Seat-Scoped Mirrors** copy assignee-relevant subsets into each seat's **Node** (e.g. John's assigned Linear issues appear in John's **Node** and in **Central**).
 
+## Autonomous sync (Phase 2)
+
+Background capture keeps each seat's **Node** and org **Central** current with no
+per-capture dev steps. All layers are **fail-silent** — outages never block git
+push, session close, or agent work.
+
+| Layer | Trigger | Destination | Who runs it |
+|---|---|---|---|
+| Git pre-push hook | every `git push` | seat **Node** | dev (once per clone) |
+| SessionEnd hook (Claude Code) | session close | seat **Node** | dev (optional) |
+| Railway `learning-agent` cron | daily schedule | **Central** | operator |
+| Railway `linear-sync` cron | scheduled | **Central** + **Seat-Scoped Mirror** | operator |
+
+Install dev-side hooks once: `skills/citadel-proactive-ingest/scripts/install_autosync.sh`.
+
+**Agent sync policy:** rely on hooks + cron. Agents read via `citadel_search`,
+`citadel_linear_my_issues`, and `citadel_linear_search`. Do **not** trigger
+admin sync (`POST /api/linear-sync/run`, learning-agent runs) unless the user
+explicitly asks for an immediate refresh.
+
+## Knowledge Mesh (Phase 2 graph)
+
+The live mesh canvas shows a **universal org view**: every seat **Node** and
+**Central** (`masumi-network`) on one force-directed graph. **Central** is pinned
+at the centre as the largest hub; seat vaults are tiered by activity. A depth
+slider (0–3 hops) filters the neighbourhood around the selected node; optional
+Central↔seat spokes link the hub to each `seat:{slug}` vault. There is no
+All/My Node/Central scope toggle — org memory is one connected view.
+
 ## Example Dialogue
 
 > **Dev:** "Should this GitHub repository be added to the database?"

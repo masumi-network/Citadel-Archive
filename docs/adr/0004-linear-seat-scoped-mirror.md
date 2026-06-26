@@ -17,7 +17,8 @@ query.
 
 **Consequences**
 
-- Requires `CITADEL_LINEAR_API_KEY` and seat principal `email` (or
-  `CITADEL_LINEAR_USER_MAP`) for assignee routing.
+- Requires `CITADEL_LINEAR_API_KEY` (Read scope is sufficient for fetch-only
+  sync) and seat principal `email` (or `CITADEL_LINEAR_USER_MAP`) for assignee
+  routing.
 - MCP: `citadel_linear_my_issues` (Node mirror), `citadel_linear_search` (Central).
 - Run via `POST /api/linear-sync/run`, `CITADEL_RUN_MODE=linear-sync`, or cron.

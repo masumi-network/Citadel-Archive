@@ -164,7 +164,19 @@ Production smoke status, last verified 2026-06-02 at commit `7a4a1d9`:
   when `_citadel.retrieval.document_drilldown_available` is true.
 - **When** the user asks to remember something durable → `citadel_contribute`
   for titled notes or `citadel_ingest` for raw context (writer token + approval).
+- **When** the user asks "what do I need to do?" → `citadel_linear_my_issues`
+  (reads the **Seat-Scoped Mirror** from the latest Linear cron sync).
 - Follow the **citadel-vault** skill for read/write/admin rules.
+- For autonomous personal capture (git push + optional SessionEnd), point the user
+  to `skills/citadel-proactive-ingest/scripts/install_autosync.sh` or
+  [`docs/onboarding/teammate-rollout.md`](../../docs/onboarding/teammate-rollout.md).
+
+### Seat-writer tokens (recommended for devs)
+
+Mint a **seat-writer** token from the connect wizard. It carries
+`default_dataset=seat:{slug}` so writes with no `dataset` field land in the
+dev's private **Node**. One token powers MCP search, ingest, and background
+hooks (`CITADEL_MCP_ACCESS_TOKEN`). Never share tokens between seats.
 
 ## Tools
 
@@ -175,7 +187,10 @@ Production smoke status, last verified 2026-06-02 at commit `7a4a1d9`:
 | `citadel_search` | reader | Search the vault (dataset defaults server-side) |
 | `citadel_get_document` | reader | Fetch a full document by a search hit `id` |
 | `citadel_get_mesh` | reader | Knowledge-mesh snapshot |
-| `citadel_list_sources` | reader | GitHub sync, learning-agent, index status |
+| `citadel_list_sources` | reader | GitHub sync, learning-agent, Linear sync, index status |
+| `citadel_linear_my_issues` | reader | Your assigned Linear tasks (**Seat-Scoped Mirror** in your **Node**) |
+| `citadel_linear_search` | reader | Org-wide Linear context in **Central** |
+| `citadel_recent_contributions` | reader | Recent vault contributions (`mine=true` for yours) |
 | `citadel_ingest` | writer | Add durable context |
 | `citadel_contribute` | writer | Add a titled Vault Contribution (enrichment + conflict detection) |
 | `citadel_record_feedback` | writer | Record feedback on a QA result |

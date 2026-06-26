@@ -1,18 +1,33 @@
 # Citadel Progress
 
-Last updated: 2026-06-25.
+Last updated: 2026-06-26.
+
+## 2026-06-26
+
+- **Graph UI unified org view** (local, pending commit): removed All / My Node /
+  Central scope toggles; the mesh always shows seat **Nodes** and **Central**
+  together. Depth slider (0–3 hops) and Central↔seat hub spokes unchanged.
+- **Central visibility fix:** `_ensure_base_graph` always seeds the
+  `masumi-network` dataset node (not only `default_dataset`), so Central appears
+  for admin and seat sessions alike.
+- **Seat form UX:** `formatApiError` surfaces FastAPI validation messages; slug
+  HTML pattern aligned with server `min_length=2`.
+- **Docs pass:** progress, tasks, phase-2 plan, onboarding, CONTEXT, README,
+  skills — aligned to autonomous sync layers, Linear → **Central** (read-only
+  key OK), and agent sync policy (fail-silent; cron owns org sources).
+- Tests **346 passing**.
 
 ## 2026-06-25 (continued)
 
-- **Phase 2 implementation batch** (local, pending PR):
+- **Phase 2 implementation batch** (merged on `main`, `5f6c0ed`+):
   - **M1** git push sync: `sync_push.py`, pre-push hook, 7 tests.
   - **M2** `install_autosync.sh`, Cursor/Codex doc, skill updates.
   - **M3–M4** Linear: `kb/linear_sync.py`, Central + Seat-Scoped Mirror,
     `/api/linear-sync`, `CITADEL_RUN_MODE=linear-sync`, MCP
     `citadel_linear_my_issues` + `citadel_linear_search`, ADR-0004.
-  - **M5** graph UI: scope filter (All/My Node/Central), depth slider 0–3,
-    Central↔seat hub spokes.
-  - Tests **340 passing**.
+  - **M5** graph UI: universal org view (seat nodes + Central together), depth
+    slider 0–3, Central↔seat hub spokes.
+  - Tests **340 passing** at merge; **346** after follow-up fixes.
 
 ## 2026-06-25
 
@@ -34,8 +49,9 @@ Last updated: 2026-06-25.
   - **Session hooks** — supplementary (`SessionEnd` for Claude Code already shipped).
   - **Linear** — full workspace → **Central**; assignee issues **Seat-Scoped Mirror**
     → each seat's **Node** (John's tasks in his Node for "what do I need to do?").
-  - **Graph UI Phase 2** — scope filter, local depth, Central↔vault spokes (after Nodes
-    have content from sync).
+  - **Graph UI Phase 2** — universal org view (seat **Nodes** + **Central**
+    together), local depth, Central↔vault spokes (after Nodes have content from
+    sync). Scope toggles were dropped in favour of one org-wide canvas.
   - Glossary updated: **Seat-Scoped Mirror** in `CONTEXT.md`.
   - Ship order: M0 merge → M1 git push → M3 Linear → M4 Linear MCP → M5 graph → M6 deploy.
 

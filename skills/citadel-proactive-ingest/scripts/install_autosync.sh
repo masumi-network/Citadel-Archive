@@ -32,5 +32,9 @@ Citadel autosync installed.
 
 4. Cursor / Codex: git push is the universal path; no extra hook required.
 
+5. Linear tasks: ask your agent "what do I need to do?" → citadel_linear_my_issues
+   (Seat-Scoped Mirror; refreshed by Railway linear-sync cron).
+
 Docs: docs/onboarding/citadel-autosync.md
+      docs/onboarding/citadel-autosync-ides.md
 EOF

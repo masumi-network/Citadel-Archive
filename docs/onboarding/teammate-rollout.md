@@ -122,7 +122,7 @@ auth error, your token isn't in the environment of the client that's running
 |---|---|
 | `citadel_search` auth error | Restart the MCP client so it re-reads `CITADEL_MCP_ACCESS_TOKEN`. |
 | Nothing lands in my node after a session | Confirm `.claude/settings.json` exists and the token env var is exported in the shell that *launched* Claude Code (not a later shell). |
-| Push still works but no node entry | Expected for now — the hook only fires if `skills/citadel-proactive-ingest/scripts/sync_push.py` exists at repo root. Re-check step 4 from the repo root. |
+| Push still works but no node entry | Re-run `install_autosync.sh` from the repo root (needs `skills/citadel-proactive-ingest/` vendored). |
 | Token leaked in chat/logs | Ask the admin to **revoke + re-mint** (Access page → revoke). Old captures stay. |
 
 ---

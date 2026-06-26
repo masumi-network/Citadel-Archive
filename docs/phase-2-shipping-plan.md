@@ -1,6 +1,6 @@
 # Phase 2 Shipping Plan — Autonomous Sync + Graph
 
-Last updated: 2026-06-25.
+Last updated: 2026-06-26.
 
 This plan tracks everything agreed in the Phase 2 design session: background
 autonomous capture into seat **Nodes**, Linear → **Central** with **Seat-Scoped
@@ -16,7 +16,8 @@ Update milestone **Contributes** % in the table below as checkpoints close.
 - **Git push** — universal baseline (Cursor, Codex, Claude).
 - **IDE session hooks** — supplementary where the platform supports them (Claude `SessionEnd` today).
 - **Linear** — full workspace → **Central**; assignee issues also **mirrored** into that seat's **Node**.
-- **MCP** — agents read Node + Central; humans never manage sync manually.
+- **MCP** — agents read Node + Central; humans never manage sync manually unless they ask for a refresh.
+- **Graph** — one universal org view (seat **Nodes** + **Central** together); no scope toggles.
 
 ---
 
@@ -29,9 +30,9 @@ Update milestone **Contributes** % in the table below as checkpoints close.
 | M2 Session hook coverage | 10% | **Done** | 100% | **10%** |
 | M3 Linear backend sync | 20% | **Done** | 100% | **20%** |
 | M4 Linear MCP + skills | 10% | **Done** | 100% | **10%** |
-| M5 Graph UI Phase 2 | 15% | **Done** | 95% | **14%** |
-| M6 QA, merge, deploy | 5% | Partial | 40% | **2%** |
-| **Total** | **100%** | | | **~98%** |
+| M5 Graph UI Phase 2 | 15% | **Done** | 100% | **15%** |
+| M6 QA, merge, deploy | 5% | Partial | 60% | **3%** |
+| **Total** | **100%** | | | **~99%** |
 
 Update the **Contributes** column as checkpoints close. Target: **100%** before calling Phase 2 shipped.
 
@@ -39,7 +40,7 @@ Update the **Contributes** column as checkpoints close. Target: **100%** before 
 
 ## M0 — Graph Phase 1 ✅ (100%)
 
-**Branch:** `feat/graph-logseq` (commit `a2770e0`)
+**Branch:** merged PR #5 (`ffabc1f`)
 
 | Checkpoint | Done |
 |------------|------|
@@ -61,18 +62,16 @@ Update the **Contributes** column as checkpoints close. Target: **100%** before 
 |---|------|---|---------------------|
 | 1.1 | Define snapshot payload (hash, message, author, branch, changed paths, repo) | **100%** | `sync_push.py` docstring |
 | 1.2 | `sync_push.py` — stdlib POST to `/ingest`, same contract as `sync_session.py` | **100%** | Unit tests pass |
-| 1.3 | Git hook template (`pre-push`) + skill install docs | **100%** | `templates/git-pre-push.sh` |
+| 1.3 | Git hook template (`pre-push`) + skill install docs | **100%** | `templates/git-pre-push.sh`, `install_autosync.sh` |
 | 1.4 | Reuse `CITADEL_MCP_ACCESS_TOKEN`; no `dataset` field → private Node | **100%** | Test asserts no `dataset` |
 | 1.5 | Fail-silent, HTTPS-only, size cap (match session sync) | **100%** | Hook never blocks push |
 | 1.6 | Integration test + manual E2E (push → search Node) | **100%** | 7 pytest; prod E2E after deploy |
-
-**Suggested PR:** `feat(sync): git push commit snapshot to seat node`
 
 **Depends on:** nothing (extends existing proactive-ingest skill).
 
 ---
 
-## M2 — Session hook coverage (30% → target 100%)
+## M2 — Session hook coverage ✅ (100%)
 
 **Delivers:** Session distill where IDE supports it; git push remains universal fallback.
 
@@ -80,78 +79,78 @@ Update the **Contributes** column as checkpoints close. Target: **100%** before 
 |---|------|---|---------------------|
 | 2.1 | Claude Code `SessionEnd` → `sync_session.py` | **100%** | Shipped PR #4 |
 | 2.2 | Document git push as universal path in skill + onboarding | **100%** | `citadel-autosync.md` + SKILL.md |
-| 2.3 | Cursor — research exit hook / rule pattern; template if viable | 0% | Doc or template in skill |
-| 2.4 | Codex — same as 2.3 | 0% | Doc or template in skill |
-| 2.5 | Shared `citadel-proactive-ingest` skill: one install, git + session | 0% | Single setup story |
+| 2.3 | Cursor — git push baseline + optional project rule | **100%** | `citadel-autosync-ides.md` |
+| 2.4 | Codex — same as 2.3 | **100%** | `citadel-autosync-ides.md` |
+| 2.5 | Shared `citadel-proactive-ingest` skill: one install, git + session | **100%** | `install_autosync.sh` |
 
-**Note:** M2.3–2.4 may stay doc-only if no stable hook API exists; git push (M1) still satisfies "works everywhere."
+**Note:** No stable Cursor/Codex session hook API exists; git push (M1) satisfies "works everywhere."
 
 ---
 
-## M3 — Linear backend sync (0% → target 100%)
+## M3 — Linear backend sync ✅ (100%)
 
 **Delivers:** Linear workspace → **Central**; assignee issues **Seat-Scoped Mirror** → each **Node**.
 
 | # | Task | % | Checkpoint / verify |
 |---|------|---|---------------------|
-| 3.1 | ADR or plan section: Central + Mirror routing (read-only Linear) | 0% | Aligns with `CONTEXT.md` **Seat-Scoped Mirror** |
-| 3.2 | `kb/linear_sync.py` — fetch issues/projects via Linear API | 0% | Mocked tests |
-| 3.3 | Config: `CITADEL_LINEAR_API_KEY`, optional team filter | 0% | `kb/config.py` + Railway env doc |
-| 3.4 | Ingest org-wide digest → `masumi-network` (Central) | 0% | Central search finds issue titles |
-| 3.5 | Mirror assignee issues → `seat:{slug}` per seat mapping | 0% | John's token search finds only his issues in Node |
-| 3.6 | Seat ↔ Linear user mapping (email or admin config) | 0% | Assignee resolution tested |
-| 3.7 | Run mode / admin endpoint / cron (`CITADEL_RUN_MODE=linear-sync`) | 0% | Manual + scheduled run |
-| 3.8 | Tests (`tests/test_linear_sync.py`) | 0% | pytest green |
+| 3.1 | ADR: Central + Mirror routing (read-only Linear) | **100%** | ADR-0004 |
+| 3.2 | `kb/linear_sync.py` — fetch issues/projects via Linear API | **100%** | Mocked tests |
+| 3.3 | Config: `CITADEL_LINEAR_API_KEY`, optional team filter | **100%** | `kb/config.py` + `.env.example` |
+| 3.4 | Ingest org-wide digest → `masumi-network` (Central) | **100%** | Central search finds issue titles |
+| 3.5 | Mirror assignee issues → `seat:{slug}` per seat mapping | **100%** | Seat token search finds own issues |
+| 3.6 | Seat ↔ Linear user mapping (email or admin config) | **100%** | `CITADEL_LINEAR_USER_MAP` |
+| 3.7 | Run mode / admin endpoint / cron (`CITADEL_RUN_MODE=linear-sync`) | **100%** | `scripts/run_railway.py` |
+| 3.8 | Tests (`tests/test_linear_sync.py`) | **100%** | pytest green |
 
-**Suggested PRs:** `feat(linear): sync workspace to Central` then `feat(linear): seat-scoped mirror`
-
-**Depends on:** `CITADEL_LINEAR_API_KEY` from operator.
-
-**Supersedes:** `organization-vault-plan.md` Phase 3 ordering for Linear — pulled forward per 2026-06-25 design session.
+**Depends on:** `CITADEL_LINEAR_API_KEY` from operator (Read scope sufficient).
 
 ---
 
-## M4 — Linear MCP + skills (0% → target 100%)
+## M4 — Linear MCP + skills ✅ (100%)
 
 **Delivers:** John asks agent "what do I need to do?" → MCP reads mirrored Node (+ Central fallback).
 
 | # | Task | % | Checkpoint / verify |
 |---|------|---|---------------------|
-| 4.1 | MCP tool: list my issues (seat-scoped, from Node mirror) | 0% | `citadel_linear_my_issues` in `tools/list` |
-| 4.2 | MCP tool: org issue search (Central, reader+) | 0% | Cross-team query works for admin |
-| 4.3 | Wire audit + scopes (`kb:read`, seat token) | 0% | Audit event on call |
-| 4.4 | Update `citadel-vault` / connector skills | 0% | Skill docs list Linear tools |
-| 4.5 | On-demand refresh optional (trigger sync before read) | 0% | Stale cache documented |
+| 4.1 | MCP tool: list my issues (seat-scoped, from Node mirror) | **100%** | `citadel_linear_my_issues` |
+| 4.2 | MCP tool: org issue search (Central, reader+) | **100%** | `citadel_linear_search` |
+| 4.3 | Wire audit + scopes (`kb:read`, seat token) | **100%** | Audit event on call |
+| 4.4 | Update `citadel-vault` / connector / proactive-ingest skills | **100%** | Skill docs list Linear tools + sync policy |
+| 4.5 | On-demand refresh optional (trigger sync before read) | **100%** | Admin tools only when user asks |
 
 **Depends on:** M3.4–M3.5 minimum.
 
 ---
 
-## M5 — Graph UI Phase 2 (0% → target 100%)
+## M5 — Graph UI Phase 2 ✅ (100%)
 
-**Delivers:** Graph useful once Nodes have content — scope, depth, spokes.
+**Delivers:** Graph useful once Nodes have content — universal org view, depth, spokes.
 
 | # | Task | % | Checkpoint / verify |
 |---|------|---|---------------------|
-| 5.1 | Scope filter: My Node / Central / Both | 0% | Filter toggles visible nodes |
-| 5.2 | Local graph + depth slider (1–3 hops from selection) | 0% | Click node → neighborhood |
-| 5.3 | Explicit Central ↔ `seat:` vault spokes | 0% | Visual hub links |
-| 5.4 | Mode parity (Activity vs Knowledge where metadata allows) | 0% | Knowledge assignee nodes filterable |
-| 5.5 | Browser QA checklist | 0% | Fit, pause, mode switch, mobile |
+| 5.1 | Universal org view (seat **Nodes** + **Central** together) | **100%** | Scope toggles removed; one canvas |
+| 5.2 | Local graph + depth slider (0–3 hops from selection) | **100%** | Click node → neighborhood |
+| 5.3 | Explicit Central ↔ `seat:` vault spokes | **100%** | Visual hub links |
+| 5.4 | Mode parity (Activity vs Knowledge where metadata allows) | **100%** | Knowledge graph loads from Cognee |
+| 5.5 | Browser QA checklist | **100%** | Fit, pause, mode switch, mobile (2026-06-25) |
 
-**Depends on:** M0 merged; richer Node content (M1/M3) makes QA meaningful — can start 5.1–5.3 in parallel.
+**Also shipped:** `_ensure_base_graph` always seeds **Central** (`masumi-network`) so the hub is visible for all sessions.
+
+**Depends on:** M0 merged; richer Node content (M1/M3) makes QA meaningful.
 
 ---
 
-## M6 — QA, merge, deploy (0% → target 100%)
+## M6 — QA, merge, deploy (60% → target 100%)
 
 | # | Task | % | Checkpoint / verify |
 |---|------|---|---------------------|
-| 6.1 | Merge `feat/graph-logseq` → `main` | 0% | PR approved |
-| 6.2 | Full pytest suite | 0% | 328+ passing |
-| 6.3 | Staging/prod: re-cognify if needed; Linear key set | 0% | Knowledge graph non-empty |
-| 6.4 | Update `docs/progress.md`, `tasks.md`, README | 0% | Phase 2 marked shipped |
-| 6.5 | Teammate rollout: token + skill + git hook one-pager | 0% | Onboarding tested |
+| 6.1 | Merge Phase 2 → `main` | **100%** | `5f6c0ed`+ on `main` |
+| 6.2 | Full pytest suite | **100%** | 346 passing |
+| 6.3 | Prod: cognify **Central** healthy; Linear key + cron set | **40%** | LLM fix done; Linear key + cron pending |
+| 6.4 | Update `docs/progress.md`, `tasks.md`, README | **100%** | 2026-06-26 pass |
+| 6.5 | Teammate rollout: token + skill + git hook one-pager | **100%** | `teammate-rollout.md` |
+
+**Remaining operator work:** read-only `CITADEL_LINEAR_API_KEY` on web + `linear-sync` cron, verify `GET /api/linear-sync`, per-dev `install_autosync.sh`.
 
 ---
 
@@ -165,23 +164,21 @@ M0 merge ──► M1 git push ──► M3 Linear backend ──► M4 Linear M
               M5 graph Phase 2 (parallel after M0) ──► M6 deploy
 ```
 
-1. **Week 1:** Merge graph Phase 1 (M0.4) + ship git push sync (M1).
-2. **Week 2:** Linear backend + mirror (M3); start graph scope filter (M5.1).
-3. **Week 3:** Linear MCP (M4) + graph depth/spokes (M5.2–5.3).
-4. **Week 4:** QA, docs, production rollout (M6).
-
-Adjust if Linear API key or seat↔user mapping blocks M3.
+1. **Week 1:** Merge graph Phase 1 (M0) + ship git push sync (M1). ✅
+2. **Week 2:** Linear backend + mirror (M3); graph unified view + depth (M5). ✅
+3. **Week 3:** Linear MCP (M4) + docs/onboarding. ✅
+4. **Week 4:** Production rollout — Linear key, cron, teammate hooks (M6). **In progress**
 
 ---
 
 ## Verification checklist (final gate)
 
-- [ ] John pushes code → issue/findable note in his **Node** without manual ingest.
-- [ ] John closes Claude session → distill still lands in **Node** (existing).
+- [x] John pushes code → issue/findable note in his **Node** without manual ingest.
+- [x] John closes Claude session → distill still lands in **Node** (existing).
 - [ ] Linear sync runs → issues in **Central**; John's assigned issues in his **Node**.
 - [ ] John asks agent via MCP → task list from **Node** mirror.
-- [ ] Graph: scope filter + local depth around a node.
-- [ ] All failures fail-silent; push/session never blocked.
+- [x] Graph: universal org view + local depth around a node.
+- [x] All failures fail-silent; push/session never blocked.
 
 ---
 
@@ -189,16 +186,16 @@ Adjust if Linear API key or seat↔user mapping blocks M3.
 
 | Item | Owner | Blocks |
 |------|-------|--------|
-| Linear API key + workspace ID | Operator | M3 |
-| Seat ↔ Linear user mapping (email vs manual) | Design in M3.6 | M3.5 |
-| Merge graph Phase 1 PR | Review | M0.4, M5 prod |
-| Cursor/Codex hook API availability | Research in M2 | M2.3–2.4 only |
+| Linear API key (Read scope) + cron service | Operator | M6.3 |
+| Seat ↔ Linear user mapping (email vs manual) | Admin | Mirror accuracy |
+| Per-dev `install_autosync.sh` | Each teammate | M6 rollout |
 
 ---
 
 ## Related docs
 
-- [`CONTEXT.md`](../CONTEXT.md) — **Seat-Scoped Mirror**, **Node**, **Central**
-- [`docs/onboarding/citadel-autosync.md`](onboarding/citadel-autosync.md) — current SessionEnd setup
-- [`docs/organization-vault-plan.md`](organization-vault-plan.md) — vault phases (Linear note superseded for ordering)
+- [`CONTEXT.md`](../CONTEXT.md) — **Seat-Scoped Mirror**, **Node**, **Central**, autonomous sync
+- [`docs/onboarding/citadel-autosync.md`](onboarding/citadel-autosync.md) — dev onboarding
+- [`docs/onboarding/teammate-rollout.md`](onboarding/teammate-rollout.md) — 5-minute one-pager
+- [`docs/organization-vault-plan.md`](organization-vault-plan.md) — vault phases
 - [`docs/progress.md`](progress.md) — session log

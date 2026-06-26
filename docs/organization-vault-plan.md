@@ -139,7 +139,7 @@ See [`docs/phase-2-shipping-plan.md`](../docs/phase-2-shipping-plan.md) for chec
 
 - **Autonomous capture:** git push commit snapshots + IDE session hooks → seat **Nodes**.
 - **Linear integration:** workspace → **Central**; assignee **Seat-Scoped Mirror** → **Nodes**.
-- **Graph UI Phase 2:** scope filter, local depth, Central↔vault spokes.
+- **Graph UI Phase 2:** universal org view (seat **Nodes** + **Central** together), local depth, Central↔vault spokes.
 - **Multi-dataset search + tag routing** (original org-vault Phase 2) remain planned; not in the current shipping sequence.
 
 **Not in this phase:** external notification adapters, physical DB-per-seat isolation.

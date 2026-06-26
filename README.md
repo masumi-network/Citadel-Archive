@@ -1,6 +1,6 @@
 # Citadel
 
-Last updated: 2026-06-03.
+Last updated: 2026-06-26.
 
 Citadel is a thin self-hosted Organization Vault wrapper built on top of
 [Cognee](https://github.com/topoteretes/cognee), which is Apache-2.0 licensed.
@@ -23,10 +23,26 @@ decisions live in [`docs/adr/`](docs/adr/) — including
 Current refactor candidates live in
 [`docs/architecture-deepening-opportunities.md`](docs/architecture-deepening-opportunities.md).
 
-**Current execution plan (~98%):** [`docs/phase-2-shipping-plan.md`](docs/phase-2-shipping-plan.md)
-with sequential checkboxes in [`tasks.md`](tasks.md). Ship order: merge graph
-Phase 1 → git push sync → Linear (Central + Seat-Scoped Mirror) → Linear MCP →
-graph UI Phase 2 → deploy.
+**Current execution plan (~99%):** [`docs/phase-2-shipping-plan.md`](docs/phase-2-shipping-plan.md)
+with sequential checkboxes in [`tasks.md`](tasks.md). Phase 2 adds autonomous
+sync (git push + optional SessionEnd → seat **Node**), Linear → **Central** with
+**Seat-Scoped Mirrors**, Linear MCP tools, and a unified org knowledge graph.
+Remaining: Railway Linear key + `linear-sync` cron + per-dev hook install.
+
+### Phase 2 highlights
+
+| Feature | What it does |
+|---|---|
+| **Autonomous sync** | Git pre-push (all IDEs) + optional Claude `SessionEnd` → your **Node**; fail-silent |
+| **Linear → Central** | Workspace digest to `masumi-network`; your assigned issues **mirrored** to your **Node** |
+| **Linear MCP** | `citadel_linear_my_issues` (tasks), `citadel_linear_search` (org-wide) |
+| **Unified graph** | One org canvas — seat **Nodes** + **Central** together; depth slider + hub spokes |
+| **One-liner install** | `skills/citadel-proactive-ingest/scripts/install_autosync.sh` |
+
+Dev onboarding: [`docs/onboarding/citadel-autosync.md`](docs/onboarding/citadel-autosync.md).
+Teammate rollout: [`docs/onboarding/teammate-rollout.md`](docs/onboarding/teammate-rollout.md).
+Linear sync uses a read-only Linear API key (**Read** scope is enough). Railway
+cron: `CITADEL_RUN_MODE=linear-sync` (see `.env.example`).
 
 ## Repository layout
 
@@ -137,7 +153,16 @@ mirror repo. See [`docs/vault-backup-mirror.md`](docs/vault-backup-mirror.md).
 
 ## For Teammates & Agents
 
-The two easiest ways to read and write vault knowledge.
+The two easiest ways to read and write vault knowledge. For autonomous background
+capture (git push → your **Node**, optional SessionEnd), run once per clone:
+
+```bash
+skills/citadel-proactive-ingest/scripts/install_autosync.sh
+```
+
+See [`docs/onboarding/teammate-rollout.md`](docs/onboarding/teammate-rollout.md) (5-minute
+setup) and [`docs/onboarding/citadel-autosync.md`](docs/onboarding/citadel-autosync.md)
+(full detail).
 
 **Get a token.** Ask a vault admin to create one on the Access page (or via
 `POST /api/access/tokens`). Tokens start with `ctdl_`, are shown once, and are
@@ -264,9 +289,10 @@ Core API endpoints:
 The hosted UI is served by the same FastAPI process. It includes:
 
 - A live knowledge mesh canvas backed by `/api/mesh`.
-- A Logseq-style 2D force-directed graph (vendored `force-graph`) with Central
-  pinned as the hub, seat-tier sizing, hover highlight, click-to-inspect, and
-  labels-on-zoom for both Activity and Knowledge graph modes.
+- A Logseq-style 2D force-directed graph (vendored `force-graph`) with **Central**
+  pinned as the hub, all seat **Nodes** on the same canvas (universal org view),
+  depth slider (0–3 hops), optional Central↔seat spokes, hover highlight,
+  click-to-inspect, and labels-on-zoom for both Activity and Knowledge graph modes.
 - An OS-style dashboard shell with system chrome, runtime metrics, source
   status, page navigation, access controls, and a persistent status bar.
 - Server-Sent Events at `/events` for real-time ingest, search, feedback, and
@@ -497,6 +523,35 @@ Operational checks:
   credentials unset. Citadel should expose source-linked memory and preview
   digests; Scout should post the digest to Google Chat, Agent Messenger, or
   future gateways.
+
+## Linear Workspace Sync
+
+Citadel syncs the Linear workspace read-only into **Central** (`masumi-network`)
+and **Seat-Scoped Mirrors** assignee issues into each dev's **Node**. A Linear
+personal API key with **Read** scope is sufficient (no Write/Admin).
+
+```bash
+CITADEL_LINEAR_API_KEY=lin_api_...
+CITADEL_LINEAR_SYNC_DATASET=masumi-network
+CITADEL_LINEAR_SYNC_SESSION=masumi-linear
+# Optional: {"linear-user-uuid":"seat-slug"}
+CITADEL_LINEAR_USER_MAP=
+```
+
+Admin APIs: `GET /api/linear-sync`, `POST /api/linear-sync/run` (admin only).
+
+For Railway, create a cron service with `CITADEL_RUN_MODE=linear-sync` and the
+same Postgres/volume bindings as the web service. Also set `CITADEL_LINEAR_API_KEY`
+on the **web** service for manual runs. Suggested schedule — every 6 hours:
+
+```cron
+0 */6 * * *
+```
+
+Agents read synced content via MCP (`citadel_linear_my_issues`,
+`citadel_linear_search`). Cron is the default — agents should not trigger admin
+sync unless the user explicitly asks for a refresh. See
+[ADR-0004](docs/adr/0004-linear-seat-scoped-mirror.md).
 
 ## Google Chat Organization Update Digest
 

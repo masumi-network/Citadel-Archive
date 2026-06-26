@@ -137,6 +137,26 @@ so explain the intended action before calling them. Use `dry_run=true` first
 when testing learning-agent or backup-mirror runs. If the client asks for
 approval, present the exact tool and expected effect.
 
+**Do not trigger admin sync proactively.** Railway cron handles GitHub org sync
+(`learning-agent`), Linear sync (`linear-sync`), and the full pipeline on
+schedule. Only call `citadel_run_learning_agent`, `POST /api/linear-sync/run`,
+or related admin tools when the user explicitly asks for an immediate refresh.
+
+## Autonomous sync (read path)
+
+Background capture keeps each seat's **Node** and org **Central** current with
+no per-capture dev steps:
+
+| Layer | Trigger | Destination | Agent role |
+|---|---|---|---|
+| Git pre-push hook | every `git push` | seat **Node** | none — automatic |
+| SessionEnd hook (Claude Code) | session close | seat **Node** | none — automatic |
+| Railway `learning-agent` cron | daily schedule | **Central** | read via `citadel_search` |
+| Railway `linear-sync` cron | scheduled | **Central** + **Seat-Scoped Mirror** | `citadel_linear_my_issues`, `citadel_linear_search` |
+
+Install dev-side hooks once: `skills/citadel-proactive-ingest/scripts/install_autosync.sh`.
+Onboarding: [`docs/onboarding/teammate-rollout.md`](../../docs/onboarding/teammate-rollout.md).
+
 ## Token Safety
 
 - Never commit tokens to git.

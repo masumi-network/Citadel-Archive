@@ -1,10 +1,13 @@
 # Citadel Tasks
 
-## Phase 2 execution — sequential (~98% overall)
+## Phase 2 execution — sequential (~99% overall)
 
 **Plan:** [`docs/phase-2-shipping-plan.md`](docs/phase-2-shipping-plan.md)
 
-M0–M5 implemented locally; M6 deploy pending (PR merge + Linear API key).
+M0–M5 shipped on `main` (`5f6c0ed`+). Graph Phase 2 uses a **unified org view**
+(seat **Nodes** + **Central** together — no scope toggles). M6 production rollout
+pending: Linear read-only key, `linear-sync` cron, Central cognify verify, per-dev
+`install_autosync.sh`.
 
 ### Checkpoints
 
@@ -13,15 +16,28 @@ M0–M5 implemented locally; M6 deploy pending (PR merge + Linear API key).
 - [x] M2 Session + IDE docs, `install_autosync.sh`
 - [x] M3 Linear backend (ADR-0004, `/api/linear-sync`)
 - [x] M4 MCP `citadel_linear_my_issues`, `citadel_linear_search`
-- [x] M5 Graph scope / depth / spokes
-- [ ] M5.5 Browser QA; M6 production rollout
+- [x] M5 Graph unified org view / depth / spokes (scope toggles removed; depth
+      0–3 + Central↔seat hub spokes)
+- [x] M5.5 Browser QA (2026-06-25): prod healthz/login/asset 200, login renders
+      desktop+mobile, graph toolbar (mode/depth/fit/pause) verified in code
+
+### M6 — Production rollout
+
+- [x] Phase 2 merged to `main` (`5f6c0ed`+)
+- [x] Cognify **Central** unblocked (`LLM_MODEL` fix 2026-06-24; optional
+      `POST /api/cognify/run?force=true` for stale graph store)
+- [x] M6.5 teammate one-pager: [`docs/onboarding/teammate-rollout.md`](docs/onboarding/teammate-rollout.md)
+- [ ] Set read-only `CITADEL_LINEAR_API_KEY` (Linear **Read** scope) on Railway web
+- [ ] Create Railway `linear-sync` cron (`CITADEL_RUN_MODE=linear-sync`)
+- [ ] Verify sync: `GET /api/linear-sync` → `enabled`, `issue_count`, `last_synced_at`
+- [ ] Per-dev `skills/citadel-proactive-ingest/scripts/install_autosync.sh`
 
 ---
 
 ## Done (2026-06-25 session — Phase 2 implementation)
 
-- Graph Phase 1 production (PR #5). Git push sync, Linear sync + mirror, graph UI
-  Phase 2, MCP tools, IDE onboarding. Tests 340 passing.
+- Graph Phase 1 production (PR #5). Git push sync, Linear sync + mirror, unified
+  org graph UI, MCP tools, IDE onboarding. Tests 346 passing.
 
 ## Done (2026-06-25 session — planning)
 
@@ -237,9 +253,11 @@ M0–M5 implemented locally; M6 deploy pending (PR merge + Linear API key).
 ## Needed From User
 
 - **Operational rollout of autonomous sync** (not code): provision a seat per dev
-  via the connect wizard, then each dev exports their `CITADEL_MCP_ACCESS_TOKEN` and
-  copies `skills/citadel-proactive-ingest/templates/claude-settings.json` into their
-  org repos' `.claude/settings.json`. See `docs/onboarding/citadel-autosync.md`.
+  via the connect wizard, then each dev exports `CITADEL_MCP_ACCESS_TOKEN` and runs
+  `skills/citadel-proactive-ingest/scripts/install_autosync.sh` per org-repo clone.
+  See [`docs/onboarding/teammate-rollout.md`](docs/onboarding/teammate-rollout.md).
+- **Linear rollout** (operator): set read-only `CITADEL_LINEAR_API_KEY` on Railway
+  web + create `linear-sync` cron; verify `GET /api/linear-sync`.
 - **Rotate `CITADEL_ADMIN_KEY`** — it was used over the wire during the 2026-06-24
   debugging; rotate it (and consider rotating the GitHub PAT + OpenRouter key, which
   live in plaintext Railway env).
@@ -290,8 +308,10 @@ M0–M5 implemented locally; M6 deploy pending (PR merge + Linear API key).
 
 ## Next
 
-Open PR for Phase 2 → merge → set `CITADEL_LINEAR_API_KEY` on Railway →
-`POST /api/linear-sync/run` → per-dev `install_autosync.sh`.
+Finish **M6 rollout:** set read-only `CITADEL_LINEAR_API_KEY` on Railway web +
+`linear-sync` cron → `POST /api/linear-sync/run` or wait for cron → verify
+`GET /api/linear-sync` → re-cognify **Central** if needed → per-dev
+`install_autosync.sh`. See [`docs/onboarding/teammate-rollout.md`](docs/onboarding/teammate-rollout.md).
 
 ## Next: Team Access
 

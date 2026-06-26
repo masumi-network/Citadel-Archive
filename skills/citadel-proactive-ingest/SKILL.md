@@ -1,20 +1,26 @@
 ---
 name: citadel-proactive-ingest
-description: Use to capture durable engineering knowledge into Citadel automatically and proactively while working in an org repo. Two halves — (1) instructs the agent to call citadel_ingest mid-session for durable facts/decisions (personal-by-default; only org-ready/vault-contribution tags promote to shared Central), and (2) documents the SessionEnd auto-sync hook that distills each session to the dev's private node with a one-time token setup. Triggers include "auto sync my sessions", "remember this in citadel", "proactive ingest", "set up citadel autosync", "personal kb sync", and https://citadel-archive-production.up.railway.app/skills/proactive-ingest.
+description: Use to capture durable engineering knowledge into Citadel automatically and proactively while working in an org repo. Covers (1) mid-session citadel_ingest for durable facts (personal-by-default; org-ready/vault-contribution tags promote to Central), (2) git pre-push commit snapshots (universal baseline — Cursor, Codex, Claude), (3) optional Claude Code SessionEnd distill, and (4) server-side Railway cron for GitHub org sync, Linear sync, and the learning pipeline. Triggers include "auto sync my sessions", "remember this in citadel", "proactive ingest", "set up citadel autosync", "personal kb sync", "install autosync", and https://citadel-archive-production.up.railway.app/skills/proactive-ingest.
 ---
 
 # Citadel Proactive Ingest
 
 Capture durable engineering knowledge into Citadel **as it happens**, with no
-per-session ceremony. Two layers:
+per-session ceremony. Four autonomous layers — dev-side hooks plus server-side
+cron — all **fail-silent** and **personal-by-default** unless explicitly promoted.
 
 1. **Mid-session, agent-driven.** While working, the agent proactively calls
    `citadel_ingest` for durable facts and decisions. Personal-by-default.
-2. **SessionEnd, hook-driven.** On every session close (Claude Code), a
-   non-blocking hook distills the transcript and POSTs a short note to the
-   dev's PRIVATE node — zero per-session steps after a one-time token export.
-3. **Git push, hook-driven.** On every `git push` (all IDEs), a pre-push hook
-   snapshots commit metadata to the dev's PRIVATE node — install once per clone.
+2. **Git push, hook-driven (universal baseline).** On every `git push` (all
+   IDEs), a pre-push hook snapshots commit metadata to the dev's **Node** —
+   install once per clone.
+3. **SessionEnd, hook-driven (optional).** On every session close (Claude
+   Code), a non-blocking hook distills the transcript and POSTs a short note to
+   the dev's **Node** — zero per-session steps after a one-time token export.
+4. **Server-side Railway cron (org-wide).** Scheduled jobs sync GitHub org
+   digests, Linear workspace → **Central** with **Seat-Scoped Mirrors**, skills
+   catalog refresh, self-improvement, and backup mirror export. Devs never
+   trigger these manually.
 
 ```
 Personal node:  seat:{slug}   (the dev's private Citadel node — default target)
@@ -119,7 +125,7 @@ Copy `templates/claude-settings.json` into the repo's `.claude/settings.json`
 (point the command at this skill's `scripts/sync_session.py`). See
 `README.md` in this skill for the drop-in steps and opt-out.
 
-## Layer 3 — Git push auto-sync (universal)
+## Layer 3 — Git push auto-sync (universal baseline)
 
 `scripts/sync_push.py` runs from a git **pre-push** hook (`templates/git-pre-push.sh`).
 On every push it:
@@ -128,10 +134,16 @@ On every push it:
 2. collects commit hash, message, author, branch, and changed file paths — **no
    raw diffs**;
 3. POSTs `{data, tags}` with `tags = ["git-push", <branch>, <repo>]` (NO
-   `dataset` → personal node), HTTPS only;
+   `dataset` → personal **Node**), HTTPS only;
 4. **fails silently** — always exits 0, never blocks `git push`.
 
-Install once per clone:
+**One-liner install** (from repo root):
+
+```bash
+skills/citadel-proactive-ingest/scripts/install_autosync.sh
+```
+
+Or manually:
 
 ```bash
 cp skills/citadel-proactive-ingest/templates/git-pre-push.sh .git/hooks/pre-push
@@ -139,7 +151,51 @@ chmod +x .git/hooks/pre-push
 ```
 
 Same `CITADEL_MCP_ACCESS_TOKEN` as SessionEnd and MCP. Works in Cursor, Codex,
-and Claude — any tool that uses git.
+and Claude — any tool that uses git. This is the **only required dev-side sync
+step** for non-Claude IDEs.
+
+## Layer 4 — Server-side Railway cron (org-wide)
+
+Background jobs on Railway keep **Central** and **Seat-Scoped Mirrors** fresh.
+Devs and agents **never** need to trigger these — cron is the source of truth for
+org-wide source material.
+
+| `CITADEL_RUN_MODE` | What it syncs | Typical schedule |
+|---|---|---|
+| `learning-agent` (or `github-sync`) | GitHub org digest → Central | Daily (`0 8 * * *` UTC) |
+| `linear-sync` | Linear workspace → Central; assignee issues **Seat-Scoped Mirror** → each **Node** | Daily or hourly (operator choice) |
+| `pipeline` (also `all`/`cron`) | GitHub sync + skills refresh + self-improve + backup mirror (each stage env-toggleable) | Daily |
+| `backup-mirror` | Vault Backup Mirror manifest export | Daily |
+
+Key env vars (Railway cron service only — not dev shells):
+
+- `CITADEL_LINEAR_API_KEY` — required for `linear-sync`
+- `CITADEL_LINEAR_USER_MAP` — optional JSON map Linear user id → seat slug
+- `CITADEL_GITHUB_ORG`, `CITADEL_GITHUB_SYNC_*` — GitHub org sync scope
+- `CITADEL_PIPELINE_*_ENABLED` — toggle individual pipeline stages
+
+Manual admin triggers (only when the user explicitly asks):
+
+- `POST /api/github-sync/run` or MCP `citadel_run_learning_agent`
+- `POST /api/linear-sync/run`
+- `POST /api/learning-agent/optimize`
+
+## Agent sync policy
+
+**Rely on cron + hooks — do not add dev ceremony.**
+
+| Situation | Agent action |
+|---|---|
+| User asks a project/architecture question | `citadel_search` (Central + own **Node**) |
+| User asks "what do I need to do?" / task list | `citadel_linear_my_issues` (**Seat-Scoped Mirror** in own **Node**) |
+| Org-wide Linear context | `citadel_linear_search` (Central) |
+| Durable fact crystallizes mid-session | `citadel_ingest` (personal-by-default; promote with tag only when user asks) |
+| Git push or session close | **Nothing** — hooks handle it automatically |
+| Org source material stale | **Do not** trigger admin sync unless user explicitly requests a refresh |
+| User asks to run learning agent / Linear sync now | Admin tools only, with approval |
+
+All background sync (hooks and cron) is **fail-silent**: outages never block git
+push, session close, or agent work.
 
 ## Privacy posture
 
@@ -163,5 +219,7 @@ does nothing. See `README.md`.
 - This skill: `https://citadel-archive-production.up.railway.app/skills/proactive-ingest`
 - Connect wizard: `https://citadel-archive-production.up.railway.app/skills/connect`
 - Vault read/write rules: `https://citadel-archive-production.up.railway.app/skills/vault`
+- Dev onboarding: [`docs/onboarding/citadel-autosync.md`](../../docs/onboarding/citadel-autosync.md)
+- Teammate one-pager: [`docs/onboarding/teammate-rollout.md`](../../docs/onboarding/teammate-rollout.md)
 - Ingest API: `POST /ingest` with `{data, dataset?, tags?, session_id?}` (writer token)
-- Seat/node/Central model: [ADR-0003](https://github.com/masumi-network/Citadel-Archive/blob/main/docs/adr/0003-seat-node-central-private-memory.md)
+- Seat/**Node**/Central + **Seat-Scoped Mirror**: [ADR-0003](https://github.com/masumi-network/Citadel-Archive/blob/main/docs/adr/0003-seat-node-central-private-memory.md), [ADR-0004](https://github.com/masumi-network/Citadel-Archive/blob/main/docs/adr/0004-linear-seat-scoped-mirror.md)
