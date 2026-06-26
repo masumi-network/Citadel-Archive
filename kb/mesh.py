@@ -486,7 +486,10 @@ class MeshState:
             )
 
     def _ensure_base_graph(self, config: CitadelConfig) -> None:
-        dataset_id = self._dataset_node(config.default_dataset)
+        central = config.github_sync_dataset
+        if config.default_dataset != central:
+            self._dataset_node(config.default_dataset)
+        dataset_id = self._dataset_node(central)
         for index_id, label, description in [
             ("index:graph", "Graph mesh", "Entity and relationship store"),
             ("index:vector", "Vector index", "Embedding retrieval store"),

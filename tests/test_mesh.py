@@ -127,6 +127,33 @@ async def test_snapshot_contains_base_indexes() -> None:
     }
 
 
+async def test_snapshot_always_includes_central_dataset_node() -> None:
+    mesh = MeshState()
+    config = CitadelConfig(
+        tenant_id="test",
+        default_dataset="seat:alice",
+        github_sync_dataset="masumi-network",
+    )
+
+    snapshot = await mesh.snapshot(config)
+
+    dataset_labels = {
+        node["label"]
+        for node in snapshot["nodes"]
+        if node["type"] == "dataset"
+    }
+    assert dataset_labels == {"seat:alice", "masumi-network"}
+    central_id = next(
+        node["id"]
+        for node in snapshot["nodes"]
+        if node["type"] == "dataset" and node["label"] == "masumi-network"
+    )
+    assert any(
+        edge["source"] == central_id and edge["target"] == "index:graph"
+        for edge in snapshot["edges"]
+    )
+
+
 async def test_timeline_tracks_chunks_and_resume_filters() -> None:
     mesh = MeshState()
 
