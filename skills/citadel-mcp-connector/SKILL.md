@@ -195,6 +195,7 @@ hooks (`CITADEL_MCP_ACCESS_TOKEN`). Never share tokens between seats.
 | `citadel_contribute` | writer | Add a titled Vault Contribution (enrichment + conflict detection) |
 | `citadel_record_feedback` | writer | Record feedback on a QA result |
 | `citadel_run_learning_agent` | admin | Run source learning |
+| `citadel_run_repo_content_sync` | admin | Sync READMEs, skills, and docs from allowlisted repos through cognify |
 | `citadel_backup_mirror_status` | admin | Inspect backup mirror manifest status |
 | `citadel_run_backup_mirror` | admin | Run backup mirror manifest export |
 | `citadel_audit_events` | admin | Inspect bounded audit events |
@@ -206,8 +207,9 @@ hooks (`CITADEL_MCP_ACCESS_TOKEN`). Never share tokens between seats.
 - Do not echo tokens in chat, logs, or tool output.
 - Prefer **reader** tokens; use writer/admin only for explicit write/ops actions.
 - Approval-gate `citadel_ingest`, `citadel_contribute`, `citadel_record_feedback`,
-  `citadel_run_learning_agent`, `citadel_run_backup_mirror`, and
-  `citadel_improve` when the client supports per-tool approval.
+  `citadel_run_learning_agent`, `citadel_run_repo_content_sync`,
+  `citadel_run_backup_mirror`, and `citadel_improve` when the client supports
+  per-tool approval.
 
 ## Troubleshooting
 

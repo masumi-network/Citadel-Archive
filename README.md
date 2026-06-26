@@ -237,7 +237,9 @@ For OpenRouter, Cognee expects the custom provider form:
 ```bash
 LLM_PROVIDER=custom
 LLM_ENDPOINT=https://openrouter.ai/api/v1
-LLM_MODEL=openrouter/free
+# Use a real model id. "openrouter/free" is NOT a valid id and silently breaks
+# every cognify call (OpenrouterException - Invalid URL). Prod uses gpt-4o-mini.
+LLM_MODEL=openrouter/openai/gpt-4o-mini
 LLM_API_KEY=sk-or-...
 ```
 
