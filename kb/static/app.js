@@ -18,10 +18,8 @@ const state = {
   settingsSnapshot: null,
   auditFilter: "all",
   graphMode: "live",
-  graphScope: "all",
   graphDepth: 0,
   graphSpokes: true,
-  memoryScope: null,
   realGraph: null,
   realGraphLoading: false,
   conflicts: [],
@@ -111,7 +109,6 @@ const conflictsList = document.getElementById("conflictsList");
 const conflictNavBadge = document.getElementById("conflictNavBadge");
 const conflictFilterButtons = Array.from(document.querySelectorAll("[data-conflict-filter]"));
 const graphModeButtons = Array.from(document.querySelectorAll("[data-graph-mode]"));
-const graphScopeButtons = Array.from(document.querySelectorAll("[data-graph-scope]"));
 const graphDepthInput = document.getElementById("graphDepthInput");
 const realGraphEmpty = document.getElementById("realGraphEmpty");
 const toastStack = document.getElementById("toastStack");
@@ -205,36 +202,6 @@ function nodeValue(node) {
   return clamp(2 + degree * 1.4, 2, 9);
 }
 
-function nodeDataset(node) {
-  return node.metadata?.dataset || node.label || "";
-}
-
-function applyGraphScope(nodes, links) {
-  if (state.graphScope === "all") return { nodes, links };
-  const seatDs = state.memoryScope?.default_dataset || "";
-  const keep = new Set();
-  for (const node of nodes) {
-    const dataset = nodeDataset(node);
-    if (state.graphScope === "node") {
-      if (seatDs && (dataset === seatDs || node.label === seatDs)) keep.add(node.id);
-    } else if (state.graphScope === "central") {
-      if (dataset === CENTRAL_DATASET || node.label === CENTRAL_DATASET || node.id === graph.centralId) {
-        keep.add(node.id);
-      }
-    }
-  }
-  if (!keep.size) return { nodes, links };
-  for (const link of links) {
-    if (keep.has(link.source) || keep.has(link.target)) {
-      keep.add(link.source);
-      keep.add(link.target);
-    }
-  }
-  const filteredNodes = nodes.filter((node) => keep.has(node.id));
-  const filteredLinks = links.filter((link) => keep.has(link.source) && keep.has(link.target));
-  return { nodes: filteredNodes, links: filteredLinks };
-}
-
 function applyGraphDepth(nodes, links, byId) {
   const depth = Number(state.graphDepth) || 0;
   if (depth <= 0) return { nodes, links };
@@ -316,7 +283,6 @@ function buildForceGraphData() {
     links.push({ source: edge.source, target: edge.target, label: edge.label });
   }
   graph.centralId = resolveCentralId(nodes);
-  ({ nodes, links } = applyGraphScope(nodes, links));
   let byId = rebuildNeighborLinks(nodes, links);
   ({ nodes, links } = applyGraphDepth(nodes, links, byId));
   byId = rebuildNeighborLinks(nodes, links);
@@ -332,6 +298,14 @@ function activeGraphData() {
   return { nodes: state.nodes, edges: state.edges };
 }
 
+function formatApiError(detail) {
+  if (typeof detail === "string") return detail;
+  if (Array.isArray(detail)) {
+    return detail.map((item) => item.msg || JSON.stringify(item)).join("; ");
+  }
+  return null;
+}
+
 function api(path, options = {}) {
   return fetch(path, {
     ...options,
@@ -343,7 +317,7 @@ function api(path, options = {}) {
     const text = await response.text();
     const data = text ? JSON.parse(text) : null;
     if (!response.ok) {
-      const message = data?.detail || data?.message || "Request failed";
+      const message = formatApiError(data?.detail) || data?.message || "Request failed";
       throw new Error(message);
     }
     return data;
@@ -435,11 +409,6 @@ async function loadSession() {
   try {
     const session = await api("/api/session");
     state.role = session.role;
-    state.memoryScope = {
-      default_dataset: session.default_dataset || null,
-      seat_slug: session.seat_slug || null,
-      node_label: session.node_label || null,
-    };
     applyAccessControls();
   } catch {
     window.location.assign("/login");
@@ -1590,18 +1559,6 @@ async function loadKnowledgeGraph(force = false) {
   }
 }
 
-function setGraphScope(scope) {
-  if (state.graphScope === scope) return;
-  state.graphScope = scope;
-  graphScopeButtons.forEach((button) => {
-    const active = button.dataset.graphScope === scope;
-    button.classList.toggle("active", active);
-    button.setAttribute("aria-pressed", active ? "true" : "false");
-  });
-  buildGraphScene();
-  resetGraphView();
-}
-
 function setGraphMode(mode) {
   if (state.graphMode === mode) return;
   state.graphMode = mode;
@@ -2490,10 +2447,6 @@ conflictFilterButtons.forEach((button) => {
 
 graphModeButtons.forEach((button) => {
   button.addEventListener("click", () => setGraphMode(button.dataset.graphMode || "live"));
-});
-
-graphScopeButtons.forEach((button) => {
-  button.addEventListener("click", () => setGraphScope(button.dataset.graphScope || "all"));
 });
 
 if (graphDepthInput) {

@@ -173,17 +173,6 @@
                         Knowledge graph
                       </button>
                     </div>
-                    <div class="segmented-control graph-scope" role="group" aria-label="Graph memory scope">
-                      <button class="segment-button active" type="button" data-graph-scope="all" aria-pressed="true">
-                        All
-                      </button>
-                      <button class="segment-button" type="button" data-graph-scope="node" aria-pressed="false">
-                        My Node
-                      </button>
-                      <button class="segment-button" type="button" data-graph-scope="central" aria-pressed="false">
-                        Central
-                      </button>
-                    </div>
                     <label class="graph-depth-control">
                       <span>Depth</span>
                       <input id="graphDepthInput" type="range" min="0" max="3" step="1" value="0" />
@@ -835,7 +824,7 @@
                       type="text"
                       placeholder="alice"
                       autocomplete="off"
-                      pattern="[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?"
+                      pattern="[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])"
                       required
                     />
                   </div>
