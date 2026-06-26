@@ -1,11 +1,16 @@
 from __future__ import annotations
 
+import hashlib
+import hmac
 import json
 from pathlib import Path
+import secrets
 import tempfile
 from typing import Any
 
 from fastapi.testclient import TestClient
+
+import kb.server as server_module
 
 from kb.access import AccessStore
 from kb.config import CitadelConfig
@@ -2433,3 +2438,207 @@ def test_lifespan_rehydrates_mesh_from_source_state(tmp_path: Path) -> None:
     assert mesh.indexed_chunks == 0
     assert mesh.last_indexed_at == "2026-06-22T00:00:00Z"
     assert any(node["type"] == "source" for node in mesh.nodes.values())
+
+
+# --- GitHub PR-merge webhook (ADR-0005 step 3) -----------------------------
+
+
+class _WebhookSyncer:
+    """Tracks whether the heavy org re-ingest was actually awaited inline."""
+
+    def __init__(self) -> None:
+        self.ran = False
+
+    async def run(self, *, force: bool = False) -> dict[str, Any]:
+        self.ran = True
+        return {"ok": True, "force": force}
+
+
+def _webhook_citadel(secret: str, *, enabled: bool = True) -> FakeCitadel:
+    citadel = FakeCitadel()
+    # Instance attribute shadows the class-level config for this test only.
+    citadel.config = CitadelConfig(
+        tenant_id="test",
+        default_dataset="notes",
+        github_sync_dataset="masumi-network",
+        github_webhook_enabled=enabled,
+        github_webhook_secret=secret,
+    )
+    return citadel
+
+
+def _sign(secret: str, body: bytes) -> str:
+    digest = hmac.new(secret.encode("utf-8"), body, hashlib.sha256).hexdigest()
+    return f"sha256={digest}"
+
+
+def _setup_webhook(tmp_path: Path, secret: str, *, enabled: bool = True) -> _WebhookSyncer:
+    app.state.citadel = _webhook_citadel(secret, enabled=enabled)
+    app.state.mesh = MeshState()
+    syncer = _WebhookSyncer()
+    app.state.github_syncer = syncer
+    app.state.access_store = AccessStore(tmp_path / "access.json")
+    return syncer
+
+
+def _merge_payload() -> bytes:
+    return json.dumps(
+        {
+            "action": "closed",
+            "pull_request": {"merged": True, "number": 42},
+            "repository": {"full_name": "masumi-network/agent"},
+        }
+    ).encode("utf-8")
+
+
+def test_github_webhook_merged_pr_returns_202_nonblocking_and_audits(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    secret = secrets.token_hex(16)  # built at runtime; no committed secret literal.
+    syncer = _setup_webhook(tmp_path, secret)
+
+    # Capture the re-ingest at scheduling time without running the heavy sync, so
+    # the assertions are deterministic and prove the handler does not block on it.
+    triggered: list[Any] = []
+
+    def fake_reingest(passed: Any) -> Any:
+        triggered.append(passed)
+
+        async def _noop() -> None:
+            return None
+
+        return _noop()
+
+    monkeypatch.setattr(server_module, "_run_webhook_reingest", fake_reingest)
+
+    body = _merge_payload()
+    client = TestClient(app, base_url="https://testserver")
+    response = client.post(
+        "/api/webhooks/github",
+        content=body,
+        headers={
+            "X-GitHub-Event": "pull_request",
+            "X-Hub-Signature-256": _sign(secret, body),
+            "Content-Type": "application/json",
+        },
+    )
+
+    assert response.status_code == 202
+    # Non-blocking: the ~26min org sync is scheduled, never awaited in-request.
+    assert triggered == [syncer]
+    assert syncer.ran is False
+
+    events = app.state.access_store.snapshot()["audit_events"]
+    merge_events = [e for e in events if e["action"] == "github_webhook.merge"]
+    assert len(merge_events) == 1
+    assert merge_events[0]["success"] is True
+    assert merge_events[0]["detail"]["merged"] is True
+    assert merge_events[0]["detail"]["pr_number"] == 42
+    assert merge_events[0]["detail"]["repository"] == "masumi-network/agent"
+    assert merge_events[0]["detail"]["triggered"] == "github_sync"
+
+
+def test_github_webhook_invalid_signature_returns_401(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    secret = secrets.token_hex(16)
+    syncer = _setup_webhook(tmp_path, secret)
+    triggered: list[Any] = []
+    monkeypatch.setattr(
+        server_module, "_run_webhook_reingest", lambda s: triggered.append(s)
+    )
+
+    body = _merge_payload()
+    client = TestClient(app, base_url="https://testserver")
+    response = client.post(
+        "/api/webhooks/github",
+        content=body,
+        headers={
+            "X-GitHub-Event": "pull_request",
+            # Signature computed with the WRONG secret -> must be rejected.
+            "X-Hub-Signature-256": _sign(secrets.token_hex(16), body),
+        },
+    )
+
+    assert response.status_code == 401
+    assert triggered == []
+    assert syncer.ran is False
+    events = app.state.access_store.snapshot()["audit_events"]
+    assert [e for e in events if e["action"] == "github_webhook.merge"] == []
+
+
+def test_github_webhook_missing_signature_returns_401(tmp_path: Path) -> None:
+    secret = secrets.token_hex(16)
+    syncer = _setup_webhook(tmp_path, secret)
+
+    client = TestClient(app, base_url="https://testserver")
+    response = client.post(
+        "/api/webhooks/github",
+        content=_merge_payload(),
+        headers={"X-GitHub-Event": "pull_request"},
+    )
+
+    assert response.status_code == 401
+    assert syncer.ran is False
+
+
+def test_github_webhook_disabled_returns_404(tmp_path: Path) -> None:
+    secret = secrets.token_hex(16)
+    syncer = _setup_webhook(tmp_path, secret, enabled=False)
+
+    body = _merge_payload()
+    client = TestClient(app, base_url="https://testserver")
+    response = client.post(
+        "/api/webhooks/github",
+        content=body,
+        # Even a valid signature must 404 while the webhook is disabled.
+        headers={
+            "X-GitHub-Event": "pull_request",
+            "X-Hub-Signature-256": _sign(secret, body),
+        },
+    )
+
+    assert response.status_code == 404
+    assert syncer.ran is False
+
+
+def test_github_webhook_non_merge_close_returns_204(tmp_path: Path) -> None:
+    secret = secrets.token_hex(16)
+    syncer = _setup_webhook(tmp_path, secret)
+
+    body = json.dumps(
+        {"action": "closed", "pull_request": {"merged": False, "number": 7}}
+    ).encode("utf-8")
+    client = TestClient(app, base_url="https://testserver")
+    response = client.post(
+        "/api/webhooks/github",
+        content=body,
+        headers={
+            "X-GitHub-Event": "pull_request",
+            "X-Hub-Signature-256": _sign(secret, body),
+        },
+    )
+
+    assert response.status_code == 204
+    assert syncer.ran is False
+    events = app.state.access_store.snapshot()["audit_events"]
+    assert [e for e in events if e["action"] == "github_webhook.merge"] == []
+
+
+def test_github_webhook_other_event_returns_204(tmp_path: Path) -> None:
+    secret = secrets.token_hex(16)
+    syncer = _setup_webhook(tmp_path, secret)
+
+    body = json.dumps({"zen": "ping", "hook_id": 1}).encode("utf-8")
+    client = TestClient(app, base_url="https://testserver")
+    response = client.post(
+        "/api/webhooks/github",
+        content=body,
+        headers={
+            "X-GitHub-Event": "ping",
+            "X-Hub-Signature-256": _sign(secret, body),
+        },
+    )
+
+    assert response.status_code == 204
+    assert syncer.ran is False
