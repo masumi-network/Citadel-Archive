@@ -18,6 +18,7 @@ from typing import Any, Literal
 from kb.conflicts import KnowledgeConflictStore, detect_contribution_conflict
 from kb.llm_enrichment import EnrichedChunk, EnrichmentOutcome, enrich_source_material
 from kb.mesh import MeshState
+from kb.security_scan import SecretContentError, SecurityScanEntry, scan_text_entries
 from kb.models import IngestResult
 from kb.service import Citadel
 
@@ -95,6 +96,22 @@ class LearningProcess:
         ``tier="light"`` skips enrichment and improvement for seat-node memory.
         """
         target_dataset = dataset or self.config.default_dataset
+        # ADR-0005 step 1: scan the WHOLE document up front — before enrichment
+        # (so a secret never leaves to the external LLM) and before chunking (so a
+        # secret spanning a chunk boundary can't slip past the per-chunk gate in
+        # citadel.ingest, which stays as the universal backstop).
+        if self.config.content_scan_enabled:
+            scan = scan_text_entries(
+                [SecurityScanEntry(source="ingest", location=target_dataset, text=data)],
+                block_severity=self.config.content_scan_block_severity,
+            )
+            if scan.get("blocked"):
+                raise SecretContentError(
+                    dataset=target_dataset,
+                    highest_severity=scan.get("highest_severity"),
+                    block_severity=self.config.content_scan_block_severity,
+                    findings=scan.get("findings", []),
+                )
         if tier == "light":
             enrichment = None
             effective_run_improve = False

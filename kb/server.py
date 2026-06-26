@@ -45,6 +45,7 @@ from kb.mesh import MeshState
 from kb.models import FeedbackRequest
 from kb.obsidian_sync import ObsidianSyncStore, SyncPushDocument, normalize_path
 from kb.repo_content_sync import RepoContentSyncer
+from kb.security_scan import SecretContentError
 from kb.self_improve import SelfImprovement
 from kb.service import Citadel
 from kb.skills import skill_catalog, skill_integrity, skill_path
@@ -1957,6 +1958,20 @@ async def push_obsidian_sync(body: ObsidianPushBody, request: Request) -> Any:
                 operation="obsidian_sync",
                 detect_conflicts=False,
             )
+        except SecretContentError as exc:
+            get_access_store().record_event(
+                action="obsidian_sync",
+                actor=actor,
+                success=False,
+                dataset=document_targets[0].dataset,
+                detail={
+                    "operation": "obsidian_sync",
+                    "blocked": "secret_content",
+                    "highest_severity": exc.highest_severity,
+                    "finding_count": len(exc.findings),
+                },
+            )
+            raise HTTPException(status_code=422, detail=exc.public_message) from exc
         except Exception as exc:  # pragma: no cover - depends on runtime Cognee configuration.
             raise HTTPException(status_code=500, detail=str(exc)) from exc
         ingest_result = outcome.ingest
@@ -2376,6 +2391,31 @@ async def ingest(body: IngestBody, request: Request) -> Any:
             session_id=session_id,
             operation="ingest",
         )
+    except SecretContentError as exc:
+        get_access_store().record_event(
+            action="ingest",
+            actor=actor,
+            success=False,
+            dataset=primary_dataset,
+            detail={
+                "operation": "ingest",
+                "blocked": "secret_content",
+                "highest_severity": exc.highest_severity,
+                "finding_count": len(exc.findings),
+            },
+        )
+        record_mcp_audit(
+            request,
+            actor=actor,
+            success=False,
+            dataset=primary_dataset,
+            detail={
+                "operation": "ingest",
+                "blocked": "secret_content",
+                "highest_severity": exc.highest_severity,
+            },
+        )
+        raise HTTPException(status_code=422, detail=exc.public_message) from exc
     except Exception as exc:  # pragma: no cover - depends on runtime Cognee configuration.
         record_mcp_audit(
             request,
@@ -2456,6 +2496,31 @@ async def contribute(body: ContributeBody, request: Request) -> Any:
             operation="contribute",
             run_improve=citadel.config.contribute_run_improve,
         )
+    except SecretContentError as exc:
+        get_access_store().record_event(
+            action="contribute",
+            actor=actor,
+            success=False,
+            dataset=write_targets[0].dataset,
+            detail={
+                "operation": "contribute",
+                "blocked": "secret_content",
+                "highest_severity": exc.highest_severity,
+                "finding_count": len(exc.findings),
+            },
+        )
+        record_mcp_audit(
+            request,
+            actor=actor,
+            success=False,
+            dataset=write_targets[0].dataset,
+            detail={
+                "operation": "contribute",
+                "blocked": "secret_content",
+                "highest_severity": exc.highest_severity,
+            },
+        )
+        raise HTTPException(status_code=422, detail=exc.public_message) from exc
     except Exception as exc:  # pragma: no cover - depends on runtime Cognee configuration.
         get_access_store().record_event(
             action="contribute",

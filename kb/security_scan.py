@@ -107,6 +107,34 @@ BIDI_CONTROL_CODES = {
 }
 
 
+class SecretContentError(Exception):
+    """Raised when a write is blocked because content carries a blocking-severity secret.
+
+    Carries only redacted, safe metadata (severity + finding summaries) — never the raw
+    secret nor the original text — so any caller can surface the block without leaking
+    sensitive material.
+    """
+
+    def __init__(
+        self,
+        *,
+        dataset: str | None,
+        highest_severity: str | None,
+        block_severity: str,
+        findings: list[dict[str, str | None]],
+        message: str | None = None,
+    ) -> None:
+        self.dataset = dataset
+        self.highest_severity = highest_severity
+        self.block_severity = block_severity
+        self.findings = findings
+        self.public_message = message or (
+            "Content was blocked: it contains a secret or sensitive value "
+            f"(severity {highest_severity or block_severity}) and was not stored."
+        )
+        super().__init__(self.public_message)
+
+
 def redact_secrets(value: str, *known_secrets: str | None) -> str:
     """Mask secret-looking material so the text is safe for logs and errors."""
     redacted = value
