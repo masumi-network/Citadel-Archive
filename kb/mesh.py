@@ -5,7 +5,9 @@ from collections import deque
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from hashlib import sha1
+import json
 import logging
+from pathlib import Path
 from typing import Any
 
 from kb.config import CitadelConfig
@@ -40,6 +42,7 @@ class MeshState:
     pending_chunks: int = 0
     failed_chunks: int = 0
     last_indexed_at: str | None = None
+    _rehydrated: bool = False
     _lock: asyncio.Lock = field(default_factory=asyncio.Lock)
 
     def subscribe(self) -> asyncio.Queue[dict[str, Any]]:
@@ -49,6 +52,158 @@ class MeshState:
 
     def unsubscribe(self, queue: asyncio.Queue[dict[str, Any]]) -> None:
         self.subscribers.discard(queue)
+
+    async def rehydrate(
+        self,
+        config: CitadelConfig,
+        *,
+        sources: list[dict[str, Any]] | None = None,
+    ) -> None:
+        """Seed the snapshot's source graph projection + ``last_indexed_at`` from
+        persistent source state, once at startup.
+
+        A web-service restart drops the in-memory mesh, so the dashboard graph looks
+        wiped even though the persistent knowledge graph and source state survive.
+        Rehydrate re-projects lightweight source/repository nodes (keyed by id, so a
+        later live sync overwrites rather than duplicates) and seeds
+        ``last_indexed_at`` from the cheap source-state JSON files.
+
+        It deliberately does NOT seed the accumulating ``documents`` /
+        ``indexed_chunks`` counters: github and repo-content syncs already flow
+        through ``record_ingest`` (``documents += 1``), so seeding them would
+        double-count the same source data after the next sync.
+
+        Once-only (``_rehydrated`` guard) and best-effort: missing or unreadable
+        state files never raise, so a fresh deploy with no state seeds nothing and
+        startup proceeds.
+        """
+        async with self._lock:
+            if self._rehydrated:
+                return
+            self._rehydrated = True
+            try:
+                self._ensure_base_graph(config)
+                baselines = (
+                    sources if sources is not None else self._read_source_baselines(config)
+                )
+                latest_ts: str | None = None
+                for source in baselines:
+                    ts = source.get("last_indexed_at")
+                    if isinstance(ts, str) and ts and (latest_ts is None or ts > latest_ts):
+                        latest_ts = ts
+                    self._seed_source_nodes(config, source)
+                if self.last_indexed_at is None and latest_ts is not None:
+                    self.last_indexed_at = latest_ts
+            except Exception as exc:  # noqa: BLE001 - never block startup on rehydrate
+                logger.warning("Mesh rehydrate skipped: %s", exc)
+
+    def _read_state_json(self, path: str | None) -> dict[str, Any]:
+        if not path:
+            return {}
+        try:
+            data = json.loads(Path(path).read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return {}
+        return data if isinstance(data, dict) else {}
+
+    def _read_source_baselines(self, config: CitadelConfig) -> list[dict[str, Any]]:
+        """Cheap one-time reads of the persistent source-state JSON files.
+
+        Each baseline is ``{type, label, dataset, documents, last_indexed_at, repos}``.
+        Only sources with data are returned; all reads are best-effort.
+        """
+        baselines: list[dict[str, Any]] = []
+
+        github = self._read_state_json(config.github_sync_state_path)
+        repos = github.get("repos") if isinstance(github.get("repos"), dict) else {}
+        digest = github.get("last_digest")
+        if isinstance(digest, str) and digest.strip():
+            from kb.source_search import _digest_sections
+
+            github_docs = len(_digest_sections(digest))
+        else:
+            github_docs = len(repos)
+        if github_docs:
+            baselines.append(
+                {
+                    "type": "github",
+                    "label": f"GitHub / {github.get('org') or config.github_org}",
+                    "dataset": config.github_sync_dataset,
+                    "documents": github_docs,
+                    "last_indexed_at": github.get("last_checked_at"),
+                    "repos": list(repos.keys()),
+                }
+            )
+
+        repo = self._read_state_json(config.repo_content_sync_state_path)
+        files = repo.get("files") if isinstance(repo.get("files"), dict) else {}
+        if files:
+            baselines.append(
+                {
+                    "type": "repo_content",
+                    "label": f"Repo content / {config.github_org}",
+                    "dataset": config.repo_content_sync_dataset,
+                    "documents": len(files),
+                    "last_indexed_at": repo.get("last_checked_at"),
+                    "repos": [],
+                }
+            )
+
+        linear = self._read_state_json(config.linear_sync_state_path)
+        issues = linear.get("issues") if isinstance(linear.get("issues"), list) else []
+        if issues:
+            baselines.append(
+                {
+                    "type": "linear",
+                    "label": "Linear",
+                    "dataset": config.linear_sync_dataset,
+                    "documents": len(issues),
+                    "last_indexed_at": linear.get("last_synced_at"),
+                    "repos": [],
+                }
+            )
+
+        return baselines
+
+    def _seed_source_nodes(self, config: CitadelConfig, source: dict[str, Any]) -> None:
+        """Re-project lightweight source/dataset/repository nodes from persisted state.
+
+        Keeps the snapshot's graph 'records' projection non-empty after a restart. The
+        authoritative knowledge graph survives separately via /api/mesh/graph (Kuzu),
+        so this projection is intentionally decoupled from any cognee read.
+        """
+        dataset_id = self._dataset_node(source.get("dataset") or config.default_dataset)
+        source_id = stable_id(
+            "source", f"rehydrate:{source.get('type')}:{source.get('label')}"
+        )
+        self.nodes[source_id] = {
+            "id": source_id,
+            "label": source.get("label") or "Source",
+            "type": "source",
+            "status": "synced",
+            "size": 46,
+            "metadata": {
+                "source_type": source.get("type"),
+                "documents": source.get("documents"),
+                "last_indexed_at": source.get("last_indexed_at"),
+                "rehydrated": True,
+            },
+        }
+        self._edge(source_id, dataset_id, "updates")
+        for repo_name in (source.get("repos") or [])[:12]:
+            if not isinstance(repo_name, str) or not repo_name:
+                continue
+            repo_id = stable_id("repository", repo_name)
+            self.nodes[repo_id] = {
+                "id": repo_id,
+                "label": repo_name.split("/")[-1],
+                "type": "repository",
+                "status": "synced",
+                "size": 26,
+                "metadata": {"full_name": repo_name, "rehydrated": True},
+            }
+            self._edge(source_id, repo_id, "observed")
+            self._edge(repo_id, dataset_id, "summarized")
 
     async def snapshot(self, config: CitadelConfig) -> dict[str, Any]:
         async with self._lock:

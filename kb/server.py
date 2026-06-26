@@ -64,8 +64,18 @@ mcp_app = mcp_server.streamable_http_app()
 
 
 @asynccontextmanager
-async def lifespan(_: FastAPI) -> Any:
+async def lifespan(app: FastAPI) -> Any:
     async with mcp_server.session_manager.run():
+        # Eagerly build the mesh and seed its in-memory activity counters from
+        # persistent source state so a redeploy does not look like the graph reset.
+        # get_mesh() then returns this already-seeded instance. Best-effort: a failed
+        # rehydrate must never block startup.
+        mesh = MeshState()
+        app.state.mesh = mesh
+        try:
+            await mesh.rehydrate(get_citadel().config)
+        except Exception:
+            logger.exception("Mesh rehydrate failed; starting with empty counters")
         yield
 
 
