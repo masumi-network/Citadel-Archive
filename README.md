@@ -237,9 +237,10 @@ For OpenRouter, Cognee expects the custom provider form:
 ```bash
 LLM_PROVIDER=custom
 LLM_ENDPOINT=https://openrouter.ai/api/v1
-# Use a real model id. "openrouter/free" is NOT a valid id and silently breaks
-# every cognify call (OpenrouterException - Invalid URL). Prod uses gpt-4o-mini.
-LLM_MODEL=openrouter/openai/gpt-4o-mini
+# Use an openrouter/-prefixed model id. A bare/invalid id (e.g. "openrouter/free", or
+# "google/gemini-2.5-flash" missing the openrouter/ prefix) silently breaks every
+# cognify call (litellm: "LLM Provider NOT provided"). deepseek-v4-flash is the default.
+LLM_MODEL=openrouter/deepseek/deepseek-v4-flash
 LLM_API_KEY=sk-or-...
 ```
 
