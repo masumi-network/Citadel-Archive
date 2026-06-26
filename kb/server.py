@@ -59,6 +59,11 @@ logger = logging.getLogger(__name__)
 # the caller's ctdl_ bearer token. No clone, no local Python — agents point their
 # MCP client at https://<host>/mcp/ with Authorization: Bearer <token>.
 MCP_ENDPOINT_PATH = "/mcp/"
+
+# Strong refs to detached fire-and-forget tasks (e.g. the webhook re-ingest) so
+# the event loop does not garbage-collect them mid-flight.
+_BACKGROUND_TASKS: set[asyncio.Task[Any]] = set()
+
 mcp_server = create_mcp_server()
 mcp_app = mcp_server.streamable_http_app()
 
@@ -1791,6 +1796,110 @@ async def run_github_sync(body: GitHubSyncBody, request: Request) -> Any:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
     await mesh_state.record_github_sync(citadel.config, result)
     return jsonable_encoder(result)
+
+
+def verify_github_signature(secret: str, body: bytes, signature_header: str) -> bool:
+    """Constant-time check of GitHub's ``X-Hub-Signature-256`` over the raw body.
+
+    GitHub signs the request body with HMAC-SHA256 keyed by the shared webhook
+    secret and sends ``sha256=<hexdigest>``. A missing/empty/malformed header, an
+    empty secret, or any mismatch returns ``False``. The body is UNTRUSTED; this
+    runs before any parsing.
+    """
+    if not secret or not signature_header:
+        return False
+    prefix = "sha256="
+    if not signature_header.startswith(prefix):
+        return False
+    provided = signature_header[len(prefix):]
+    expected = hmac.new(secret.encode("utf-8"), body, hashlib.sha256).hexdigest()
+    return hmac.compare_digest(provided, expected)
+
+
+def webhook_identity(dataset: str) -> AccessIdentity:
+    """Synthetic service-account identity for auditing accepted webhook triggers."""
+    return AccessIdentity(
+        role="admin",
+        actor_id="github-webhook",
+        actor_kind="service_account",
+        actor_name="github-webhook",
+        source="env",
+        default_dataset=dataset,
+    )
+
+
+async def _run_webhook_reingest(syncer: GitHubOrgSyncer) -> None:
+    """Background org re-ingest kicked off by an accepted PR-merge webhook.
+
+    Fire-and-forget: the webhook returns 202 immediately (GitHub times out in
+    seconds; the full sync is ~26min) and this runs detached. Never raises.
+    """
+    try:
+        await syncer.run(force=True)
+    except Exception as exc:  # pragma: no cover - depends on GitHub + Cognee runtime.
+        logger.error(
+            "GitHub webhook re-ingest failed: %s: %s",
+            exc.__class__.__name__,
+            exc,
+        )
+
+
+@app.post("/api/webhooks/github")
+async def github_webhook(request: Request) -> Response:
+    """GitHub PR-merge webhook -> non-blocking org re-ingest (ADR-0005 step 3).
+
+    Gated off by default (``github_webhook_enabled`` -> 404 when disabled). The
+    raw body is verified against ``X-Hub-Signature-256`` BEFORE parsing and is
+    treated as untrusted. An invalid/missing signature -> 401. Only a closed,
+    merged ``pull_request`` event triggers work (returns 202); everything else
+    (ping, other events, non-merge closes) is acknowledged with 204 and no work.
+    """
+    config = get_citadel().config
+    if not config.github_webhook_enabled:
+        raise HTTPException(status_code=404, detail="Not found.")
+
+    body = await request.body()
+    signature = request.headers.get("X-Hub-Signature-256", "")
+    if not verify_github_signature(config.github_webhook_secret, body, signature):
+        raise HTTPException(status_code=401, detail="Invalid signature.")
+
+    event = request.headers.get("X-GitHub-Event", "")
+    if event != "pull_request":
+        return Response(status_code=204)
+
+    try:
+        payload = json.loads(body or b"{}")
+    except (json.JSONDecodeError, ValueError):
+        payload = {}
+    if not isinstance(payload, dict):
+        payload = {}
+
+    pull_request = payload.get("pull_request")
+    merged = isinstance(pull_request, dict) and pull_request.get("merged") is True
+    if payload.get("action") != "closed" or not merged:
+        return Response(status_code=204)
+
+    repository = payload.get("repository")
+    repo_full_name = repository.get("full_name") if isinstance(repository, dict) else None
+    task = asyncio.create_task(_run_webhook_reingest(get_github_syncer()))
+    _BACKGROUND_TASKS.add(task)
+    task.add_done_callback(_BACKGROUND_TASKS.discard)
+
+    get_access_store().record_event(
+        action="github_webhook.merge",
+        actor=webhook_identity(config.github_sync_dataset),
+        success=True,
+        dataset=config.github_sync_dataset,
+        detail={
+            "event": event,
+            "action": "closed",
+            "merged": True,
+            "pr_number": pull_request.get("number"),
+            "repository": repo_full_name,
+            "triggered": "github_sync",
+        },
+    )
+    return Response(status_code=202)
 
 
 @app.get("/api/linear-sync")

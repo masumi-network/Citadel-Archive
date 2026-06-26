@@ -234,3 +234,104 @@ def test_pipeline_mode_aliases_with_everything_disabled(monkeypatch: Any) -> Non
     assert run_railway.run("all") == 0
     assert run_railway.run("cron") == 0
     assert calls == []
+
+
+# --- Evolve run-mode (ADR-0005 step 3) -------------------------------------
+
+_EVOLVE_STAGE_ATTRS = [
+    ("github_sync", "_github_sync_stage"),
+    ("repo_content_sync", "_repo_content_sync_stage"),
+    ("self_improve", "_self_improve_stage"),
+    ("promotion", "_promotion_stage"),
+    ("cognify", "_cognify_stage"),
+]
+
+
+def _patch_evolve_stages(
+    monkeypatch: Any,
+    calls: list[str],
+    *,
+    fail_codes: dict[str, int] | None = None,
+    raise_stage: str | None = None,
+) -> None:
+    fail_codes = fail_codes or {}
+
+    def make_stage(stage_name: str) -> Any:
+        def stage() -> int:
+            calls.append(stage_name)
+            if stage_name == raise_stage:
+                raise RuntimeError(f"{stage_name} exploded")
+            return fail_codes.get(stage_name, 0)
+
+        return stage
+
+    for stage_name, attr in _EVOLVE_STAGE_ATTRS:
+        monkeypatch.setattr(run_railway, attr, make_stage(stage_name))
+
+
+def _clear_evolve_env(monkeypatch: Any) -> None:
+    for name in (
+        "CITADEL_EVOLVE_GITHUB_SYNC_ENABLED",
+        "CITADEL_EVOLVE_REPO_CONTENT_SYNC_ENABLED",
+        "CITADEL_EVOLVE_SELF_IMPROVE_ENABLED",
+        "CITADEL_EVOLVE_PROMOTION_ENABLED",
+        "CITADEL_EVOLVE_COGNIFY_ENABLED",
+    ):
+        monkeypatch.delenv(name, raising=False)
+
+
+def test_evolve_runs_all_stages_in_chain_order(monkeypatch: Any) -> None:
+    _clear_evolve_env(monkeypatch)
+    calls: list[str] = []
+    _patch_evolve_stages(monkeypatch, calls)
+
+    assert run_railway.run("evolve") == 0
+    assert calls == [
+        "github_sync",
+        "repo_content_sync",
+        "self_improve",
+        "promotion",
+        "cognify",
+    ]
+
+
+def test_evolve_stage_toggles_disable_individual_stages(monkeypatch: Any) -> None:
+    _clear_evolve_env(monkeypatch)
+    monkeypatch.setenv("CITADEL_EVOLVE_SELF_IMPROVE_ENABLED", "false")
+    monkeypatch.setenv("CITADEL_EVOLVE_PROMOTION_ENABLED", "false")
+    calls: list[str] = []
+    _patch_evolve_stages(monkeypatch, calls)
+
+    assert run_railway.run("evolve") == 0
+    assert calls == ["github_sync", "repo_content_sync", "cognify"]
+
+
+def test_evolve_continues_past_a_failed_stage(monkeypatch: Any) -> None:
+    _clear_evolve_env(monkeypatch)
+    calls: list[str] = []
+    _patch_evolve_stages(monkeypatch, calls, raise_stage="github_sync")
+
+    assert run_railway.run("evolve") == 0
+    assert calls == [
+        "github_sync",
+        "repo_content_sync",
+        "self_improve",
+        "promotion",
+        "cognify",
+    ]
+
+
+def test_evolve_exits_nonzero_only_when_all_enabled_stages_fail(monkeypatch: Any) -> None:
+    _clear_evolve_env(monkeypatch)
+    for name in (
+        "CITADEL_EVOLVE_REPO_CONTENT_SYNC_ENABLED",
+        "CITADEL_EVOLVE_SELF_IMPROVE_ENABLED",
+        "CITADEL_EVOLVE_PROMOTION_ENABLED",
+        "CITADEL_EVOLVE_COGNIFY_ENABLED",
+    ):
+        monkeypatch.setenv(name, "false")
+    calls: list[str] = []
+    _patch_evolve_stages(monkeypatch, calls, raise_stage="github_sync")
+
+    assert run_railway.run("evolve") == 1
+    assert calls == ["github_sync"]

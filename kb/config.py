@@ -174,9 +174,12 @@ class CitadelConfig:
     github_sync_repo_denylist: tuple[str, ...] = field(default_factory=tuple)
     github_sync_security_scan_enabled: bool = True
     github_sync_security_block_severity: str = "high"
+    github_webhook_enabled: bool = False
+    github_webhook_secret: str = ""
     content_scan_enabled: bool = True
     content_scan_block_severity: str = "high"
     promotion_enabled: bool = False
+    promotion_dry_run: bool = True
     promotion_relevance_threshold: float = 0.7
     promotion_max_items: int = 20
     github_token: str | None = None
@@ -300,6 +303,11 @@ class CitadelConfig:
                 "CITADEL_GITHUB_SYNC_SECURITY_BLOCK_SEVERITY",
                 "high",
             ),
+            github_webhook_enabled=_bool(
+                os.getenv("CITADEL_GITHUB_WEBHOOK_ENABLED"),
+                default=False,
+            ),
+            github_webhook_secret=os.getenv("CITADEL_GITHUB_WEBHOOK_SECRET", ""),
             content_scan_enabled=_bool(
                 os.getenv("CITADEL_CONTENT_SCAN_ENABLED"),
                 default=True,
@@ -311,6 +319,10 @@ class CitadelConfig:
             promotion_enabled=_bool(
                 os.getenv("CITADEL_PROMOTION_ENABLED"),
                 default=False,
+            ),
+            promotion_dry_run=_bool(
+                os.getenv("CITADEL_PROMOTION_DRY_RUN"),
+                default=True,
             ),
             promotion_relevance_threshold=_float(
                 os.getenv("CITADEL_PROMOTION_RELEVANCE_THRESHOLD"),

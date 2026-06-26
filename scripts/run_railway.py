@@ -15,6 +15,10 @@ Modes (via ``CITADEL_RUN_MODE``):
   mirror export. Each stage is toggleable via env, logs a per-stage summary
   line, and a failed stage never stops the stages after it. The process exits
   nonzero only when every enabled stage fails.
+- ``evolve``: the 6h self-evolving cycle (ADR-0005 step 3) — GitHub org sync,
+  repo-content sync, self-improvement, selective seat->Central promotion, and
+  cognify. Same per-stage ``CITADEL_EVOLVE_*`` toggles + fail-soft semantics as
+  ``pipeline``; the 6h cadence is an operator Railway-cron step, not code.
 - ``linear-sync``: sync the Linear workspace to Central and mirror assignee
   issues into seat Nodes (requires ``CITADEL_LINEAR_API_KEY``).
 """
@@ -120,6 +124,75 @@ def _cognify_mode(*, verify: bool) -> int:
     return 0
 
 
+def _cognify_stage() -> int:
+    return _cognify_mode(verify=False)
+
+
+def _promotion_stage() -> int:
+    """Selective seat-node -> Central promotion across every seat (ADR-0005 step 3).
+
+    Reuses :class:`kb.promotion.PromotionEngine`, honoring its opt-in
+    (``CITADEL_PROMOTION_ENABLED``) and dry-run (``CITADEL_PROMOTION_DRY_RUN``,
+    default on) config. Each seat node is promoted independently; a failure on one
+    seat never aborts the others, and the stage only fails when EVERY seat raised.
+    """
+    from kb.access import AccessStore, is_seat_dataset
+    from kb.learning import LearningProcess
+    from kb.promotion import PromotionEngine
+    from kb.service import Citadel
+
+    citadel = Citadel.from_env()
+    config = citadel.config
+    if not config.promotion_enabled:
+        logger.info("Promotion stage skipped: disabled via CITADEL_PROMOTION_ENABLED")
+        return 0
+
+    access_store = AccessStore(config.access_store_path)
+    seats = sorted(
+        {
+            principal.get("default_dataset")
+            for principal in access_store.snapshot()["principals"]
+            if principal.get("seat_slug") and is_seat_dataset(principal.get("default_dataset"))
+        }
+    )
+    if not seats:
+        logger.info("Promotion stage: no seat nodes to promote from")
+        return 0
+
+    engine = PromotionEngine(citadel, LearningProcess(citadel), access_store, config)
+
+    async def _run() -> tuple[int, int]:
+        promoted = 0
+        failures = 0
+        for seat in seats:
+            try:
+                result = await engine.run(seat, dry_run=config.promotion_dry_run)
+            except Exception as exc:
+                logger.error(
+                    "Promotion failed for %s: %s: %s",
+                    seat,
+                    exc.__class__.__name__,
+                    exc,
+                )
+                failures += 1
+                continue
+            promoted += result.get("promoted") or 0
+        return promoted, failures
+
+    promoted, failures = asyncio.run(_run())
+    logger.info(
+        "Promotion stage finished: seats=%s promoted=%s failures=%s dry_run=%s",
+        len(seats),
+        promoted,
+        failures,
+        config.promotion_dry_run,
+    )
+    # One flaky seat must not fail the stage; only a total wipeout counts as failure.
+    if failures and failures == len(seats):
+        return 1
+    return 0
+
+
 def pipeline_stages() -> list[tuple[str, bool, Callable[[], int]]]:
     """(name, enabled, runner) for every pipeline stage, in execution order."""
     return [
@@ -151,11 +224,49 @@ def pipeline_stages() -> list[tuple[str, bool, Callable[[], int]]]:
     ]
 
 
-def run_pipeline() -> int:
+def evolve_stages() -> list[tuple[str, bool, Callable[[], int]]]:
+    """(name, enabled, runner) for the 6h evolve cron, in execution order.
+
+    Mirrors :func:`pipeline_stages` (per-stage env toggles) but chains the
+    self-evolving cycle: github sync -> repo-content sync -> self-improve ->
+    promotion -> cognify. The 6h cadence is an operator Railway-cron step, not
+    code. Each stage carries its own ``CITADEL_EVOLVE_*`` toggle so an operator
+    can disable any link without touching the others.
+    """
+    return [
+        (
+            "github_sync",
+            _bool(os.getenv("CITADEL_EVOLVE_GITHUB_SYNC_ENABLED"), default=True),
+            _github_sync_stage,
+        ),
+        (
+            "repo_content_sync",
+            _bool(os.getenv("CITADEL_EVOLVE_REPO_CONTENT_SYNC_ENABLED"), default=True),
+            _repo_content_sync_stage,
+        ),
+        (
+            "self_improve",
+            _bool(os.getenv("CITADEL_EVOLVE_SELF_IMPROVE_ENABLED"), default=True),
+            _self_improve_stage,
+        ),
+        (
+            "promotion",
+            _bool(os.getenv("CITADEL_EVOLVE_PROMOTION_ENABLED"), default=True),
+            _promotion_stage,
+        ),
+        (
+            "cognify",
+            _bool(os.getenv("CITADEL_EVOLVE_COGNIFY_ENABLED"), default=True),
+            _cognify_stage,
+        ),
+    ]
+
+
+def _run_stages(stages: list[tuple[str, bool, Callable[[], int]]], *, label: str) -> int:
     """Run every enabled stage; continue past failures.
 
     Exit code is nonzero only when all enabled stages fail, so one flaky
-    source never blocks the rest of the scheduled learning work.
+    source never blocks the rest of the scheduled work.
     """
     if not logging.getLogger().handlers:
         logging.basicConfig(
@@ -167,17 +278,18 @@ def run_pipeline() -> int:
     succeeded: list[str] = []
     failed: list[str] = []
     skipped: list[str] = []
-    for name, enabled, runner in pipeline_stages():
+    for name, enabled, runner in stages:
         if not enabled:
             skipped.append(name)
-            logger.info("Pipeline stage %s: skipped (disabled via env)", name)
+            logger.info("%s stage %s: skipped (disabled via env)", label, name)
             continue
-        logger.info("Pipeline stage %s: starting", name)
+        logger.info("%s stage %s: starting", label, name)
         try:
             code = runner()
         except Exception as exc:
             logger.error(
-                "Pipeline stage %s: FAILED with %s: %s",
+                "%s stage %s: FAILED with %s: %s",
+                label,
                 name,
                 exc.__class__.__name__,
                 exc,
@@ -186,13 +298,14 @@ def run_pipeline() -> int:
             continue
         if code == 0:
             succeeded.append(name)
-            logger.info("Pipeline stage %s: ok", name)
+            logger.info("%s stage %s: ok", label, name)
         else:
             failed.append(name)
-            logger.error("Pipeline stage %s: FAILED with exit code %s", name, code)
+            logger.error("%s stage %s: FAILED with exit code %s", label, name, code)
 
     logger.info(
-        "Pipeline finished: succeeded=%s failed=%s skipped=%s",
+        "%s finished: succeeded=%s failed=%s skipped=%s",
+        label,
         ",".join(succeeded) or "none",
         ",".join(failed) or "none",
         ",".join(skipped) or "none",
@@ -200,6 +313,14 @@ def run_pipeline() -> int:
     if failed and not succeeded:
         return 1
     return 0
+
+
+def run_pipeline() -> int:
+    return _run_stages(pipeline_stages(), label="Pipeline")
+
+
+def run_evolve() -> int:
+    return _run_stages(evolve_stages(), label="Evolve")
 
 
 def run(mode: str | None = None) -> int:
@@ -219,6 +340,8 @@ def run(mode: str | None = None) -> int:
         return _cognify_mode(verify=resolved_mode == "cognify-verify")
     if resolved_mode in {"pipeline", "all", "cron"}:
         return run_pipeline()
+    if resolved_mode == "evolve":
+        return run_evolve()
     if resolved_mode == "linear-sync":
         from kb.access import AccessStore
         from kb.linear_sync import LinearSyncer
