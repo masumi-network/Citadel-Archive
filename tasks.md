@@ -324,6 +324,14 @@ pending: Linear read-only key, `linear-sync` cron, Central cognify verify, per-d
 
 ## Backlog (after Phase 2 ships)
 
+- **Better admin panel for access / tokens / keys / seats** (user request
+  2026-06-26): turn the Access page into a complete admin console — create +
+  revoke API tokens and bootstrap keys, full **seat lifecycle** (provision /
+  view / revoke / rotate), and clear per-principal management. Basic
+  create/list/revoke exists today (`kb/access.py`, `/api/access`,
+  `/api/access/tokens`, `/api/access/seats`, Access page); this is the UX +
+  completeness pass (rotation, key management, disable-principal). Ties into the
+  UI-minimalization track (Access absorbs Agents + Audit into one admin home).
 - Create the Railway `backup-mirror` cron service after deciding whether the
   first scheduled runs should stay dry-run or write local manifests.
 - Multi-dataset search (own node + Central in one query).
