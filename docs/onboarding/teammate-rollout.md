@@ -81,6 +81,35 @@ skills/citadel-proactive-ingest/scripts/install_autosync.sh
 Works for Cursor, Codex, and Claude — git hooks are IDE-agnostic. Installs
 `.git/hooks/pre-push` and prints SessionEnd instructions for Claude Code.
 
+### 5 · (Optional) Approved Capture Roots
+
+By default the push hook captures from **every** repo you push. To scope capture
+to specific folders instead, declare **Approved Capture Roots** once:
+
+```bash
+# Interactive wizard — pick folders + Capture Root Tags, writes ~/.citadel/capture.json
+citadel setup
+
+# Or non-interactive:
+citadel setup --root "$HOME/work/our-repo=org-work" --root "$HOME/notes=personal"
+```
+
+Each root is tagged: `personal` (never promoted to Central) or `org-work`
+(eligible for Promotion Agent review). The seat token stays in your environment
+— it is never written to `capture.json`.
+
+Once the config exists, the push hook **only** captures pushes from inside an
+Approved Capture Root; pushes from other repos are skipped with a warning. You
+can also capture on demand:
+
+```bash
+citadel capture --dry-run   # preview the per-root summaries
+citadel capture             # POST summaries to your Node
+```
+
+`citadel capture` sends a compact summary (git metadata + README blurb), never a
+raw file dump.
+
 ---
 
 ## Verify (30 seconds)
@@ -111,6 +140,8 @@ auth error, your token isn't in the environment of the client that's running
   down or the token is missing, your session close and your push still succeed.
 - **Always personal.** Auto-sync sends no `dataset`, so it lands in your private
   node. To share org-wide, ingest mid-session with an `org-ready` tag.
+- **Allowlist-aware (opt-in).** If you ran `citadel setup`, the push hook only
+  captures from Approved Capture Roots; without it, every repo is captured.
 - **No raw content.** Hooks capture metadata + a distilled recap, never raw
   transcripts or diffs.
 

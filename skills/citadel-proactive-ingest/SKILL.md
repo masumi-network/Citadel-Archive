@@ -154,6 +154,29 @@ Same `CITADEL_MCP_ACCESS_TOKEN` as SessionEnd and MCP. Works in Cursor, Codex,
 and Claude — any tool that uses git. This is the **only required dev-side sync
 step** for non-Claude IDEs.
 
+### Approved Capture Roots (opt-in allowlist)
+
+By default the push hook captures from every repo. To scope capture to chosen
+folders, run the setup wizard once — it writes `~/.citadel/capture.json`:
+
+```bash
+citadel setup                                   # interactive
+citadel setup --root "$HOME/work/repo=org-work" # or non-interactive
+```
+
+Each root carries **Capture Root Tags**: `personal` (never promoted to Central)
+or `org-work` (eligible for Promotion Agent review). The token is **not** stored
+in the file — it stays in the environment.
+
+Once the config exists, `sync_push.py` only captures pushes from inside an
+Approved Capture Root (others are skipped with a warning), and the matched
+root's tags ride along on the snapshot. Capture on demand with:
+
+```bash
+citadel capture --dry-run   # preview per-root summaries
+citadel capture             # POST git-metadata + README summaries to your Node
+```
+
 ## Layer 4 — Server-side Railway cron (org-wide)
 
 Background jobs on Railway keep **Central** and **Seat-Scoped Mirrors** fresh.

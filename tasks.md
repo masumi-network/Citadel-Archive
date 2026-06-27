@@ -11,7 +11,7 @@
 - [x] P2 MCP seat write guards + secret scan extensions (local, pending deploy)
 - [x] **P1 Seat write policy on all HTTP paths** (2026-06-27)
 - [x] P3 Server capture policy API + admin baseline (2026-06-27)
-- [ ] P4 `citadel setup` + `citadel capture` + local allowlist
+- [x] P4 `citadel setup` + `citadel capture` + local allowlist (2026-06-27)
 - [ ] P5 Promotion Agent (GitHub + Central refs, tags, 6h + on demand)
 - [ ] P6 Promotion Approval queue (dashboard + MCP, admin delegate + audit)
 
@@ -29,12 +29,12 @@
 - [x] `merged_deny_globs` merges env excludes + org defaults + seat baseline
 - [x] Settings + Access UI snippets for admin view/edit
 
-### P4 — Capture CLI (in progress)
+### P4 — Capture CLI ✅ (2026-06-27)
 
 - [x] 4.1 `citadel setup` wizard → `~/.citadel/capture.json` (roots + Capture Root Tags) (2026-06-27)
 - [x] 4.2 `citadel capture` — summarize approved roots, POST to **Node** (2026-06-27)
 - [x] 4.3 Git pre-push hook gates on local allowlist (skip + warn outside roots) (2026-06-27)
-- [ ] 4.4 Docs: teammate-rollout + connect skill
+- [x] 4.4 Docs: teammate-rollout step 5 + proactive-ingest skill (2026-06-27)
 - [x] Unit + API tests
 
 ---

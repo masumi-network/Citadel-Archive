@@ -21,10 +21,10 @@ approval; secrets blocked everywhere.
 | P1 Seat write policy (all channels) | 20% | **Done** | 20% |
 | P2 MCP security hardening (partial) | 10% | **Done** (local) | 10% |
 | P3 Capture policy server API + admin baseline | 15% | **Done** | 15% |
-| P4 Setup CLI + `citadel capture` + local roots | 20% | Pending | 0% |
+| P4 Setup CLI + `citadel capture` + local roots | 20% | **Done** | 20% |
 | P5 Promotion Agent (refs + tags + cron) | 20% | Pending | 0% |
 | P6 Promotion Approval UI + MCP tool | 10% | Pending | 0% |
-| **Total** | **100%** | | **~50%** |
+| **Total** | **100%** | | **~70%** |
 
 ## P1 — Seat write policy (all channels)
 
@@ -55,7 +55,7 @@ Enforce **Seat Node Write Policy** on HTTP and MCP — not MCP-only.
 | 4.1 | `citadel setup` wizard — pick roots + **Capture Root Tags** ✅ | Writes `~/.citadel/capture.json` |
 | 4.2 | `citadel capture` — scan approved roots, POST summaries to **Node** ✅ | Manual E2E |
 | 4.3 | Git hook checks root is in local allowlist ✅ | Push outside list → skip or warn |
-| 4.4 | Docs: teammate-rollout + connect skill | — |
+| 4.4 | Docs: teammate-rollout + connect skill ✅ | — |
 
 ## P5 — Promotion Agent
 

@@ -16,7 +16,23 @@ Last updated: 2026-06-27.
 - **ADR-0007** accepted; ADR-0003 partially superseded (seat org-tag → Central removed).
 - **Code (local, partial):** MCP seat write guards, extended secret scan (`ctdl_`,
   DB URLs), skill/MCP doc updates. **384 tests** passing before P1 HTTP parity.
-- **Next:** P4 `citadel setup` + `citadel capture`.
+- **Next:** P5 Promotion Agent (GitHub + Central refs, tag rules, 6h cron).
+
+### P4 shipped (same session) — capture CLI
+
+- **`citadel setup`** — wizard (interactive + non-interactive `--root PATH[=tags]`)
+  writes `~/.citadel/capture.json`: Node URL + Approved Capture Roots with
+  **Capture Root Tags** (`personal` never promotes, `org-work` eligible). Seat
+  token stays in env, never in the file. (`kb/capture_config.py`)
+- **`citadel capture`** — summarizes each approved root (git metadata + README
+  blurb, not raw files) and POSTs to the Node `/ingest`; `--dry-run`, `--root`,
+  `--config`. (`kb/capture.py`)
+- **Pre-push hook allowlist gate** — `sync_push.py` now only captures pushes
+  from inside an Approved Capture Root once a config exists (skip + warn
+  otherwise; back-compat always-on when no config). Matched root's tags ride
+  along. Stdlib-only contract kept.
+- Docs: teammate-rollout step 5 + proactive-ingest skill section.
+- **416 tests** passing, ruff clean.
 
 ### P3 shipped (same session)
 
