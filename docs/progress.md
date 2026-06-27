@@ -32,7 +32,13 @@ Last updated: 2026-06-27.
   otherwise; back-compat always-on when no config). Matched root's tags ride
   along. Stdlib-only contract kept.
 - Docs: teammate-rollout step 5 + proactive-ingest skill section.
-- **416 tests** passing, ruff clean.
+- **Production-hardening pass** (adversarial multi-agent audit, 47 confirmed
+  findings): `post_capture` HTTPS-only + no-redirect + size cap (token-leak /
+  unbounded-payload fixes, parity with `sync_push.post_ingest`); `citadel
+  capture` catches node-down errors + returns real exit codes; allowlist gate
+  **fails closed** on corrupt config (was fail-open) and matches symlinks via
+  realpath; dropped admin-key token fallback; removed dead `find_root_for_path`.
+- **435 tests** passing, ruff clean.
 
 ### P3 shipped (same session)
 

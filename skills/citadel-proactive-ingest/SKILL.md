@@ -170,12 +170,21 @@ in the file — it stays in the environment.
 
 Once the config exists, `sync_push.py` only captures pushes from inside an
 Approved Capture Root (others are skipped with a warning), and the matched
-root's tags ride along on the snapshot. Capture on demand with:
+root's tags ride along on the snapshot. A missing/empty/corrupt config **fails
+closed** (captures nothing) — it never silently re-enables global capture.
+Capture on demand with:
 
 ```bash
-citadel capture --dry-run   # preview per-root summaries
+citadel capture --dry-run   # preview per-root summaries (no network)
 citadel capture             # POST git-metadata + README summaries to your Node
 ```
+
+Hardening notes: the Node URL must be **HTTPS** (`citadel capture` refuses
+`http://` before sending the token, and never follows redirects). Summaries are
+size-capped (`CITADEL_MCP_MAX_INGEST_BYTES`, default 200000) and git-remote
+credentials are redacted. `citadel capture` exits **non-zero** on any failure
+(corrupt config, no matching root, missing token, or a per-root POST error), so
+it is safe to gate CI on.
 
 ## Layer 4 — Server-side Railway cron (org-wide)
 

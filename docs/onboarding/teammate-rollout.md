@@ -99,16 +99,19 @@ Each root is tagged: `personal` (never promoted to Central) or `org-work`
 — it is never written to `capture.json`.
 
 Once the config exists, the push hook **only** captures pushes from inside an
-Approved Capture Root; pushes from other repos are skipped with a warning. You
-can also capture on demand:
+Approved Capture Root; pushes from other repos are skipped with a warning. A
+corrupt or empty config fails closed (captures nothing) — it never re-enables
+global capture. You can also capture on demand:
 
 ```bash
-citadel capture --dry-run   # preview the per-root summaries
+citadel capture --dry-run   # preview the per-root summaries (no network)
 citadel capture             # POST summaries to your Node
 ```
 
 `citadel capture` sends a compact summary (git metadata + README blurb), never a
-raw file dump.
+raw file dump. The Node URL must be **HTTPS** (it refuses `http://` before the
+token is sent), and the command exits **non-zero** on any failure — safe to use
+in scripts/CI.
 
 ---
 
