@@ -55,6 +55,14 @@ citadel onboard                       # token + hooks + MCP + capture roots (ide
 citadel status                        # connection · identity · local setup  (--json for agents)
 ```
 
+> **No Python yet?** The bootstrap installer checks for Python 3.10+, **asks
+> before installing it** if it's missing, then sets up pipx + the CLI:
+> ```bash
+> curl -fsSL https://raw.githubusercontent.com/masumi-network/Citadel-Archive/main/install.sh | sh
+> ```
+> (`citadel` is a Python tool; pipx keeps its interpreter isolated so you don't
+> manage Python yourself. Add `-s -- -y` to skip prompts, `--dry-run` to preview.)
+
 ```
   ▙ ▟ ▙ ▟ ▙ ▟ ▙ ▟
   ███████████████   CITADEL
