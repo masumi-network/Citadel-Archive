@@ -290,8 +290,8 @@ Summary:
    `citadel_discovery`, then `citadel_session`. If both work, try a small
    `citadel_search`.
 7. **Debug.** If the server fails: run `uv sync --dev` in the repo, check the token is present, check the URL is reachable. Do not print the token.
-8. **Autonomous capture.** For personal **Node** sync, run
-   `skills/citadel-proactive-ingest/scripts/install_autosync.sh` once per clone.
+8. **Autonomous capture.** For personal **Node** sync, run `citadel onboard`
+   once per clone (idempotent — installs the git pre-push hook and SessionEnd hook).
    Onboarding: [`docs/onboarding/teammate-rollout.md`](docs/onboarding/teammate-rollout.md).
 
 ## Autonomous Sync (Phase 2)
@@ -302,8 +302,8 @@ Background capture requires **no per-session dev steps** after one-time setup.
 
 | Layer | Trigger | Install |
 |---|---|---|
-| Git pre-push hook | every `git push` | `install_autosync.sh` (universal — Cursor, Codex, Claude) |
-| SessionEnd hook | Claude Code session close | `templates/claude-settings.json` → `.claude/settings.json` |
+| Git pre-push hook | every `git push` | `citadel onboard` (universal — Cursor, Codex, Claude); runs `python -m kb.hooks.sync_push` |
+| SessionEnd hook | Claude Code session close | `citadel onboard` → `.claude/settings.json`; runs `python -m kb.hooks.sync_session` |
 
 Both hooks use `CITADEL_MCP_ACCESS_TOKEN`, send no `dataset` field (routes to
 `seat:{slug}`), and **fail silently** — never block push or session close.

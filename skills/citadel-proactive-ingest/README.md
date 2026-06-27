@@ -9,24 +9,35 @@ private Citadel node (`seat:{slug}`). One-time token setup per dev.
 | Path | Purpose |
 |---|---|
 | `SKILL.md` | Agent behavior + auto-sync docs |
-| `scripts/sync_session.py` | SessionEnd distill + POST (stdlib only) |
-| `scripts/sync_push.py` | Git pre-push commit snapshot + POST (stdlib only) |
-| `scripts/install_autosync.sh` | One-liner: installs pre-push hook + prints setup steps |
-| `templates/claude-settings.json` | Drop-in `.claude/settings.json` SessionEnd hook |
-| `templates/git-pre-push.sh` | Installable `.git/hooks/pre-push` for push sync |
 | `README.md` | This file |
 
-## 1. Add the skill to the repo
+The auto-sync hooks ship in the installed `citadel-archive` package, not in this
+skill directory:
 
-Vendor this skill directory into the repo (or reference it from a shared skills
-path) so that `skills/citadel-proactive-ingest/scripts/sync_session.py` exists
-relative to the project root. The hook command resolves it via
-`$CLAUDE_PROJECT_DIR`.
+| Module | Purpose |
+|---|---|
+| `kb.hooks.sync_session` | SessionEnd distill + POST (stdlib only) |
+| `kb.hooks.sync_push` | Git pre-push commit snapshot + POST (stdlib only) |
+| `citadel onboard` | Idempotent install: token → shell rc, git pre-push hook, SessionEnd hook, MCP server, capture roots |
 
-## 2. Copy the hook into `.claude/settings.json`
+## 1. Install the package and onboard
 
-Merge `templates/claude-settings.json` into the repo's `.claude/settings.json`
-(create the file if absent). The hook block:
+Install the `citadel-archive` package, then run `citadel onboard` from the repo
+root. It is idempotent and self-contained — it writes the token export to your
+shell rc, a `.git/hooks/pre-push` that runs `python -m kb.hooks.sync_push`, a
+`.claude/settings.json` SessionEnd hook that runs `python -m kb.hooks.sync_session`,
+the MCP server (`.mcp.json`), and the capture roots. No vendored skill directory
+is needed.
+
+```bash
+pipx install citadel-archive   # lightweight `citadel` CLI (extras: [tui], [server])
+citadel onboard                # idempotent — safe to re-run
+```
+
+## 2. The SessionEnd hook `citadel onboard` writes
+
+`citadel onboard` writes this block into the repo's `.claude/settings.json`
+(creating the file if absent):
 
 ```jsonc
 {
@@ -39,8 +50,8 @@ Merge `templates/claude-settings.json` into the repo's `.claude/settings.json`
         "hooks": [
           {
             "type": "command",
-            // Skill-relative path; $CLAUDE_PROJECT_DIR is the repo root.
-            "command": "python3 \"$CLAUDE_PROJECT_DIR/skills/citadel-proactive-ingest/scripts/sync_session.py\"",
+            // Bundled in the installed package; "<python>" is the resolved interpreter.
+            "command": "\"<python>\" -m kb.hooks.sync_session",
             "timeout": 20,
             // Only this var is exposed to the hook process — the seat token.
             "allowedEnvVars": ["CITADEL_MCP_ACCESS_TOKEN"]
@@ -79,21 +90,16 @@ production URL). It must be `https://`.
 
 ## 4. Git push hook (universal — Cursor, Codex, Claude)
 
-Install once per clone so every **push** snapshots commit metadata to your
-private **Node**:
+`citadel onboard` (step 1) already installs this once per clone so every **push**
+snapshots commit metadata to your private **Node**. To install it by hand, write
+a `.git/hooks/pre-push` that runs the bundled module:
 
 ```bash
-skills/citadel-proactive-ingest/scripts/install_autosync.sh
-```
-
-Or manually:
-
-```bash
-cp skills/citadel-proactive-ingest/templates/git-pre-push.sh .git/hooks/pre-push
+printf '#!/bin/sh\nexec "%s" -m kb.hooks.sync_push\n' "$(command -v python3)" > .git/hooks/pre-push
 chmod +x .git/hooks/pre-push
 ```
 
-The hook runs `scripts/sync_push.py` on pre-push. It captures commit hash,
+The hook runs `kb.hooks.sync_push` on pre-push. It captures commit hash,
 message, author, branch, and changed file paths (not raw diffs). Same token,
 same personal-by-default routing — **no `dataset` field**. Always exits 0; never
 blocks push.

@@ -161,7 +161,8 @@ no per-capture dev steps:
 | Railway `learning-agent` cron | daily schedule | **Central** | read via `citadel_search` |
 | Railway `linear-sync` cron | scheduled | **Central** + **Seat-Scoped Mirror** | `citadel_linear_my_issues`, `citadel_linear_search` |
 
-Install dev-side hooks once: `skills/citadel-proactive-ingest/scripts/install_autosync.sh`.
+Install dev-side hooks once: `citadel onboard` (writes the git pre-push and
+SessionEnd hooks that run `python -m kb.hooks.sync_push` / `python -m kb.hooks.sync_session`).
 Onboarding: [`docs/onboarding/teammate-rollout.md`](../../docs/onboarding/teammate-rollout.md).
 
 ## Token Safety

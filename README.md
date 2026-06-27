@@ -37,7 +37,7 @@ Remaining: Railway Linear key + `linear-sync` cron + per-dev hook install.
 | **Linear → Central** | Workspace digest to `masumi-network`; your assigned issues **mirrored** to your **Node** |
 | **Linear MCP** | `citadel_linear_my_issues` (tasks), `citadel_linear_search` (org-wide) |
 | **Unified graph** | One org canvas — seat **Nodes** + **Central** together; depth slider + hub spokes |
-| **One-liner install** | `skills/citadel-proactive-ingest/scripts/install_autosync.sh` |
+| **One-liner install** | `citadel onboard` (git pre-push + SessionEnd hooks via `python -m kb.hooks.*`) |
 
 Dev onboarding: [`docs/onboarding/citadel-autosync.md`](docs/onboarding/citadel-autosync.md).
 Teammate rollout: [`docs/onboarding/teammate-rollout.md`](docs/onboarding/teammate-rollout.md).
@@ -157,7 +157,7 @@ The two easiest ways to read and write vault knowledge. For autonomous backgroun
 capture (git push → your **Node**, optional SessionEnd), run once per clone:
 
 ```bash
-skills/citadel-proactive-ingest/scripts/install_autosync.sh
+citadel onboard   # installs git pre-push + SessionEnd hooks (python -m kb.hooks.*)
 ```
 
 See [`docs/onboarding/teammate-rollout.md`](docs/onboarding/teammate-rollout.md) (5-minute

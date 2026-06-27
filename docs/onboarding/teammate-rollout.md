@@ -29,8 +29,7 @@ it like a password.
 
 ## Teammate — fast path (one command)
 
-Install the CLI, then run onboard from a repo that has
-`skills/citadel-proactive-ingest/` vendored:
+Install the CLI, then run onboard from the repo:
 
 ```bash
 pipx install citadel-archive     # the `citadel` command (lightweight client)
@@ -86,19 +85,21 @@ distill-and-save once per `SessionEnd`:
 ```bash
 # From the repo root
 mkdir -p .claude
-cp skills/citadel-proactive-ingest/templates/claude-settings.json .claude/settings.json
+# `citadel onboard` writes this for you; to do it by hand, add a SessionEnd
+# hook to .claude/settings.json that runs: "<python>" -m kb.hooks.sync_session
 ```
 
-The template wires a `SessionEnd` hook → `sync_session.py` with a 20s timeout.
+The hook wires a `SessionEnd` hook → `kb.hooks.sync_session` with a 20s timeout.
 
 ### 4 · Git push hook (auto-sync on every push — all IDEs)
 
 ```bash
-skills/citadel-proactive-ingest/scripts/install_autosync.sh
+citadel onboard
 ```
 
-Works for Cursor, Codex, and Claude — git hooks are IDE-agnostic. Installs
-`.git/hooks/pre-push` and prints SessionEnd instructions for Claude Code.
+Works for Cursor, Codex, and Claude — git hooks are IDE-agnostic. Installs a
+self-contained `.git/hooks/pre-push` that runs `"<python>" -m kb.hooks.sync_push`,
+and wires the SessionEnd hook for Claude Code.
 
 ### 5 · (Optional) Approved Capture Roots
 
@@ -182,7 +183,7 @@ auth error, your token isn't in the environment of the client that's running
 |---|---|
 | `citadel_search` auth error | Restart the MCP client so it re-reads `CITADEL_MCP_ACCESS_TOKEN`. |
 | Nothing lands in my node after a session | Confirm `.claude/settings.json` exists and the token env var is exported in the shell that *launched* Claude Code (not a later shell). |
-| Push still works but no node entry | Re-run `install_autosync.sh` from the repo root (needs `skills/citadel-proactive-ingest/` vendored). |
+| Push still works but no node entry | Re-run `citadel onboard` from the repo root to reinstall the `.git/hooks/pre-push` hook. |
 | Token leaked in chat/logs | Ask the admin to **revoke + re-mint** (Access page → revoke). Old captures stay. |
 
 ---

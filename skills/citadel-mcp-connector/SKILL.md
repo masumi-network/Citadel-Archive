@@ -168,7 +168,8 @@ Production smoke status, last verified 2026-06-02 at commit `7a4a1d9`:
   (reads the **Seat-Scoped Mirror** from the latest Linear cron sync).
 - Follow the **citadel-vault** skill for read/write/admin rules.
 - For autonomous personal capture (git push + optional SessionEnd), point the user
-  to `skills/citadel-proactive-ingest/scripts/install_autosync.sh` or
+  to `citadel onboard` (installs the git pre-push and SessionEnd hooks that run
+  `python -m kb.hooks.sync_push` / `python -m kb.hooks.sync_session`) or
   [`docs/onboarding/teammate-rollout.md`](../../docs/onboarding/teammate-rollout.md).
 
 ### Seat-writer tokens (recommended for devs)

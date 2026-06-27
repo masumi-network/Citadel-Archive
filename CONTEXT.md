@@ -195,7 +195,7 @@ push, session close, or agent work.
 | Railway `linear-sync` cron | scheduled | **Central** + **Seat-Scoped Mirror** | operator |
 | Railway **Promotion Agent** cron | every 6h + on demand | seat **Node** → **Central** (governed) | operator; **Vault Member** trigger from **Operations Dashboard** or CLI |
 
-Install dev-side hooks once: `skills/citadel-proactive-ingest/scripts/install_autosync.sh`.
+Install dev-side hooks once: `citadel onboard` (idempotent; writes a self-contained git pre-push hook running `python -m kb.hooks.sync_push` and a SessionEnd hook running `python -m kb.hooks.sync_session`).
 Register **Approved Capture Roots** locally, assign **Capture Root Tags**, and merge the server **Capture Policy** template during seat setup (Citadel CLI wizard).
 
 **Agent sync policy:** rely on hooks + cron for allowlisted org repos. Agents read via `citadel_search`,
