@@ -92,7 +92,8 @@ def _mask(token: str | None) -> str:
     if not token:
         return "(none)"
     token = token.strip()
-    return f"{token[:6]}…{token[-4:]}" if len(token) > 10 else "****"
+    # Only the last 4 chars — never contiguous bytes from the secret's start.
+    return f"…{token[-4:]}" if len(token) > 10 else "****"
 
 
 def check_node_health(base_url: str, *, timeout: float = _TIMEOUT) -> Check:
@@ -140,8 +141,10 @@ def check_search(base_url: str, token: str | None, *, timeout: float = _SEARCH_T
         return Check("search", ok=False, detail=f"timed out (>{int(timeout)}s, node warming up)")
     except Exception as exc:
         return Check("search", ok=False, detail=str(exc))
-    results = data.get("results") or data.get("matches") or data
-    count = len(results) if isinstance(results, list) else (1 if results else 0)
+    results = data.get("results")
+    if results is None:
+        results = data.get("matches")
+    count = len(results) if isinstance(results, list) else 0
     return Check("search", ok=True, detail=f"{count} result(s)", data={"count": count})
 
 
@@ -177,7 +180,12 @@ def check_local_setup(repo: Path, config_path: Path | None = None) -> list[Check
         Check("session_hook", ok=session_ok, detail="installed" if session_ok else "missing")
     )
 
-    config = load_capture_config(config_path) if config_path else load_capture_config()
+    try:
+        config = load_capture_config(config_path) if config_path else load_capture_config()
+    except ValueError as exc:
+        # A corrupt capture.json must not break the whole status report.
+        checks.append(Check("capture_roots", ok=False, detail=f"corrupt config ({exc})"))
+        return checks
     if config.roots:
         tags = sorted({tag for root in config.roots for tag in root.tags})
         detail = f"{len(config.roots)} root(s): {', '.join(tags)}"

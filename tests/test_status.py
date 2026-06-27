@@ -110,6 +110,21 @@ def test_gather_status_healthy(tmp_path: Path, monkeypatch) -> None:
     assert report.recent[0]["title"] == "feat: x"
 
 
+def test_check_local_setup_corrupt_config_does_not_raise(tmp_path: Path) -> None:
+    cfg = tmp_path / "capture.json"
+    cfg.write_text("{ broken json")
+    checks = {c.name: c for c in check_local_setup(tmp_path, cfg)}
+    assert checks["capture_roots"].ok is False
+    assert "corrupt" in checks["capture_roots"].detail
+
+
+def test_check_search_empty_list_is_zero(monkeypatch) -> None:
+    monkeypatch.setattr(status_mod._OPENER, "open", _route({"/search": {"results": []}}))
+    check = status_mod.check_search("https://node.example", "ctdl_tok")
+    assert check.ok and check.data["count"] == 0
+    assert "0 result(s)" in check.detail
+
+
 def test_gather_status_node_down(tmp_path: Path) -> None:
     import kb.status as s
 
