@@ -1,15 +1,58 @@
-# Brand - Citadel
+# Brand — Citadel
 
-_Status: deferred_
+Citadel's brand currently lives in the **CLI** (`citadel-archive`). The web-UI
+color palette and typography remain deferred (see the note at the bottom); the
+terminal is the shipped brand surface.
 
-The user chose to defer brand setup. This project is currently using a restrained neutral operations palette and no custom typography. The `frontend-design-guidelines` skill will quietly use defaults and will not prompt again.
+## The mark — castle banner
 
-To set up a real brand palette, typography, and voice at any time, run:
+A compact crenellated fortress: battlements, walls, two windows. Shown on bare
+`citadel`, and as the header of `citadel status` and `citadel onboard` on a TTY.
 
-    /brand-design
+```
+  ▙ ▟ ▙ ▟ ▙ ▟ ▙ ▟
+  ███████████████   CITADEL
+  ██ ▟▀▙   ▟▀▙ ██   the organization vault
+  ██ █ █   █ █ ██
+  ███████████████
+```
 
-or say: "pick brand colors"
+- **Wordmark:** `CITADEL` (bold).
+- **Tagline:** `the organization vault` (dim).
+- Source of truth: [`kb/banner.py`](kb/banner.py).
 
-When `brand-design` runs, it will detect this deferred state, skip the "confirm overwrite" step, and proceed directly to the full brand setup. The resulting palette will be applied to the UI assets and this file will be replaced with the real brand documentation.
+## Terminal palette (ANSI)
 
-_Deferred at: 2026-05-20_
+| Element | Style |
+|---|---|
+| Castle walls | cyan (`\033[36m`) |
+| Wordmark | bold + cyan |
+| Tagline | dim |
+| Status OK `●` | green |
+| Status fail `○` | red |
+| Verdict ("Not fully connected") | yellow |
+
+Color is **TTY-aware**: applied only on a real terminal, and suppressed when
+output is piped, under `--json`, or when `NO_COLOR` / `TERM=dumb` is set — so
+headless/agent output stays clean and parseable. (`banner.supports_color`.)
+
+## Voice
+
+Terse, operational, honest. The CLI mirrors the system's guarantees in how it
+speaks:
+
+- **Personal-by-default** — capture lands in your private Node unless explicitly promoted.
+- **Fail-silent** — hooks never block your `git push` or session close.
+- **No surprises** — masked tokens, explicit exit codes, errors on stderr.
+
+Words we use: Node, Central, seat, Approved Capture Roots, Capture Root Tags,
+promotion. See [`CONTEXT.md`](CONTEXT.md) for the full domain glossary.
+
+---
+
+## Web UI palette — _deferred_
+
+The web dashboard still uses a restrained neutral operations palette and no
+custom typography. To set up a full web brand palette + typography at any time,
+run `/brand-design` (or say "pick brand colors"); it will detect this deferred
+state and proceed directly to setup. _Deferred at: 2026-05-20._

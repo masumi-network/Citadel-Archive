@@ -217,15 +217,32 @@ curl -fsS -X POST "$CITADEL_BASE_URL/api/contribute" \
 
 ### Teammate CLI (lightweight)
 
+```
+  ▙ ▟ ▙ ▟ ▙ ▟ ▙ ▟
+  ███████████████   CITADEL
+  ██ ▟▀▙   ▟▀▙ ██   the organization vault
+  ██ █ █   █ █ ██
+  ███████████████
+```
+
 ```bash
 pipx install citadel-archive            # the `citadel` command (onboard/status/capture)
 pipx install "citadel-archive[tui]"     # + the live `citadel tui` dashboard
-citadel onboard                         # one-command setup; then `citadel status`
+
+citadel onboard                         # one-command setup: token + hooks + MCP + capture roots
+citadel status                          # connection + identity + local setup (●/○); --json for agents
 ```
 
-The base install is a small, stdlib-first client. The server stack is an extra
-(`citadel-archive[server]`). Publishing is automated — see
-[`PUBLISHING.md`](PUBLISHING.md).
+`citadel onboard` is idempotent and self-contained — it installs the git
+pre-push + Claude Code `SessionEnd` autosync hooks (bundled `kb.hooks.*`, no
+vendored skill), writes the seat token to your shell rc (masked), adds the MCP
+server, and offers Approved Capture Roots. Every teammate command is **headless**
+(`--json`) so AI coding agents (Claude / Codex / Cursor) and CI can drive it.
+
+The base install is a small, **zero-dependency**, stdlib-first client. The server
+stack is an extra (`citadel-archive[server]`); the live dashboard is
+`citadel-archive[tui]`. Publishing is automated — see
+[`PUBLISHING.md`](PUBLISHING.md). Brand: [`brand.md`](brand.md).
 
 ### Server / development
 
