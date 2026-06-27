@@ -5,6 +5,8 @@ import asyncio
 import os
 from pathlib import Path
 
+import pytest
+
 from kb.capture_config import (
     DEFAULT_NODE_URL,
     CaptureConfig,
@@ -43,15 +45,6 @@ def test_with_root_replaces_same_path() -> None:
     assert config.roots[0] == CaptureRoot(path="/tmp/a", tags=("org-work",))
 
 
-def test_find_root_for_path_matches_containment() -> None:
-    config = CaptureConfig().with_root("/tmp/work", ["org-work"])
-
-    assert config.find_root_for_path("/tmp/work/sub/file.md") is not None
-    assert config.find_root_for_path("/tmp/work") is not None
-    assert config.find_root_for_path("/tmp/worktree/x") is None
-    assert config.find_root_for_path("/tmp/other") is None
-
-
 def test_capture_config_path_honors_override(monkeypatch) -> None:
     monkeypatch.setenv("CITADEL_CAPTURE_CONFIG_PATH", "/tmp/custom/capture.json")
     assert capture_config_path() == Path("/tmp/custom/capture.json")
@@ -78,6 +71,32 @@ def test_load_missing_returns_defaults(tmp_path: Path) -> None:
     config = load_capture_config(tmp_path / "absent.json")
     assert config.node_url == DEFAULT_NODE_URL
     assert config.roots == ()
+
+
+def test_load_corrupt_json_raises(tmp_path: Path) -> None:
+    path = tmp_path / "capture.json"
+    path.write_text("{ not valid json")
+    with pytest.raises(ValueError, match="corrupt capture config"):
+        load_capture_config(path)
+
+
+def test_load_non_object_json_raises(tmp_path: Path) -> None:
+    path = tmp_path / "capture.json"
+    path.write_text("[1, 2, 3]")
+    with pytest.raises(ValueError, match="expected a JSON object"):
+        load_capture_config(path)
+
+
+def test_from_dict_skips_bad_roots_and_version() -> None:
+    config = CaptureConfig.from_dict(
+        {
+            "version": "not-an-int",
+            "node_url": "https://node.example",
+            "roots": ["bad-string", {"path": ""}, {"path": "/tmp/ok", "tags": ["personal"]}],
+        }
+    )
+    assert config.version == 1
+    assert [r.path for r in config.roots] == ["/tmp/ok"]
 
 
 def test_parse_root_arg() -> None:

@@ -86,12 +86,16 @@ class CaptureConfig:
         roots = tuple(
             CaptureRoot.from_dict(item)
             for item in (data.get("roots") or ())
-            if str(item.get("path", "")).strip()
+            if isinstance(item, dict) and str(item.get("path", "")).strip()
         )
+        try:
+            version = int(data.get("version", CAPTURE_CONFIG_VERSION))
+        except (TypeError, ValueError):
+            version = CAPTURE_CONFIG_VERSION
         return cls(
             node_url=str(data.get("node_url") or DEFAULT_NODE_URL).rstrip("/"),
             roots=roots,
-            version=int(data.get("version", CAPTURE_CONFIG_VERSION)),
+            version=version,
             updated_at=data.get("updated_at"),
         )
 
@@ -107,21 +111,23 @@ class CaptureConfig:
             updated_at=self.updated_at,
         )
 
-    def find_root_for_path(self, path: str) -> CaptureRoot | None:
-        """Return the approved root that contains `path`, if any (allowlist check)."""
-        target = normalize_path(path)
-        for root in self.roots:
-            if target == root.path or target.startswith(root.path + os.sep):
-                return root
-        return None
-
 
 def load_capture_config(path: Path | None = None) -> CaptureConfig:
-    """Load config from disk; return defaults (no roots) if absent."""
+    """Load config from disk; return defaults (no roots) if absent.
+
+    Raises ``ValueError`` if the file exists but is not parseable JSON / not a
+    JSON object, so callers can surface a clean error instead of silently
+    resetting (and then overwriting) a config the user may want to repair.
+    """
     config_path = path or capture_config_path()
     if not config_path.exists():
         return CaptureConfig()
-    data = json.loads(config_path.read_text())
+    try:
+        data = json.loads(config_path.read_text())
+    except (OSError, ValueError) as exc:
+        raise ValueError(f"corrupt capture config at {config_path}: {exc}") from exc
+    if not isinstance(data, dict):
+        raise ValueError(f"corrupt capture config at {config_path}: expected a JSON object")
     return CaptureConfig.from_dict(data)
 
 
