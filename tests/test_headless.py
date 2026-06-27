@@ -5,10 +5,12 @@ from __future__ import annotations
 
 import asyncio
 import json
+import sys
 from pathlib import Path
 
 import pytest
 
+import kb.cli
 from kb.cli import build_parser
 
 
@@ -31,6 +33,16 @@ def test_setup_json_emits_pure_config(tmp_path: Path, capsys) -> None:
     out = json.loads(capsys.readouterr().out)  # pure JSON, no "Saved …" prose
     assert out["node_url"] == "https://node.example"
     assert out["roots"][0]["tags"] == ["org-work"]
+
+
+def test_bare_citadel_shows_banner(monkeypatch, capsys) -> None:
+    monkeypatch.setattr(sys, "argv", ["citadel"])
+    with pytest.raises(SystemExit) as exc:
+        kb.cli.main()
+    assert exc.value.code == 0
+    out = capsys.readouterr().out
+    assert "CITADEL" in out
+    assert "status" in out  # command list
 
 
 def test_setup_json_never_prompts_even_on_tty(tmp_path: Path, monkeypatch, capsys) -> None:

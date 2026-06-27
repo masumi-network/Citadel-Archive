@@ -246,13 +246,15 @@ _DOT_OK = "●"
 _DOT_BAD = "○"
 
 
-def render_text(report: StatusReport) -> str:
+def render_text(report: StatusReport, *, color: bool = False) -> str:
+    from kb.banner import paint
+
     ident = report.identity
     seat = ident.get("seat_slug") or ident.get("actor") or "—"
     role = ident.get("role") or "—"
-    lines = [f"Citadel  ·  seat: {seat}  ·  role: {role}", ""]
+    lines = [f"seat: {paint(str(seat), 'bold', enable=color)}   role: {role}", ""]
     for check in report.checks:
-        dot = _DOT_OK if check.ok else _DOT_BAD
+        dot = paint(_DOT_OK, "green", enable=color) if check.ok else paint(_DOT_BAD, "red", enable=color)
         latency = f"  ({check.latency_ms}ms)" if check.latency_ms is not None else ""
         lines.append(f"  {dot} {check.name:<16} {check.detail}{latency}")
     if report.recent:
@@ -263,5 +265,8 @@ def render_text(report: StatusReport) -> str:
             label = item.get("title") or item.get("action") or item.get("detail") or "—"
             lines.append(f"  · {str(when)[:19]}  {label}")
     lines.append("")
-    lines.append("All systems go." if report.healthy else "Not fully connected — see ○ above (try `citadel onboard`).")
+    if report.healthy:
+        lines.append(paint("All systems go.", "green", enable=color))
+    else:
+        lines.append(paint("Not fully connected — try `citadel onboard`.", "yellow", enable=color))
     return "\n".join(lines)

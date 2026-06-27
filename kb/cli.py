@@ -37,6 +37,7 @@ from kb.onboard import (
     merge_claude_settings,
     merge_mcp_config,
 )
+from kb.banner import banner, supports_color
 from kb.status import gather_status, render_text
 
 
@@ -345,7 +346,10 @@ async def _status(args: argparse.Namespace) -> int:
     if args.json:
         _print_json(report.to_dict())
     else:
-        print(render_text(report))
+        use_color = supports_color()
+        print(banner(color=use_color))
+        print()
+        print(render_text(report, color=use_color))
     return 0 if report.healthy else 1
 
 
@@ -423,6 +427,7 @@ async def _onboard(args: argparse.Namespace) -> int:
         )
         return 0
 
+    print(banner(color=supports_color()))
     print(f"\nCitadel onboarding for {repo}  (token {mask_token(token)}):")
     for label, status in steps:
         print(f"  • {label}: {status}")
@@ -435,7 +440,8 @@ async def _onboard(args: argparse.Namespace) -> int:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="citadel")
-    subcommands = parser.add_subparsers(dest="command", required=True)
+    # Not required: bare `citadel` shows the banner + command list instead of an error.
+    subcommands = parser.add_subparsers(dest="command")
 
     status = subcommands.add_parser(
         "status",
@@ -598,6 +604,12 @@ def main() -> None:
     configure_logging()
     parser = build_parser()
     args = parser.parse_args()
+    if not getattr(args, "command", None):
+        # Bare `citadel` → branded banner + the command list.
+        print(banner(color=supports_color()))
+        print()
+        parser.print_help()
+        raise SystemExit(0)
     # Handlers may return an int exit code (capture/setup); others return None.
     raise SystemExit(asyncio.run(args.handler(args)) or 0)
 
