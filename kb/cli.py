@@ -2,14 +2,19 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import functools
 import json
 import os
 import sys
 import urllib.error
+from collections.abc import Awaitable, Callable
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+# Lightweight client modules only — the heavy server stack (kb.service,
+# kb.github_sync, …) is imported lazily inside the server handlers so the base
+# `citadel-archive` install (onboard/status/capture) needs no server deps.
 from kb.capture_config import (
     DEFAULT_NODE_URL,
     DEFAULT_ROOT_TAG,
@@ -33,18 +38,38 @@ from kb.onboard import (
     merge_mcp_config,
 )
 from kb.status import gather_status, render_text
-from kb.github_sync import GitHubOrgSyncer
-from kb.learning_agent import LearningAgent
-from kb.models import FeedbackRequest
-from kb.repo_content_sync import RepoContentSyncer
-from kb.service import Citadel
 
 
 def _print_json(value: Any) -> None:
     print(json.dumps(value, default=str, indent=2))
 
 
+def _needs_server(
+    fn: Callable[[argparse.Namespace], Awaitable[Any]],
+) -> Callable[[argparse.Namespace], Awaitable[Any]]:
+    """Wrap a server-only handler: turn a missing [server] dep into a clean hint."""
+
+    @functools.wraps(fn)
+    async def wrapper(args: argparse.Namespace) -> Any:
+        try:
+            return await fn(args)
+        except ImportError as exc:
+            missing = getattr(exc, "name", None) or str(exc)
+            print(
+                f"`citadel {getattr(args, 'command', '')}` needs the server extra:\n"
+                "  pip install 'citadel-archive[server]'\n"
+                f"  (missing dependency: {missing})",
+                file=sys.stderr,
+            )
+            return 2
+
+    return wrapper
+
+
+@_needs_server
 async def _ingest(args: argparse.Namespace) -> None:
+    from kb.service import Citadel
+
     kb = Citadel.from_env()
     result = await kb.ingest(
         args.data,
@@ -55,7 +80,10 @@ async def _ingest(args: argparse.Namespace) -> None:
     _print_json(result.__dict__)
 
 
+@_needs_server
 async def _search(args: argparse.Namespace) -> None:
+    from kb.service import Citadel
+
     kb = Citadel.from_env()
     results = await kb.search(
         args.query,
@@ -66,7 +94,11 @@ async def _search(args: argparse.Namespace) -> None:
     _print_json(results)
 
 
+@_needs_server
 async def _feedback(args: argparse.Namespace) -> None:
+    from kb.models import FeedbackRequest
+    from kb.service import Citadel
+
     kb = Citadel.from_env()
     result = await kb.feedback(
         FeedbackRequest(
@@ -80,19 +112,29 @@ async def _feedback(args: argparse.Namespace) -> None:
     _print_json(result.__dict__)
 
 
+@_needs_server
 async def _improve(args: argparse.Namespace) -> None:
+    from kb.service import Citadel
+
     kb = Citadel.from_env()
     result = await kb.improve(dataset=args.dataset, session_ids=args.session_id)
     _print_json(result)
 
 
+@_needs_server
 async def _cognify(args: argparse.Namespace) -> None:
+    from kb.service import Citadel
+
     kb = Citadel.from_env()
     result = await kb.cognify_dataset(dataset=args.dataset, verify=args.verify)
     _print_json(result)
 
 
+@_needs_server
 async def _sync_github(args: argparse.Namespace) -> None:
+    from kb.github_sync import GitHubOrgSyncer
+    from kb.service import Citadel
+
     syncer = GitHubOrgSyncer(
         Citadel.from_env(),
         org=args.org,
@@ -108,13 +150,20 @@ async def _sync_github(args: argparse.Namespace) -> None:
     _print_json(result)
 
 
+@_needs_server
 async def _sync_repo_content(args: argparse.Namespace) -> None:
+    from kb.repo_content_sync import RepoContentSyncer
+    from kb.service import Citadel
+
     syncer = RepoContentSyncer(Citadel.from_env())
     result = await syncer.run(force=args.force, dry_run=args.dry_run)
     _print_json(result)
 
 
+@_needs_server
 async def _learn(args: argparse.Namespace) -> None:
+    from kb.learning_agent import LearningAgent
+
     agent = LearningAgent.from_env()
     result = await agent.status() if args.status else await agent.run(
         force=args.force,
