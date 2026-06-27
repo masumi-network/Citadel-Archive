@@ -36,7 +36,14 @@ Last updated: 2026-06-27.
   installs git-push + SessionEnd hooks, adds the Citadel MCP server
   (optional, default-on; token stays an env reference, never in `.mcp.json`),
   and offers Approved Capture Roots. Idempotent; merges into existing config.
-- Docs: teammate-rollout step 5 + fast-path + proactive-ingest skill section.
+- **`citadel status` + `citadel tui`** — teammate dashboard replacement
+  (`kb/status.py` shared core): node `/healthz`, auth `/api/session` whoami
+  (seat/role/capabilities), search smoke, local setup (token/MCP/hooks/capture
+  roots), recent activity. `--json` is the AI-agent path (Claude/Codex/Cursor);
+  `citadel tui` is a live textual dashboard (`textual` optional `[tui]` extra).
+  Verified against prod (node 142ms, auth valid). MCP stays optional — sync is
+  HTTP+token; MCP only for in-session search/ingest.
+- Docs: teammate-rollout step 5 + fast-path + status/tui + proactive-ingest skill.
 - **Production-hardening pass** (adversarial multi-agent audit, 47 confirmed
   findings): `post_capture` HTTPS-only + no-redirect + size cap (token-leak /
   unbounded-payload fixes, parity with `sync_push.post_ingest`); `citadel

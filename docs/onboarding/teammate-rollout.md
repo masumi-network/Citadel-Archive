@@ -135,11 +135,18 @@ in scripts/CI.
 ## Verify (30 seconds)
 
 ```bash
+citadel status        # connection + identity + local setup (expect all ●); --json for agents
+# or:  citadel tui    # live dashboard (needs the [tui] extra)
+
 # Token works + MCP search returns results:
 #   in Claude Code, ask: "use citadel_search to find what we decided about the vault"
 # Linear tasks (after server cron sync):
 #   ask: "what do I need to do?" → citadel_linear_my_issues
 ```
+
+`citadel status` is the teammate's dashboard replacement — it shows the Node
+health, your seat + role, and whether your hooks/MCP/capture roots are wired up.
+Agents run `citadel status --json` to check connectivity programmatically.
 
 You should get a short note back sourced from your node / Central. If you get an
 auth error, your token isn't in the environment of the client that's running

@@ -60,10 +60,38 @@ citadel onboard --non-interactive --token "ctdl_…" \
 Flags: `--token`, `--repo`, `--shell-rc`, `--no-mcp`, `--no-capture`,
 `--non-interactive`. Exits non-zero if no token is available.
 
+## Check status (the dashboard replacement)
+
+Teammates have no web dashboard — the CLI is the window into Citadel.
+
+```bash
+citadel status      # one-shot: connection, identity (seat/role), local setup, recent activity
+citadel tui         # live terminal dashboard (needs the [tui] extra)
+```
+
+`citadel status` checks the Node (`/healthz`), your token (`/api/session` →
+seat + role + capabilities), a search smoke, and local setup (token in env,
+`.mcp.json`, git + SessionEnd hooks, capture roots). It exits non-zero when not
+connected, so it doubles as a doctor.
+
+### For AI agents (Claude Code / Codex / Cursor)
+
+Agents should use the structured form to verify Citadel before relying on it:
+
+```bash
+citadel status --json
+```
+
+It returns `{healthy, identity{seat_slug,role,…}, checks[…], recent[…]}`. Use it
+to confirm connectivity, discover the current seat, or diagnose why a capture
+isn't landing — then fall back to `citadel_search` / `citadel_ingest` MCP tools
+for in-session work. (The MCP `citadel_session` tool is the in-session whoami;
+`citadel status` additionally sees **local** hook/config state the server can't.)
+
 ## Verify
 
-Restart the shell (or `source ~/.zshrc`), then in your agent ask:
-*"use citadel_search to find what we decided about the vault."* A grounded
-answer means the token + MCP work. See
+Restart the shell (or `source ~/.zshrc`), then run `citadel status` (expect all
+`●`), or in your agent ask: *"use citadel_search to find what we decided about
+the vault."* A grounded answer means the token + MCP work. See
 [`docs/onboarding/teammate-rollout.md`](../../docs/onboarding/teammate-rollout.md)
 for the manual step-by-step and what auto-syncs.
