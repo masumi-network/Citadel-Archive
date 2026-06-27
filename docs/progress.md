@@ -31,7 +31,12 @@ Last updated: 2026-06-27.
   from inside an Approved Capture Root once a config exists (skip + warn
   otherwise; back-compat always-on when no config). Matched root's tags ride
   along. Stdlib-only contract kept.
-- Docs: teammate-rollout step 5 + proactive-ingest skill section.
+- **`citadel onboard`** — one-command teammate setup (`kb/onboard.py` + thin
+  `citadel-onboard` skill): pastes token → shell rc (masked, written once),
+  installs git-push + SessionEnd hooks, adds the Citadel MCP server
+  (optional, default-on; token stays an env reference, never in `.mcp.json`),
+  and offers Approved Capture Roots. Idempotent; merges into existing config.
+- Docs: teammate-rollout step 5 + fast-path + proactive-ingest skill section.
 - **Production-hardening pass** (adversarial multi-agent audit, 47 confirmed
   findings): `post_capture` HTTPS-only + no-redirect + size cap (token-leak /
   unbounded-payload fixes, parity with `sync_push.post_ingest`); `citadel

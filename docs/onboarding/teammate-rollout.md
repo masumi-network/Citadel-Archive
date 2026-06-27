@@ -27,7 +27,24 @@ it like a password.
 
 ---
 
-## Teammate (4 steps)
+## Teammate — fast path (one command)
+
+From a repo that has `skills/citadel-proactive-ingest/` vendored:
+
+```bash
+citadel onboard
+```
+
+This runs all of the steps below for you — pastes your token into your shell rc
+(once, masked), installs the git-push + SessionEnd hooks, adds the Citadel MCP
+server, and offers to set up Approved Capture Roots. Idempotent; safe to re-run.
+`--no-mcp` for capture-only; `--non-interactive --token …` for scripts. See the
+[`citadel-onboard`](../../skills/citadel-onboard/SKILL.md) skill.
+
+The manual steps below are what `onboard` does under the hood (and the path if
+you'd rather do it by hand).
+
+## Teammate — manual (4 steps)
 
 > All four use the **same** `CITADEL_MCP_ACCESS_TOKEN`. Set it once; everything
 > else points at it.

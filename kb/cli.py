@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import os
 import sys
 import urllib.error
 from datetime import datetime, timezone
@@ -21,6 +22,16 @@ from kb.capture_config import (
     save_capture_config,
 )
 from kb.capture import build_capture_payload, capture_token, post_capture
+from kb.onboard import (
+    TOKEN_ENV,
+    detect_shell_rc,
+    ensure_token_in_rc,
+    git_root_or_cwd,
+    install_pre_push_hook,
+    mask_token,
+    merge_claude_settings,
+    merge_mcp_config,
+)
 from kb.github_sync import GitHubOrgSyncer
 from kb.learning_agent import LearningAgent
 from kb.models import FeedbackRequest
@@ -250,9 +261,72 @@ async def _capture(args: argparse.Namespace) -> int:
     return 1 if failures else 0
 
 
+async def _onboard(args: argparse.Namespace) -> int:
+    repo = Path(args.repo).expanduser() if args.repo else git_root_or_cwd()
+    interactive = sys.stdin.isatty() and not args.non_interactive
+
+    token = (args.token or os.environ.get(TOKEN_ENV) or "").strip()
+    if not token and interactive:
+        token = input("Paste your Citadel seat token (ctdl_…): ").strip()
+    if not token:
+        print(
+            "citadel onboard: no token — pass --token or set CITADEL_MCP_ACCESS_TOKEN.",
+            file=sys.stderr,
+        )
+        return 1
+
+    rc_path = Path(args.shell_rc).expanduser() if args.shell_rc else detect_shell_rc()
+    steps: list[tuple[str, str]] = []
+    try:
+        steps.append((f"token → {rc_path}", ensure_token_in_rc(rc_path, token)))
+        steps.append(("git pre-push hook", install_pre_push_hook(repo)))
+        steps.append(("SessionEnd hook", merge_claude_settings(repo / ".claude" / "settings.json")))
+        if not args.no_mcp:
+            steps.append(("MCP server (.mcp.json)", merge_mcp_config(repo / ".mcp.json")))
+    except ValueError as exc:
+        print(f"citadel onboard: {exc}", file=sys.stderr)
+        return 1
+
+    want_capture = not args.no_capture and interactive
+    if want_capture:
+        answer = input("\nSet up Approved Capture Roots now? [Y/n]: ").strip().lower()
+        if answer in ("", "y", "yes"):
+            cfg_path = capture_config_path()
+            cfg = _wizard_roots(load_capture_config(cfg_path))
+            save_capture_config(
+                cfg, path=cfg_path, updated_at=datetime.now(timezone.utc).isoformat()
+            )
+            steps.append((f"capture roots → {cfg_path}", f"{len(cfg.roots)} root(s)"))
+
+    print(f"\nCitadel onboarding for {repo}  (token {mask_token(token)}):")
+    for label, status in steps:
+        print(f"  • {label}: {status}")
+    print(
+        f"\nNext: restart your shell (or `source {rc_path}`), then in your agent ask:\n"
+        '  "use citadel_search to find what we decided about the vault"'
+    )
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="citadel")
     subcommands = parser.add_subparsers(dest="command", required=True)
+
+    onboard = subcommands.add_parser(
+        "onboard",
+        help="One-shot teammate setup: token + hooks + MCP + capture roots",
+    )
+    onboard.add_argument("--token", help="Seat token (else prompt, or use env)")
+    onboard.add_argument("--repo", help="Repo root (default: git toplevel or cwd)")
+    onboard.add_argument("--shell-rc", help="Shell rc file for the token export")
+    onboard.add_argument("--no-mcp", action="store_true", help="Skip writing .mcp.json")
+    onboard.add_argument(
+        "--no-capture", action="store_true", help="Skip Approved Capture Roots setup"
+    )
+    onboard.add_argument(
+        "--non-interactive", action="store_true", help="No prompts; requires --token"
+    )
+    onboard.set_defaults(handler=_onboard)
 
     setup = subcommands.add_parser(
         "setup",
