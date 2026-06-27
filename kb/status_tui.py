@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from rich.markup import escape
 from textual import work
 from textual.app import App, ComposeResult
 from textual.widgets import Footer, Header, Static
@@ -20,10 +21,13 @@ _BAD = "[red]○[/]"
 
 
 def _identity_markup(report: StatusReport) -> str:
+    # Untrusted Node data (seat/role/node/detail) is escaped before interpolation
+    # so a value containing Rich markup (e.g. a commit title "[WIP] fix") can
+    # neither crash the render nor inject styling/clickable links.
     ident = report.identity
-    seat = ident.get("seat_slug") or ident.get("actor") or "—"
-    role = ident.get("role") or "—"
-    node = report.node_url
+    seat = escape(str(ident.get("seat_slug") or ident.get("actor") or "—"))
+    role = escape(str(ident.get("role") or "—"))
+    node = escape(str(report.node_url))
     overall = "[green]connected[/]" if report.healthy else "[red]not connected[/]"
     return f"[b]Citadel[/]   seat: [b]{seat}[/]   role: {role}   {overall}\n[dim]{node}[/]"
 
@@ -33,7 +37,7 @@ def _checks_markup(report: StatusReport) -> str:
     for check in report.checks:
         dot = _OK if check.ok else _BAD
         latency = f"  [dim]({check.latency_ms}ms)[/]" if check.latency_ms is not None else ""
-        lines.append(f"  {dot} {check.name:<16} {check.detail}{latency}")
+        lines.append(f"  {dot} {escape(check.name):<16} {escape(check.detail)}{latency}")
     return "\n".join(lines)
 
 
@@ -42,8 +46,8 @@ def _recent_markup(report: StatusReport) -> str:
         return "[b]Recent activity[/]\n  [dim]none yet[/]"
     lines = ["[b]Recent activity[/]"]
     for item in report.recent[:8]:
-        when = str(item.get("created_at") or item.get("timestamp") or "")[:19]
-        label = item.get("title") or item.get("action") or item.get("detail") or "—"
+        when = escape(str(item.get("created_at") or item.get("timestamp") or "")[:19])
+        label = escape(str(item.get("title") or item.get("action") or item.get("detail") or "—"))
         lines.append(f"  [dim]{when}[/]  {label}")
     return "\n".join(lines)
 
