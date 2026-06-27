@@ -3,8 +3,22 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import sys
+from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 
+from kb.capture_config import (
+    DEFAULT_NODE_URL,
+    DEFAULT_ROOT_TAG,
+    PRESET_ROOT_TAGS,
+    CaptureConfig,
+    capture_config_path,
+    load_capture_config,
+    normalize_path,
+    normalize_tags,
+    save_capture_config,
+)
 from kb.github_sync import GitHubOrgSyncer
 from kb.learning_agent import LearningAgent
 from kb.models import FeedbackRequest
@@ -97,9 +111,90 @@ async def _learn(args: argparse.Namespace) -> None:
     _print_json(result)
 
 
+def _parse_root_arg(raw: str) -> tuple[str, tuple[str, ...]]:
+    """Parse a non-interactive ``--root`` value: ``PATH`` or ``PATH=tag1,tag2``."""
+    path, sep, tags_str = raw.partition("=")
+    tags = tuple(tags_str.split(",")) if sep else ()
+    return path, tags
+
+
+def _wizard_roots(config: CaptureConfig) -> CaptureConfig:
+    print(
+        "\nAdd Approved Capture Roots — folders auto-captured to your Node.\n"
+        "Leave the path empty to finish."
+    )
+    while True:
+        raw = input("  Root path: ").strip()
+        if not raw:
+            break
+        normalized = normalize_path(raw)
+        if not Path(normalized).exists():
+            print(f"  ! {normalized} does not exist yet (added anyway)")
+        print(
+            f"  Tags — presets: {', '.join(PRESET_ROOT_TAGS)}; "
+            f"'personal' never promotes. Default: {DEFAULT_ROOT_TAG}."
+        )
+        tags_raw = input("  Tags (comma-separated): ").strip()
+        tags = tuple(tags_raw.split(",")) if tags_raw else (DEFAULT_ROOT_TAG,)
+        config = config.with_root(normalized, tags)
+        print(f"  + {normalized}  [{', '.join(normalize_tags(tags))}]")
+    return config
+
+
+async def _setup(args: argparse.Namespace) -> None:
+    config_path = Path(args.config).expanduser() if args.config else capture_config_path()
+    config = load_capture_config(config_path)
+
+    if args.show:
+        _print_json(config.to_dict())
+        return
+
+    node_url = (args.node_url or config.node_url or DEFAULT_NODE_URL).rstrip("/")
+    interactive = not args.non_interactive and not args.root and sys.stdin.isatty()
+
+    if interactive:
+        prompt = f"Node URL [{node_url}]: "
+        node_url = (input(prompt).strip() or node_url).rstrip("/")
+
+    config = CaptureConfig(node_url=node_url, roots=config.roots, version=config.version)
+
+    if args.root:
+        for raw in args.root:
+            path, tags = _parse_root_arg(raw)
+            config = config.with_root(path, tags or (DEFAULT_ROOT_TAG,))
+    elif interactive:
+        config = _wizard_roots(config)
+
+    written = save_capture_config(
+        config, path=config_path, updated_at=datetime.now(timezone.utc).isoformat()
+    )
+    print(f"\nSaved {len(config.roots)} approved root(s) to {written}")
+    _print_json(load_capture_config(config_path).to_dict())
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="citadel")
     subcommands = parser.add_subparsers(dest="command", required=True)
+
+    setup = subcommands.add_parser(
+        "setup",
+        help="Configure local Approved Capture Roots (~/.citadel/capture.json)",
+    )
+    setup.add_argument("--node-url", help=f"Seat Node URL (default {DEFAULT_NODE_URL})")
+    setup.add_argument(
+        "--root",
+        action="append",
+        metavar="PATH[=tag1,tag2]",
+        help="Add/replace an approved root (repeatable). Implies non-interactive.",
+    )
+    setup.add_argument(
+        "--non-interactive",
+        action="store_true",
+        help="Skip prompts; only apply --node-url / --root flags",
+    )
+    setup.add_argument("--show", action="store_true", help="Print current config and exit")
+    setup.add_argument("--config", help="Override config path (testing)")
+    setup.set_defaults(handler=_setup)
 
     ingest = subcommands.add_parser("ingest", help="Ingest text or a path through Cognee")
     ingest.add_argument("data")

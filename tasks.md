@@ -28,6 +28,13 @@
 - [x] `GET/PUT /api/access/seats/{slug}/capture-policy` + org baseline endpoint
 - [x] `merged_deny_globs` merges env excludes + org defaults + seat baseline
 - [x] Settings + Access UI snippets for admin view/edit
+
+### P4 — Capture CLI (in progress)
+
+- [x] 4.1 `citadel setup` wizard → `~/.citadel/capture.json` (roots + Capture Root Tags) (2026-06-27)
+- [ ] 4.2 `citadel capture` — scan approved roots, POST summaries to **Node**
+- [ ] 4.3 Git hook checks root is in local allowlist
+- [ ] 4.4 Docs: teammate-rollout + connect skill
 - [x] Unit + API tests
 
 ---

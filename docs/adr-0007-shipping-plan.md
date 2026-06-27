@@ -52,7 +52,7 @@ Enforce **Seat Node Write Policy** on HTTP and MCP — not MCP-only.
 
 | # | Task | Verify |
 |---|------|--------|
-| 4.1 | `citadel setup` wizard — pick roots + **Capture Root Tags** | Writes `~/.citadel/capture.json` |
+| 4.1 | `citadel setup` wizard — pick roots + **Capture Root Tags** ✅ | Writes `~/.citadel/capture.json` |
 | 4.2 | `citadel capture` — scan approved roots, POST summaries to **Node** | Manual E2E |
 | 4.3 | Git hook checks root is in local allowlist | Push outside list → skip or warn |
 | 4.4 | Docs: teammate-rollout + connect skill | — |
