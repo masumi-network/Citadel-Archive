@@ -287,6 +287,30 @@ async def _status(args: argparse.Namespace) -> int:
     return 0 if report.healthy else 1
 
 
+async def _tui(args: argparse.Namespace) -> int:
+    repo = Path(args.repo).expanduser() if args.repo else git_root_or_cwd()
+    config_path = Path(args.config).expanduser() if args.config else capture_config_path()
+    try:
+        node_url = args.node_url or load_capture_config(config_path).node_url
+    except ValueError:
+        node_url = args.node_url or DEFAULT_NODE_URL
+    token = capture_token() or None
+
+    try:
+        from kb.status_tui import run_tui
+    except ImportError:
+        print(
+            "citadel tui needs the optional 'textual' dependency.\n"
+            "  pip install 'citadel[tui]'   (or: uv pip install textual)\n"
+            "Meanwhile, `citadel status` gives the same checks as plain text.",
+            file=sys.stderr,
+        )
+        return 1
+
+    run_tui(node_url, token, repo=repo, config_path=config_path)
+    return 0
+
+
 async def _onboard(args: argparse.Namespace) -> int:
     repo = Path(args.repo).expanduser() if args.repo else git_root_or_cwd()
     interactive = sys.stdin.isatty() and not args.non_interactive
@@ -349,6 +373,15 @@ def build_parser() -> argparse.ArgumentParser:
     status.add_argument("--no-search", action="store_true", help="Skip the search smoke check")
     status.add_argument("--no-recent", action="store_true", help="Skip recent-activity fetch")
     status.set_defaults(handler=_status)
+
+    tui = subcommands.add_parser(
+        "tui",
+        help="Live terminal dashboard (needs the 'textual' extra)",
+    )
+    tui.add_argument("--node-url", help="Override Node URL (default: from config)")
+    tui.add_argument("--repo", help="Repo to check (default: git toplevel or cwd)")
+    tui.add_argument("--config", help="Override capture config path")
+    tui.set_defaults(handler=_tui)
 
     onboard = subcommands.add_parser(
         "onboard",
