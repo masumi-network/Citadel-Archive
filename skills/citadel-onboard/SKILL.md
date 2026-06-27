@@ -75,19 +75,23 @@ seat + role + capabilities), a search smoke, and local setup (token in env,
 `.mcp.json`, git + SessionEnd hooks, capture roots). It exits non-zero when not
 connected, so it doubles as a doctor.
 
-### For AI agents (Claude Code / Codex / Cursor)
+### Headless — for AI agents (Claude Code / Codex / Cursor) and CI
 
-Agents should use the structured form to verify Citadel before relying on it:
+Every teammate command is fully headless: pass `--json` for a clean,
+parseable object on stdout (no prompts, errors on stderr, meaningful exit codes).
+Set the token in the environment (`CITADEL_MCP_ACCESS_TOKEN`) so it never appears
+in `argv`/process lists.
 
-```bash
-citadel status --json
-```
+| Command | JSON shape | Use |
+|---|---|---|
+| `citadel status --json` | `{healthy, identity{seat_slug,role,…}, checks[…], recent[…]}` | verify connectivity / discover the seat / diagnose |
+| `citadel onboard --non-interactive --json` | `{ok, repo, steps[{name,status}], token_masked}` | set a machine up (token from env) |
+| `citadel setup --non-interactive --json --root PATH=tag` | the saved `capture.json` | declare Approved Capture Roots |
+| `citadel capture --json` (`--dry-run` to preview) | `{ok, results[…]}` / `[…]` | push summaries to the Node |
 
-It returns `{healthy, identity{seat_slug,role,…}, checks[…], recent[…]}`. Use it
-to confirm connectivity, discover the current seat, or diagnose why a capture
-isn't landing — then fall back to `citadel_search` / `citadel_ingest` MCP tools
-for in-session work. (The MCP `citadel_session` tool is the in-session whoami;
-`citadel status` additionally sees **local** hook/config state the server can't.)
+`citadel status` additionally sees **local** hook/config state the server can't
+(the MCP `citadel_session` tool is the in-session whoami). For in-session reads
+and writes, prefer the `citadel_search` / `citadel_ingest` MCP tools.
 
 ## Verify
 

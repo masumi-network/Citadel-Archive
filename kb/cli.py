@@ -243,7 +243,8 @@ async def _setup(args: argparse.Namespace) -> int:
     written = save_capture_config(
         config, path=config_path, updated_at=datetime.now(timezone.utc).isoformat()
     )
-    print(f"\nSaved {len(config.roots)} approved root(s) to {written}")
+    if not getattr(args, "json", False):
+        print(f"\nSaved {len(config.roots)} approved root(s) to {written}")
     _print_json(load_capture_config(config_path).to_dict())
     return 0
 
@@ -289,6 +290,7 @@ async def _capture(args: argparse.Namespace) -> int:
         )
         return 1
 
+    as_json = getattr(args, "json", False)
     results: list[dict[str, Any]] = []
     failures = 0
     for root, payload in payloads:
@@ -296,18 +298,24 @@ async def _capture(args: argparse.Namespace) -> int:
             response = post_capture(config.node_url, token, payload)
             status = response.get("cognee_result", {}).get("status") or response.get("status")
             results.append({"root": root.path, "ok": True, "status": status, "tags": payload["tags"]})
-            print(f"OK  {root.path} ({status})")
+            if not as_json:
+                print(f"OK  {root.path} ({status})")
         except urllib.error.HTTPError as exc:
             failures += 1
             detail = exc.read().decode(errors="replace")[:200]
             results.append({"root": root.path, "ok": False, "error": f"HTTP {exc.code} {detail}"})
-            print(f"FAIL {root.path}: HTTP {exc.code} {detail}", file=sys.stderr)
+            if not as_json:
+                print(f"FAIL {root.path}: HTTP {exc.code} {detail}", file=sys.stderr)
         except (urllib.error.URLError, OSError, ValueError) as exc:
             # Node unreachable / DNS / timeout / non-HTTPS URL — isolate per root.
             failures += 1
             results.append({"root": root.path, "ok": False, "error": str(exc)})
-            print(f"FAIL {root.path}: {exc}", file=sys.stderr)
-    _print_json(results)
+            if not as_json:
+                print(f"FAIL {root.path}: {exc}", file=sys.stderr)
+    if as_json:
+        _print_json({"ok": failures == 0, "results": results})
+    else:
+        _print_json(results)
     return 1 if failures else 0
 
 
@@ -362,7 +370,8 @@ async def _tui(args: argparse.Namespace) -> int:
 
 async def _onboard(args: argparse.Namespace) -> int:
     repo = Path(args.repo).expanduser() if args.repo else git_root_or_cwd()
-    interactive = sys.stdin.isatty() and not args.non_interactive
+    as_json = getattr(args, "json", False)
+    interactive = sys.stdin.isatty() and not args.non_interactive and not as_json
 
     token = (args.token or os.environ.get(TOKEN_ENV) or "").strip()
     if not token and interactive:
@@ -396,6 +405,18 @@ async def _onboard(args: argparse.Namespace) -> int:
                 cfg, path=cfg_path, updated_at=datetime.now(timezone.utc).isoformat()
             )
             steps.append((f"capture roots → {cfg_path}", f"{len(cfg.roots)} root(s)"))
+
+    if as_json:
+        _print_json(
+            {
+                "ok": True,
+                "repo": str(repo),
+                "shell_rc": str(rc_path),
+                "token_masked": mask_token(token),
+                "steps": [{"name": name, "status": status} for name, status in steps],
+            }
+        )
+        return 0
 
     print(f"\nCitadel onboarding for {repo}  (token {mask_token(token)}):")
     for label, status in steps:
@@ -446,6 +467,9 @@ def build_parser() -> argparse.ArgumentParser:
     onboard.add_argument(
         "--non-interactive", action="store_true", help="No prompts; requires --token"
     )
+    onboard.add_argument(
+        "--json", action="store_true", help="Machine-readable output (implies no prompts)"
+    )
     onboard.set_defaults(handler=_onboard)
 
     setup = subcommands.add_parser(
@@ -465,6 +489,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Skip prompts; only apply --node-url / --root flags",
     )
     setup.add_argument("--show", action="store_true", help="Print current config and exit")
+    setup.add_argument("--json", action="store_true", help="Machine-readable output")
     setup.add_argument("--config", help="Override config path (testing)")
     setup.set_defaults(handler=_setup)
 
@@ -481,6 +506,7 @@ def build_parser() -> argparse.ArgumentParser:
     capture.add_argument(
         "--dry-run", action="store_true", help="Print payloads without posting"
     )
+    capture.add_argument("--json", action="store_true", help="Machine-readable output")
     capture.add_argument("--config", help="Override config path (testing)")
     capture.set_defaults(handler=_capture)
 
