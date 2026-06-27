@@ -178,6 +178,18 @@ Mint a **seat-writer** token from the connect wizard. It carries
 dev's private **Node**. One token powers MCP search, ingest, and background
 hooks (`CITADEL_MCP_ACCESS_TOKEN`). Never share tokens between seats.
 
+**Security model for seat MCP:**
+
+| Action | Seat MCP | Central |
+|---|---|---|
+| Search / read | Own node + Central | Read-only |
+| `citadel_ingest` | Personal node only (after user approval) | Blocked |
+| `citadel_contribute` | Blocked | Use org sync / promotion instead |
+| Admin sync tools | Blocked (admin token only) | Cron-driven |
+
+Configure the MCP client to **always ask before** `citadel_ingest` and other
+write tools. The server also runs a secret/sensitivity scan on every write.
+
 ## Tools
 
 | Tool | Role | What it does |
@@ -203,13 +215,17 @@ hooks (`CITADEL_MCP_ACCESS_TOKEN`). Never share tokens between seats.
 
 ## Safety rules
 
+- **Always ask the user before any write tool** (`citadel_ingest`, `citadel_contribute`,
+  `citadel_record_feedback`). Configure your MCP client to require approval for
+  those tools (see `docs/mcp/codex-hosted.config.toml`).
+- **Seat-writer tokens:** MCP writes land in the personal node only. Central is
+  read-only from MCP; org sync and selective promotion update Central.
 - Do not commit tokens to git or paste them into PRs/issues.
 - Do not echo tokens in chat, logs, or tool output.
-- Prefer **reader** tokens; use writer/admin only for explicit write/ops actions.
-- Approval-gate `citadel_ingest`, `citadel_contribute`, `citadel_record_feedback`,
-  `citadel_run_learning_agent`, `citadel_run_repo_content_sync`,
-  `citadel_run_backup_mirror`, and `citadel_improve` when the client supports
-  per-tool approval.
+- Prefer **reader** tokens; use writer only when the user explicitly asks to save something.
+- Never ingest secrets, API keys, tokens, passwords, private keys, seed phrases, PII,
+  or raw logs — the server secret gate blocks many patterns but curation is still required.
+- Approval-gate all write/admin tools when the client supports per-tool approval.
 
 ## Troubleshooting
 

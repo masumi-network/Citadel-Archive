@@ -228,6 +228,9 @@ uv run citadel learn --force
   return 0 search results until the next admin/cron cognify runs; that is expected,
   not a failure. (Personal notes stay in `seat:{slug}`; they are never lost.)
 - **Only write when the user explicitly asks** to preserve durable context.
+- **Seat MCP writers:** personal node only; Central is read-only from MCP. The server
+  rejects `citadel_contribute`, Central `dataset`, and org/Central tags on MCP ingest.
+  Configure the client to require user approval before every write tool.
 - Good candidates for ingestion: architecture decisions, ADRs, source facts, implementation notes, reusable runbooks, operational playbooks, onboarding context.
 - Keep payloads small and curated. Summarize key decisions and facts rather than dumping raw transcripts.
 - Use meaningful tags. Tags help filter and organize vault content.

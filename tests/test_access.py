@@ -330,3 +330,22 @@ def test_validate_seat_slug_rejects_invalid_values() -> None:
         validate_seat_slug("Bad Slug")
     with pytest.raises(ValueError, match="Seat slug"):
         validate_seat_slug("-bad")
+
+
+def test_capture_policy_round_trip(tmp_path: Path) -> None:
+    access_store = store(tmp_path)
+    access_store.create_seat(name="Alice", slug="alice")
+
+    baseline = access_store.get_capture_policy("alice")
+    assert baseline.deny_globs == ()
+
+    updated = access_store.set_capture_policy(
+        "alice",
+        deny_globs=["private/*", "private/*"],
+        actor_id="admin_1",
+    )
+    assert updated.deny_globs == ("private/*",)
+    assert updated.updated_by == "admin_1"
+
+    loaded = access_store.get_capture_policy("alice")
+    assert loaded.deny_globs == ("private/*",)

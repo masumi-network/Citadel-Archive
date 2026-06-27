@@ -1168,31 +1168,17 @@ args = [
               <section class="window action-panel">
                 <div class="window-titlebar">
                   <div>
-                    <h2>Source Retention</h2>
-                    <p class="panel-kicker">Phase 1 policy</p>
+                    <h2>Capture Policy Baseline</h2>
+                    <p class="panel-kicker">Org deny globs merged with env excludes (ADR-0007)</p>
                   </div>
                 </div>
-                <div id="settingsPolicyList" class="entity-list">
+                <div id="settingsPolicyList" class="entity-list" aria-live="polite">
                   <div class="entity-item">
                     <div>
-                      <strong>Latest normalized snapshot</strong>
-                      <p>Keep enough source evidence to cite, audit, and rebuild.</p>
+                      <strong>Loading capture baseline</strong>
+                      <p>Env excludes and default org deny patterns.</p>
                     </div>
-                    <span class="status-chip status-enabled">active</span>
-                  </div>
-                  <div class="entity-item">
-                    <div>
-                      <strong>Historical point-in-time records</strong>
-                      <p>Retain daily digests, decisions, audit events, and conflicts.</p>
-                    </div>
-                    <span class="status-chip status-enabled">active</span>
-                  </div>
-                  <div class="entity-item">
-                    <div>
-                      <strong>Secrets and generated databases</strong>
-                      <p>Exclude credentials, embeddings, vector indexes, and graph stores.</p>
-                    </div>
-                    <span class="status-chip status-standby">blocked</span>
+                    <span class="status-chip status-standby">loading</span>
                   </div>
                 </div>
               </section>

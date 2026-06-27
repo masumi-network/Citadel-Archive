@@ -103,6 +103,7 @@ const auditAccessTitle = document.getElementById("auditAccessTitle");
 const auditAccessSubtitle = document.getElementById("auditAccessSubtitle");
 const settingsStatus = document.getElementById("settingsStatus");
 const settingsHealthGrid = document.getElementById("settingsHealthGrid");
+const settingsPolicyList = document.getElementById("settingsPolicyList");
 const settingsMirrorList = document.getElementById("settingsMirrorList");
 const conflictsStatus = document.getElementById("conflictsStatus");
 const conflictsList = document.getElementById("conflictsList");
@@ -2124,6 +2125,29 @@ async function loadSeats() {
   }
 }
 
+async function editSeatCapturePolicy(seatSlug) {
+  try {
+    const current = await api(`/api/access/seats/${encodeURIComponent(seatSlug)}/capture-policy`);
+    const baseline = (current.baseline?.deny_globs || []).join("\n");
+    const next = window.prompt(
+      `Seat capture policy deny globs for ${seatSlug} (one per line):`,
+      baseline,
+    );
+    if (next === null) return;
+    const denyGlobs = next
+      .split("\n")
+      .map((line) => line.trim())
+      .filter(Boolean);
+    await api(`/api/access/seats/${encodeURIComponent(seatSlug)}/capture-policy`, {
+      method: "PUT",
+      body: JSON.stringify({ deny_globs: denyGlobs }),
+    });
+    showToast(`Updated capture policy for ${seatSlug}`);
+  } catch (error) {
+    showToast(error.message || "Could not update capture policy", true);
+  }
+}
+
 function renderSeats(seats = []) {
   accessSeatsList.innerHTML = "";
   if (!seats.length) {
@@ -2163,6 +2187,12 @@ function renderSeats(seats = []) {
       });
       item.append(actions);
     }
+    const policyButton = document.createElement("button");
+    policyButton.className = "secondary-button compact-button";
+    policyButton.type = "button";
+    policyButton.textContent = "Capture policy";
+    policyButton.addEventListener("click", () => editSeatCapturePolicy(seat.seat_slug));
+    item.append(policyButton);
     accessSeatsList.append(item);
   });
 }
@@ -2190,12 +2220,13 @@ async function loadSettings() {
     <div class="skeleton index-skeleton"></div>
   `;
   try {
-    const [ready, learning, mirror] = await Promise.all([
+    const [ready, learning, mirror, captureBaseline] = await Promise.all([
       api("/readyz"),
       api("/api/learning-agent"),
       api("/api/backup-mirror").catch((error) => ({ ok: false, error: error.message })),
+      api("/api/access/capture-baseline").catch((error) => ({ ok: false, error: error.message })),
     ]);
-    state.settingsSnapshot = { ready, learning, mirror };
+    state.settingsSnapshot = { ready, learning, mirror, captureBaseline };
     renderSettings(state.settingsSnapshot);
     settingsStatus.textContent = "Ready";
     settingsStatus.className = "status-chip status-enabled";
@@ -2213,6 +2244,7 @@ function renderSettings(snapshot) {
   const learning = snapshot.learning || {};
   const github = learning.sources?.github || {};
   renderSettingsMirror(snapshot.mirror);
+  renderSettingsCaptureBaseline(snapshot.captureBaseline);
   const rows = [
     {
       name: "HTTP service",
@@ -2264,6 +2296,51 @@ function renderSettings(snapshot) {
       <span class="status-chip ${row.error ? "status-error" : "status-enabled"}">${escapeHtml(row.status)}</span>
     `;
     settingsHealthGrid.append(item);
+  });
+}
+
+function renderSettingsCaptureBaseline(captureBaseline) {
+  if (!settingsPolicyList) return;
+  settingsPolicyList.innerHTML = "";
+  if (!captureBaseline || captureBaseline.ok === false) {
+    settingsPolicyList.append(
+      emptyState("Could not load capture baseline", captureBaseline?.error || "Admin access required"),
+    );
+    return;
+  }
+  const envPatterns = captureBaseline.env_exclude_patterns || [];
+  const effective = captureBaseline.effective_deny_globs || [];
+  const rows = [
+    {
+      name: "Env exclude patterns",
+      body: envPatterns.length ? envPatterns.join(", ") : "None configured",
+      status: envPatterns.length ? "active" : "empty",
+      error: false,
+    },
+    {
+      name: "Default org deny globs",
+      body: (captureBaseline.default_org_deny_globs || []).slice(0, 6).join(", "),
+      status: "template",
+      error: false,
+    },
+    {
+      name: "Effective deny globs",
+      body: `${effective.length} merged patterns (env + org defaults)`,
+      status: "merged",
+      error: false,
+    },
+  ];
+  rows.forEach((row) => {
+    const item = document.createElement("div");
+    item.className = "entity-item";
+    item.innerHTML = `
+      <div>
+        <strong>${escapeHtml(row.name)}</strong>
+        <p>${escapeHtml(row.body)}</p>
+      </div>
+      <span class="status-chip ${row.error ? "status-error" : "status-enabled"}">${escapeHtml(row.status)}</span>
+    `;
+    settingsPolicyList.append(item);
   });
 }
 

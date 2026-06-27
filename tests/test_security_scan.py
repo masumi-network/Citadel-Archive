@@ -37,6 +37,22 @@ def test_github_token_pattern_blocks_at_critical() -> None:
     assert "github_token" in categories(result)
 
 
+def test_citadel_access_token_is_blocked() -> None:
+    token = "ctdl_" + "aB3" * 12
+    result = scan(f"paste {token} here")
+
+    assert result["blocked"] is True
+    assert "citadel_access_token" in categories(result)
+
+
+def test_database_connection_url_is_blocked() -> None:
+    url = "postgresql://user:secret@db.example.com:5432/app"
+    result = scan(f"DATABASE_URL={url}")
+
+    assert result["blocked"] is True
+    assert "database_connection_url" in categories(result)
+
+
 def test_fine_grained_github_token_is_detected() -> None:
     assert "github_fine_grained_token" in categories(scan(f"use {FINE_GRAINED_TOKEN}"))
 

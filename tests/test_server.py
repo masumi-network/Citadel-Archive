@@ -1886,7 +1886,7 @@ def test_seat_ingest_defaults_to_node_light_path(tmp_path: Any) -> None:
     assert tracking.ingest_calls[0]["dataset"] == "seat:dana"
 
 
-def test_org_tag_ingest_routes_to_central(tmp_path: Any) -> None:
+def test_seat_org_tag_ingest_stays_on_node(tmp_path: Any) -> None:
     app.state.access_store = AccessStore(tmp_path / "access.json")
     admin = authed_client()
     token = admin.post("/api/access/seats", json={"name": "Eve", "slug": "eve"}).json()["token"]
@@ -1895,16 +1895,15 @@ def test_org_tag_ingest_routes_to_central(tmp_path: Any) -> None:
     app.state.mesh = MeshState()
     api_client = TestClient(app, base_url="https://testserver")
 
-    response = api_client.post(
+    tagged = api_client.post(
         "/ingest",
         json={"data": "Org policy", "tags": ["repo-content"]},
         headers={"Authorization": f"Bearer {token}"},
     )
 
-    assert response.status_code == 200
-    assert response.json()["dataset"] == "masumi-network"
-    assert len(tracking.ingest_calls) == 1
-    assert tracking.ingest_calls[0]["dataset"] == "masumi-network"
+    assert tagged.status_code == 403
+    assert "personal node" in tagged.json()["detail"].lower()
+    assert tracking.ingest_calls == []
 
 
 def test_promotion_tag_dual_writes_node_and_central(tmp_path: Any) -> None:
@@ -1922,11 +1921,9 @@ def test_promotion_tag_dual_writes_node_and_central(tmp_path: Any) -> None:
         headers={"Authorization": f"Bearer {token}"},
     )
 
-    assert response.status_code == 200
-    assert response.json()["dataset"] == "masumi-network"
-    assert len(tracking.ingest_calls) == 2
-    assert tracking.ingest_calls[0]["dataset"] == "seat:frank"
-    assert tracking.ingest_calls[1]["dataset"] == "masumi-network"
+    assert response.status_code == 403
+    assert "promotion" in response.json()["detail"].lower()
+    assert tracking.ingest_calls == []
 
 
 def test_seat_token_cannot_reach_another_seat_node(tmp_path: Any) -> None:
@@ -1952,7 +1949,7 @@ def test_seat_token_cannot_reach_another_seat_node(tmp_path: Any) -> None:
     assert read.status_code == 403
     assert read.json()["detail"] == "Dataset not allowed: seat:grace."
     assert write.status_code == 403
-    assert write.json()["detail"] == "Dataset not allowed: seat:grace."
+    assert "seat:heidi" in write.json()["detail"]
     assert app.state.citadel.ingest_calls == []
 
 
@@ -1987,7 +1984,7 @@ def test_unscoped_token_cannot_reach_a_seat_node(tmp_path: Any) -> None:
     assert ordinary_write.json()["dataset"] == "team-notes"
 
 
-def test_seat_direct_central_write_requires_org_tag(tmp_path: Any) -> None:
+def test_seat_direct_central_write_blocked(tmp_path: Any) -> None:
     app.state.access_store = AccessStore(tmp_path / "access.json")
     admin = authed_client()
     token = admin.post("/api/access/seats", json={"name": "Karl", "slug": "karl"}).json()["token"]
@@ -2006,13 +2003,17 @@ def test_seat_direct_central_write_requires_org_tag(tmp_path: Any) -> None:
         json={"data": "curated", "dataset": "masumi-network", "tags": ["org-ready"]},
         headers={"Authorization": f"Bearer {token}"},
     )
+    node_default = api_client.post(
+        "/ingest",
+        json={"data": "working note"},
+        headers={"Authorization": f"Bearer {token}"},
+    )
 
     assert untagged.status_code == 403
-    assert "org tag" in untagged.json()["detail"]
-    assert tagged.status_code == 200
-    assert tagged.json()["dataset"] == "masumi-network"
-    # Only the tagged write reached Cognee; the untagged one never ingested.
-    assert [call["dataset"] for call in tracking.ingest_calls] == ["masumi-network"]
+    assert tagged.status_code == 403
+    assert node_default.status_code == 200
+    assert node_default.json()["dataset"] == "seat:karl"
+    assert [call["dataset"] for call in tracking.ingest_calls] == ["seat:karl"]
 
 
 def test_seat_token_defaulting_to_central_still_gated(tmp_path: Any) -> None:
@@ -2041,10 +2042,9 @@ def test_seat_token_defaulting_to_central_still_gated(tmp_path: Any) -> None:
         json={"data": "raw drop", "dataset": "masumi-network"},
         headers={"Authorization": f"Bearer {token}"},
     )
-    # No dataset given -> default target resolves to Central, which must also gate.
     defaulted = api_client.post(
         "/ingest",
-        json={"data": "raw default drop"},
+        json={"data": "working note"},
         headers={"Authorization": f"Bearer {token}"},
     )
     tagged = api_client.post(
@@ -2054,17 +2054,14 @@ def test_seat_token_defaulting_to_central_still_gated(tmp_path: Any) -> None:
     )
 
     assert explicit.status_code == 403
-    assert "org tag" in explicit.json()["detail"]
-    assert defaulted.status_code == 403
-    assert "org tag" in defaulted.json()["detail"]
-    assert tagged.status_code == 200
-    assert [call["dataset"] for call in tracking.ingest_calls] == ["masumi-network"]
+    assert defaulted.status_code == 200
+    assert defaulted.json()["dataset"] == "seat:leo"
+    assert tagged.status_code == 403
+    assert [call["dataset"] for call in tracking.ingest_calls] == ["seat:leo"]
 
 
-def test_obsidian_push_routes_org_tagged_docs_through_tags(tmp_path: Any) -> None:
-    # Obsidian sync must route on the document's real tags like /ingest: an
-    # org-bound (promotion) note dual-writes the seat node and Central instead of
-    # being trapped in the node because the resolver was handed empty tags.
+def test_obsidian_push_keeps_seat_org_tagged_docs_on_node(tmp_path: Any) -> None:
+    # ADR-0007: seat Obsidian pushes stay on the Node even when tagged org-ready.
     app.state.access_store = AccessStore(tmp_path / "access.json")
     app.state.obsidian_sync = ObsidianSyncStore(tmp_path / "obsidian.json")
     app.state.mesh = MeshState()
@@ -2092,11 +2089,11 @@ def test_obsidian_push_routes_org_tagged_docs_through_tags(tmp_path: Any) -> Non
 
     assert pushed.status_code == 200
     datasets = [call["dataset"] for call in tracking.ingest_calls]
-    assert datasets == ["seat:mia", "masumi-network"]
-    # The audit records both legs of the dual-write, not just the primary outcome.
+    assert datasets == ["seat:mia"]
+    assert "org-ready" not in tracking.ingest_calls[0]["tags"]
     events = app.state.access_store.snapshot()["audit_events"]
     push_event = next(e for e in events if e["action"] == "obsidian.sync.push")
-    assert push_event["detail"]["written_datasets"] == ["masumi-network", "seat:mia"]
+    assert push_event["detail"]["written_datasets"] == ["seat:mia"]
 
 
 def test_create_seat_api_rejects_admin_role(tmp_path: Any) -> None:
@@ -2404,6 +2401,103 @@ def test_promotion_run_disabled_returns_status_and_audits() -> None:
     assert runs and runs[-1]["success"] is True
 
 
+def _seat_mcp_client(tmp_path: Any, slug: str) -> tuple[TestClient, str, TrackingCitadel]:
+    app.state.access_store = AccessStore(tmp_path / "access.json")
+    admin = authed_client()
+    token = admin.post(
+        "/api/access/seats",
+        json={"name": slug.title(), "slug": slug},
+    ).json()["token"]
+    tracking = TrackingCitadel()
+    app.state.citadel = tracking
+    app.state.mesh = MeshState()
+    return TestClient(app, base_url="https://testserver"), token, tracking
+
+
+def test_mcp_seat_ingest_blocks_central_dataset(tmp_path: Any) -> None:
+    client, token, tracking = _seat_mcp_client(tmp_path, "mcp-alice")
+
+    response = client.post(
+        "/ingest",
+        json={"data": "try central", "dataset": "masumi-network"},
+        headers={
+            "Authorization": f"Bearer {token}",
+            "x-citadel-mcp-tool": "citadel_ingest",
+        },
+    )
+
+    assert response.status_code == 403
+    assert "personal node" in response.json()["detail"].lower()
+    assert tracking.ingest_calls == []
+
+
+def test_mcp_seat_ingest_blocks_org_tags(tmp_path: Any) -> None:
+    client, token, tracking = _seat_mcp_client(tmp_path, "mcp-bob")
+
+    response = client.post(
+        "/ingest",
+        json={"data": "org note", "tags": ["org-ready"]},
+        headers={
+            "Authorization": f"Bearer {token}",
+            "x-citadel-mcp-tool": "citadel_ingest",
+        },
+    )
+
+    assert response.status_code == 403
+    assert "central" in response.json()["detail"].lower()
+    assert tracking.ingest_calls == []
+
+
+def test_mcp_seat_ingest_allows_personal_node(tmp_path: Any) -> None:
+    client, token, tracking = _seat_mcp_client(tmp_path, "mcp-carol")
+
+    response = client.post(
+        "/ingest",
+        json={"data": "personal note"},
+        headers={
+            "Authorization": f"Bearer {token}",
+            "x-citadel-mcp-tool": "citadel_ingest",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["dataset"] == "seat:mcp-carol"
+    assert tracking.ingest_calls[0]["dataset"] == "seat:mcp-carol"
+
+
+def test_mcp_seat_contribute_forbidden(tmp_path: Any) -> None:
+    client, token, tracking = _seat_mcp_client(tmp_path, "mcp-dana")
+
+    response = client.post(
+        "/api/contribute",
+        json={"title": "Title", "content": "Body"},
+        headers={
+            "Authorization": f"Bearer {token}",
+            "x-citadel-mcp-tool": "citadel_contribute",
+        },
+    )
+
+    assert response.status_code == 403
+    assert "central" in response.json()["detail"].lower()
+    assert tracking.ingest_calls == []
+
+
+def test_seat_contribute_forbidden(tmp_path: Any) -> None:
+    app.state.access_store = AccessStore(tmp_path / "access.json")
+    admin = authed_client()
+    token = admin.post("/api/access/seats", json={"name": "Mcp Dana", "slug": "mcp-dana"}).json()["token"]
+    api_client = TestClient(app, base_url="https://testserver")
+
+    response = api_client.post(
+        "/api/contribute",
+        json={"title": "Title", "content": "Body"},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert response.status_code == 403
+    assert "promotion" in response.json()["detail"].lower()
+
+
 def test_lifespan_rehydrates_mesh_from_source_state(tmp_path: Path) -> None:
     github = tmp_path / "github_sync_state.json"
     github.write_text(
@@ -2642,3 +2736,91 @@ def test_github_webhook_other_event_returns_204(tmp_path: Path) -> None:
 
     assert response.status_code == 204
     assert syncer.ran is False
+
+
+def test_org_capture_baseline_requires_admin(tmp_path: Any) -> None:
+    app.state.access_store = AccessStore(tmp_path / "access.json")
+    reader = authed_client("test-reader")
+
+    response = reader.get("/api/access/capture-baseline")
+
+    assert response.status_code == 403
+
+
+def test_org_capture_baseline_merges_env_and_defaults(tmp_path: Any) -> None:
+    app.state.access_store = AccessStore(tmp_path / "access.json")
+    app.state.citadel = FakeCitadel()
+    admin = authed_client()
+
+    response = admin.get("/api/access/capture-baseline")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ok"] is True
+    assert ".git/*" in payload["env_exclude_patterns"]
+    assert ".env" in payload["effective_deny_globs"]
+
+
+def test_seat_capture_policy_admin_crud(tmp_path: Any) -> None:
+    app.state.access_store = AccessStore(tmp_path / "access.json")
+    app.state.citadel = FakeCitadel()
+    admin = authed_client()
+    admin.post("/api/access/seats", json={"name": "Alice", "slug": "alice"})
+
+    empty = admin.get("/api/access/seats/alice/capture-policy")
+    assert empty.status_code == 200
+    assert empty.json()["baseline"]["deny_globs"] == []
+
+    updated = admin.put(
+        "/api/access/seats/alice/capture-policy",
+        json={"deny_globs": ["team-private/*", ".env.local"]},
+    )
+    assert updated.status_code == 200
+    payload = updated.json()
+    assert payload["baseline"]["deny_globs"] == ["team-private/*", ".env.local"]
+    assert "team-private/*" in payload["effective_deny_globs"]
+    assert ".env.local" in payload["effective_deny_globs"]
+
+    audit = admin.get("/api/audit")
+    assert any(
+        event["action"] == "access.capture_policy.update"
+        for event in audit.json()["audit_events"]
+    )
+
+
+def test_seat_capture_policy_readable_by_seat_token(tmp_path: Any) -> None:
+    app.state.access_store = AccessStore(tmp_path / "access.json")
+    app.state.citadel = FakeCitadel()
+    admin = authed_client()
+    created = admin.post("/api/access/seats", json={"name": "Bob", "slug": "bob"})
+    token = created.json()["token"]
+    admin.put(
+        "/api/access/seats/bob/capture-policy",
+        json={"deny_globs": ["private-notes/*"]},
+    )
+    seat_client = TestClient(app, base_url="https://testserver")
+
+    response = seat_client.get(
+        "/api/access/seats/bob/capture-policy",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert response.status_code == 200
+    assert "private-notes/*" in response.json()["effective_deny_globs"]
+
+
+def test_seat_capture_policy_put_requires_admin(tmp_path: Any) -> None:
+    app.state.access_store = AccessStore(tmp_path / "access.json")
+    app.state.citadel = FakeCitadel()
+    admin = authed_client()
+    created = admin.post("/api/access/seats", json={"name": "Carol", "slug": "carol"})
+    token = created.json()["token"]
+    seat_client = TestClient(app, base_url="https://testserver")
+
+    response = seat_client.put(
+        "/api/access/seats/carol/capture-policy",
+        json={"deny_globs": ["blocked/*"]},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert response.status_code == 403

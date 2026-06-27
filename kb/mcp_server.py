@@ -679,11 +679,17 @@ def create_mcp_server(
         tags: list[str] | None = None,
         session_id: str | None = None,
     ) -> dict[str, Any]:
-        """Add durable context to the Citadel Organization Vault. Requires writer access.
+        """Stage durable context in the caller's personal seat node. Requires writer access.
 
-        Writes to your personal node (seat:{slug}) by default. Add tag org-ready or
-        vault-contribution to also promote to shared Central; set dataset to
-        override. Leave session_id default.
+        **Always ask the user for explicit approval before calling this tool.**
+
+        Seat-writer tokens: writes go to your personal node only (seat:{slug}). Do not
+        pass `dataset` or Central/org tags — the server rejects them for seat MCP.
+        Never ingest secrets, tokens, passwords, keys, seed phrases, PII, or raw logs.
+        Summarize and curate first; keep payloads small.
+
+        Shared Central is read-only from MCP. Org-wide memory updates via scheduled
+        GitHub/Linear sync and selective promotion — not direct MCP ingest.
         """
 
         def post_ingest() -> dict[str, Any]:
@@ -716,11 +722,11 @@ def create_mcp_server(
     ) -> dict[str, Any]:
         """Add a titled Vault Contribution through the Learning Process.
 
-        The easy write path for agents: same route as POST /api/contribute,
-        with enrichment (when enabled) and Knowledge Conflict detection on.
-        Routes through Central promotion via the Learning Process, so the
-        contribution is curated into shared Central rather than left in your
-        personal node. Requires writer access.
+        **Always ask the user for explicit approval before calling this tool.**
+
+        Not available to seat-writer MCP tokens (403). Seat devs use `citadel_ingest`
+        for personal notes after user approval. Central contributions use this path
+        only for non-seat service accounts with explicit user intent.
         """
 
         def post_contribute() -> dict[str, Any]:

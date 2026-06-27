@@ -1,6 +1,37 @@
 # Citadel Progress
 
-Last updated: 2026-06-26.
+Last updated: 2026-06-27.
+
+## 2026-06-27 — ADR-0007 design + security tightening
+
+- **Design session (grill-with-docs):** locked **Seat Node Write Policy** — all
+  seat-scoped writes → personal **Node** only; **Central** read-only for seats.
+  **Central** updates via org sync, **Promotion Agent**, service accounts.
+- **Capture model:** **Approved Capture Roots** (local) + **Capture Policy**
+  (server hybrid); v1 triggers git push + `citadel capture`; preset **Capture Root
+  Tags** (`personal` / `org-work`).
+- **Promotion model:** **Promotion Agent** cross-refs GitHub org repos + **Central**;
+  auto-promote known work; **New Org Project** → **Promotion Approval** (dashboard
+  + MCP; admin delegate with audit). 6h cron + on demand.
+- **ADR-0007** accepted; ADR-0003 partially superseded (seat org-tag → Central removed).
+- **Code (local, partial):** MCP seat write guards, extended secret scan (`ctdl_`,
+  DB URLs), skill/MCP doc updates. **384 tests** passing before P1 HTTP parity.
+- **Next:** P4 `citadel setup` + `citadel capture`.
+
+### P3 shipped (same session)
+
+- **`GET/PUT /api/access/seats/{slug}/capture-policy`** — admin baseline per seat; seat token read-only.
+- **`GET /api/access/capture-baseline`** — org env excludes + default deny globs merged view.
+- **`kb/capture_policy.py`** — `merged_deny_globs()` merges `CITADEL_EXCLUDE_PATTERNS`, org defaults, seat baseline.
+- Settings + Access UI snippets for admin view/edit.
+- **396 tests** passing.
+
+### P1 shipped (same session)
+
+- **`guard_seat_write_policy`** on all channels (not MCP-only).
+- Seat **`resolve_write_targets`** always → own **Node**; org/promotion tags → 403.
+- Seat **`/api/contribute`** → 403; Obsidian org tags stripped on push.
+- **385 tests** passing.
 
 ## 2026-06-26
 

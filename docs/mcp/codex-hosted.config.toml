@@ -11,6 +11,9 @@ args = [
 [mcp_servers.citadel.tools.citadel_ingest]
 approval_mode = "approve"
 
+[mcp_servers.citadel.tools.citadel_contribute]
+approval_mode = "approve"
+
 [mcp_servers.citadel.tools.citadel_record_feedback]
 approval_mode = "approve"
 

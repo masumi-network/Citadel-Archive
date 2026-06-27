@@ -87,15 +87,22 @@ search results. Prefer each hit's `_citadel.provenance`,
 Only write to Citadel when the user **explicitly asks** to preserve durable
 context, decisions, source facts, implementation notes, or reusable runbooks.
 
+**Seat-writer MCP policy (enforced server-side):**
+
+- `citadel_ingest` → personal node only; never pass `dataset` or org/Central tags.
+- `citadel_contribute` → blocked for seat MCP tokens (403).
+- **Always ask the user for approval** before calling any write tool; configure
+  the MCP client to gate `citadel_ingest`, `citadel_contribute`, and
+  `citadel_record_feedback`.
+- Shared **Central** is read-only from seat MCP. It updates via GitHub/Linear
+  cron sync, selective promotion, and curated non-MCP contributions.
+
 Use:
 
-- `citadel_contribute` for titled Vault Contributions (`title`, `content`,
-  optional `tags`/`source_url`). It routes through the Learning Process with
-  Knowledge Conflict detection on and LLM enrichment when the vault enables it,
-  and returns `{accepted, chunks, conflict}`. Same path as `POST /api/contribute`.
-  Contributions are auto-tagged with `vault-contribution` and `author:<name>`.
-- `citadel_ingest` for raw durable notes. Include meaningful `tags`.
-- `citadel_record_feedback` for Cognee QA feedback.
+- `citadel_ingest` for raw durable personal notes (after user approval).
+- `citadel_contribute` only for non-seat service accounts adding curated Central
+  contributions (after user approval).
+- `citadel_record_feedback` for Cognee QA feedback (after user approval).
 
 If a write returns a non-null `conflict`, tell the user: Citadel keeps
 disagreements visible instead of silently overwriting. Writers can resolve via

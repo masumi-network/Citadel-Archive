@@ -1,5 +1,10 @@
 # Seat, Node, And Central As The Private-Memory Architecture
 
+> **Partially superseded by [ADR-0007](0007-seat-capture-promotion-write-policy.md)
+> (2026-06-27):** seat-scoped writes are **Node-only** on all channels; direct
+> seat org-tag ingest to **Central** is removed. **Central** is fed by governed
+> sync and **Promotion Agent** instead.
+
 Citadel separates **private agent memory** from **organization-wide knowledge** using three layers: a **Seat** (one licensed human **Principal**), a **Node** (that seat's private mini knowledge base), and **Central** (the shared organization dataset, `masumi-network`). The **Node** is the storage boundary — not the **Token**. Admins provision a seat before issuing tokens; each token inherits the seat's node scope plus read access to Central. Reads never cross seat nodes; writes default to the seat node, with org-bound paths and tagged contributions landing in Central; **Promotion** copies curated content from a node into Central via dual-write (the original stays in the node).
 
 **Considered Options**

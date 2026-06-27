@@ -1,5 +1,37 @@
 # Citadel Tasks
 
+## ADR-0007 execution — seat capture, promotion, write policy (~15% overall)
+
+**Plan:** [`docs/adr-0007-shipping-plan.md`](docs/adr-0007-shipping-plan.md)  
+**ADR:** [`docs/adr/0007-seat-capture-promotion-write-policy.md`](docs/adr/0007-seat-capture-promotion-write-policy.md)
+
+### Checkpoints
+
+- [x] P0 Glossary + ADR-0007 + shipping plan + progress (2026-06-27)
+- [x] P2 MCP seat write guards + secret scan extensions (local, pending deploy)
+- [x] **P1 Seat write policy on all HTTP paths** (2026-06-27)
+- [x] P3 Server capture policy API + admin baseline (2026-06-27)
+- [ ] P4 `citadel setup` + `citadel capture` + local allowlist
+- [ ] P5 Promotion Agent (GitHub + Central refs, tags, 6h + on demand)
+- [ ] P6 Promotion Approval queue (dashboard + MCP, admin delegate + audit)
+
+### P1 — Seat write policy ✅ (2026-06-27)
+
+- [x] `guard_seat_write_policy` + `resolve_write_targets` seat branch
+- [x] Seat org/Central/promotion tags → 403 on ingest
+- [x] Seat `/api/contribute` → 403
+- [x] Obsidian org tags stripped; push stays on **Node**
+- [x] Admin / non-seat Central path unchanged; **385 tests** passing
+
+### P3 — Capture policy ✅ (2026-06-27)
+
+- [x] `GET/PUT /api/access/seats/{slug}/capture-policy` + org baseline endpoint
+- [x] `merged_deny_globs` merges env excludes + org defaults + seat baseline
+- [x] Settings + Access UI snippets for admin view/edit
+- [x] Unit + API tests
+
+---
+
 ## Phase 2 execution — sequential (~99% overall)
 
 **Plan:** [`docs/phase-2-shipping-plan.md`](docs/phase-2-shipping-plan.md)

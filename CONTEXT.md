@@ -85,12 +85,48 @@ Structured or source-linked knowledge added to an **Organization Vault** by an a
 _Avoid_: chat message, random update, raw agent conversation
 
 **Promotion**:
-A curated copy of content from a seat **Node** into **Central**. Dual-write: the original stays in the **Node**; the copy goes to **Central**.
-_Avoid_: move, delete original, automatic merge
+A curated copy of content from a seat **Node** into **Central**. Dual-write: the original stays in the **Node**; the copy goes to **Central**. Runs on a schedule (operator cron) and via an LLM **Promotion Agent** that cross-references the note against org projects and **Structured Knowledge** already in **Central** — not a direct seat write.
+_Avoid_: move, delete original, automatic merge, direct seat ingest to Central
+
+**Promotion Agent**:
+The governed job that decides whether seat **Node** content belongs in **Central**. It compares candidate notes against org projects already known from the GitHub organization repo list and against **Structured Knowledge** already in **Central**; content that clearly extends known org work may be promoted automatically; content that introduces a **New Org Project** requires **Promotion Approval** before syncing to **Central**. Runs on a 6h operator cron and on demand from the **Operations Dashboard** or CLI.
+_Avoid_: magic merge, silent upload, MCP self-promote, GitHub-only matching, promote-only-on-daily-sync
+
+**New Org Project**:
+A project, repo, product, or initiative named in a seat **Node** that is not yet represented in the GitHub organization repo list nor in **Central** org context. Promotion to **Central** waits for **Promotion Approval**.
+_Avoid_: personal side project auto-share, new folder name, any novel string
+
+**Promotion Approval**:
+The **Vault Member** decision to sync **New Org Project** content from their **Node** into **Central**. Offered in the Citadel dashboard (monitoring queue) and via MCP when the **Vault Member** is in an agent session. Each **Vault Member** sees their own pending queue; admins see all seats’ pending items and may approve on a **Vault Member**’s behalf when covered (e.g. out of office), with a full audit record.
+_Avoid_: auto-approve novel work, silent admin override, chat-only approval
+
+**Operations Dashboard**:
+The Citadel web UI for operators and **Vault Members** to monitor vault health, seat activity, memory and usage, **Promotion Approval**, and **Access** — not the primary dev write surface (MCP and autonomous capture feed the **Node**).
+_Avoid_: main editor, Obsidian replacement, admin-only console
+
+**Seat Node Write Policy**:
+A **Seat** or its **Agent Identities** may write only to that seat's **Node**. **Central** is read-only for seat-scoped callers; **Central** receives **Structured Knowledge** only through governed upstream paths (org source sync, **Promotion**, service-account **Vault Contributions**, operator/admin jobs).
+_Avoid_: tag your way into Central, shared personal dump, MCP bypass
+
+**Capture Root Tags**:
+Labels assigned to each **Approved Capture Root** during setup. Preset tags carry hard promotion rules: `personal` never auto-promotes to **Central**; `org-work` may auto-promote when the **Promotion Agent** finds a GitHub org or **Central** match. Custom tags are labels for search and context only unless the org adds more presets later.
+_Avoid_: tag into Central, org-ready on capture, silent promotion override
+
+**Capture Policy**:
+The rules attached to **Approved Capture Roots** — which paths, file types, and events may be ingested, and which must never be (secrets, `.env`, credentials, raw logs). Applies to autonomous capture; does not override the server **Security Finding** gate. v1 triggers: **git push** inside an approved root and **manual CLI capture** on demand (`citadel capture`); no file watcher or local schedule in v1. **Hybrid storage:** org-wide deny/template rules live on the server per **Seat**; **Approved Capture Roots** (local paths) are chosen on each machine during setup. **Governance:** operators set an org **Capture Policy** baseline (admin); a **Vault Member** may add stricter local rules but may not remove org denies.
+_Avoid_: ingest everything, trust the agent, skip secret scan, ingest on every save, one global laptop path, opt out of secret excludes
+
+**Explicit Capture Approval**:
+Per-write confirmation required when ingest is outside **Approved Capture Roots** — MCP client tool approval plus agent yes/no before `citadel_ingest`.
+_Avoid_: silent MCP write, auto-ingest whole chat
+
+**Approved Capture Roots**:
+Filesystem directories a **Vault Member** opts in during Citadel setup. Content from these roots may sync to the seat **Node** without per-write MCP prompts, subject to **Capture Policy** and **Capture Root Tags**. Any path may be approved; reaching **Central** still requires **Promotion**.
+_Avoid_: whole home directory, silent org-wide upload, org repos only
 
 **Automatic + Curated Sync**:
-Default agent memory stays in the seat **Node**; org-bound content (pipelines, tagged contributions) also lands in **Central** per curation rules. Integration sources (e.g. Linear) sync org-wide into **Central**; seat-relevant subsets (e.g. issues assigned to that seat-holder) are also **Mirrored** into that seat's **Node**.
-_Avoid_: full vault mirror, seat-to-seat sync, chat log sync
+Default agent memory stays in the seat **Node** via autonomous capture (git push, session hooks). **Central** is updated by operator cron and governed org pipelines — not by direct seat writes. Integration sources (e.g. Linear) sync org-wide into **Central**; seat-relevant subsets (e.g. issues assigned to that seat-holder) are also **Mirrored** into that seat's **Node**.
+_Avoid_: full vault mirror, seat-to-seat sync, chat log sync, seat writes to Central
 
 **Seat-Scoped Mirror**:
 A filtered copy of **Central** content relevant to one **Seat** (e.g. Linear issues assigned to that seat-holder) stored in that seat's **Node** so personal agent queries stay local without re-querying **Central**.
@@ -138,7 +174,9 @@ _Avoid_: merge, overwrite, silent correction
 - A **Security Finding** is separate from an **Organization Update Digest** and should never expose secret values in external communication surfaces.
 - A **Knowledge Conflict** should be shown when source-linked knowledge disagrees.
 - A **Seat** is one human **Principal** that may hold several **Tokens**; **Agent Identities** acting for that human are separate principals that may be granted access to the seat's **Node**.
-- A caller is treated as holding a **Node** when a seat **Node** is in its access scope — this is what subjects it to **Central** curation rules, regardless of whether it is the human seat-holder or one of their agents.
+- A caller is treated as holding a **Node** when a seat **Node** is in its access scope — **Seat Node Write Policy** applies: writes land in that **Node** only; **Central** is read-only for that caller.
+- **Central** gains new **Structured Knowledge** from org source sync, **Promotion** (cron + **Promotion Agent**), service-account **Vault Contributions**, and operator jobs — not from direct seat-scoped writes.
+- When **Promotion** finds content that extends known org work, it may copy to **Central** without **Vault Member** action; when it detects a **New Org Project**, it must obtain **Promotion Approval** via the **Operations Dashboard** and MCP before syncing to **Central**.
 - Integration sources (e.g. Linear) sync org-wide into **Central**; **Seat-Scoped Mirrors** copy assignee-relevant subsets into each seat's **Node** (e.g. John's assigned Linear issues appear in John's **Node** and in **Central**).
 
 ## Autonomous sync (Phase 2)
@@ -149,14 +187,18 @@ push, session close, or agent work.
 
 | Layer | Trigger | Destination | Who runs it |
 |---|---|---|---|
-| Git pre-push hook | every `git push` | seat **Node** | dev (once per clone) |
+| Git pre-push hook | every `git push` in an **Approved Capture Root** | seat **Node** | dev (once per clone) |
+| Manual CLI capture | **Vault Member** runs `citadel capture` on approved roots | seat **Node** | dev (on demand) |
 | SessionEnd hook (Claude Code) | session close | seat **Node** | dev (optional) |
+| Explicit MCP / agent ingest | user-approved write outside auto-capture | seat **Node** | **Vault Member** + agent |
 | Railway `learning-agent` cron | daily schedule | **Central** | operator |
 | Railway `linear-sync` cron | scheduled | **Central** + **Seat-Scoped Mirror** | operator |
+| Railway **Promotion Agent** cron | every 6h + on demand | seat **Node** → **Central** (governed) | operator; **Vault Member** trigger from **Operations Dashboard** or CLI |
 
 Install dev-side hooks once: `skills/citadel-proactive-ingest/scripts/install_autosync.sh`.
+Register **Approved Capture Roots** locally, assign **Capture Root Tags**, and merge the server **Capture Policy** template during seat setup (Citadel CLI wizard).
 
-**Agent sync policy:** rely on hooks + cron. Agents read via `citadel_search`,
+**Agent sync policy:** rely on hooks + cron for allowlisted org repos. Agents read via `citadel_search`,
 `citadel_linear_my_issues`, and `citadel_linear_search`. Do **not** trigger
 admin sync (`POST /api/linear-sync/run`, learning-agent runs) unless the user
 explicitly asks for an immediate refresh.
