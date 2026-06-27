@@ -22,8 +22,9 @@ The first successful run creates the project; no token is ever needed.
 ## Cut a release
 
 ```bash
-# 1. bump the version
+# 1. bump the version + update the changelog
 #    edit pyproject.toml  ->  version = "0.1.1"
+#    add a [0.1.1] section to CHANGELOG.md
 
 # 2. commit + tag + push the tag
 git add pyproject.toml
