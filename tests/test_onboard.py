@@ -78,7 +78,7 @@ def test_merge_claude_settings_adds_then_idempotent(tmp_path: Path) -> None:
     path = tmp_path / "settings.json"
     path.write_text(json.dumps({"hooks": {"PreToolUse": [{"hooks": []}]}}))
 
-    assert merge_claude_settings(path) == "added"
+    assert merge_claude_settings(path, python="/usr/bin/python3") == "added"
     data = json.loads(path.read_text())
     assert "PreToolUse" in data["hooks"]  # preserved
     cmds = [
@@ -86,33 +86,50 @@ def test_merge_claude_settings_adds_then_idempotent(tmp_path: Path) -> None:
         for g in data["hooks"]["SessionEnd"]
         for h in g["hooks"]
     ]
-    assert any("sync_session.py" in c for c in cmds)
+    assert any("kb.hooks.sync_session" in c for c in cmds)
     assert TOKEN_ENV in data["httpHookAllowedEnvVars"]
 
-    assert merge_claude_settings(path) == "unchanged"
+    assert merge_claude_settings(path, python="/usr/bin/python3") == "unchanged"
     data2 = json.loads(path.read_text())
     assert len(data2["hooks"]["SessionEnd"]) == 1  # not duplicated
 
 
 def _make_repo(tmp_path: Path) -> Path:
+    # No vendored skill needed — the hook runs the bundled kb.hooks module.
     (tmp_path / ".git" / "hooks").mkdir(parents=True)
-    template = tmp_path / "skills" / "citadel-proactive-ingest" / "templates"
-    template.mkdir(parents=True)
-    (template / "git-pre-push.sh").write_text("#!/bin/sh\nexit 0\n")
     return tmp_path
 
 
 def test_install_pre_push_hook(tmp_path: Path) -> None:
     repo = _make_repo(tmp_path)
-    assert install_pre_push_hook(repo) == "installed"
+    assert install_pre_push_hook(repo, python="/usr/bin/python3") == "installed"
     dst = repo / ".git" / "hooks" / "pre-push"
     assert dst.exists()
     assert dst.stat().st_mode & 0o100  # executable
-    assert install_pre_push_hook(repo) == "unchanged"
+    assert "kb.hooks.sync_push" in dst.read_text()
+    assert install_pre_push_hook(repo, python="/usr/bin/python3") == "unchanged"
 
 
 def test_install_pre_push_hook_not_git(tmp_path: Path) -> None:
     assert install_pre_push_hook(tmp_path) == "skipped:not-git"
+
+
+def test_bundled_hooks_are_importable_modules() -> None:
+    # The published CLI installs hooks as `python -m kb.hooks.*`; the modules
+    # must import and expose a runnable main() with no server deps.
+    from kb.hooks import sync_push, sync_session
+
+    assert callable(sync_push.main)
+    assert callable(sync_session.main)
+
+
+def test_pre_push_hook_script_is_failsafe() -> None:
+    from kb.onboard import pre_push_hook_script
+
+    script = pre_push_hook_script(python="/usr/bin/python3")
+    assert script.startswith("#!/bin/sh")
+    assert "-m kb.hooks.sync_push" in script
+    assert "|| true" in script and script.rstrip().endswith("exit 0")
 
 
 def test_onboard_non_interactive_full_run(tmp_path: Path, monkeypatch) -> None:
@@ -133,7 +150,7 @@ def test_onboard_non_interactive_full_run(tmp_path: Path, monkeypatch) -> None:
     assert (repo / ".git" / "hooks" / "pre-push").exists()
     settings = json.loads((repo / ".claude" / "settings.json").read_text())
     assert any(
-        "sync_session.py" in h["command"]
+        "kb.hooks.sync_session" in h["command"]
         for g in settings["hooks"]["SessionEnd"]
         for h in g["hooks"]
     )

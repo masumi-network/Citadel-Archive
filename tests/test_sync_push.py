@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import importlib.util
 import io
 import json
 import os
@@ -9,17 +8,7 @@ from typing import Any
 
 import pytest
 
-_MODULE_PATH = (
-    Path(__file__).resolve().parents[1]
-    / "skills"
-    / "citadel-proactive-ingest"
-    / "scripts"
-    / "sync_push.py"
-)
-_spec = importlib.util.spec_from_file_location("sync_push", _MODULE_PATH)
-assert _spec and _spec.loader
-sync_push = importlib.util.module_from_spec(_spec)
-_spec.loader.exec_module(sync_push)
+from kb.hooks import sync_push
 
 
 def test_parse_pre_push_lines_skips_deletes() -> None:

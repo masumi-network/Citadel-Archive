@@ -25,7 +25,7 @@ from kb.capture_config import DEFAULT_NODE_URL, load_capture_config
 
 TOKEN_ENV = "CITADEL_MCP_ACCESS_TOKEN"
 MCP_SERVER_NAME = "citadel"
-SESSION_HOOK_MARKER = "skills/citadel-proactive-ingest/scripts/sync_session.py"
+SESSION_HOOK_MARKER = "kb.hooks.sync_session"
 _TIMEOUT = 8.0
 _SEARCH_TIMEOUT = 15.0  # cognee searches are slow when cold; non-gating anyway
 _SMOKE_QUERY = "citadel status connectivity smoke"

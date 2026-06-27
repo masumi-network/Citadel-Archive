@@ -15,6 +15,7 @@ import json
 import os
 import stat
 import subprocess
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -22,8 +23,15 @@ from kb.capture_config import DEFAULT_NODE_URL
 
 TOKEN_ENV = "CITADEL_MCP_ACCESS_TOKEN"
 MCP_SERVER_NAME = "citadel"
-_SESSION_HOOK_MARKER = "skills/citadel-proactive-ingest/scripts/sync_session.py"
-_PRE_PUSH_TEMPLATE = "skills/citadel-proactive-ingest/templates/git-pre-push.sh"
+PUSH_MODULE = "kb.hooks.sync_push"
+SESSION_MODULE = "kb.hooks.sync_session"
+# Used both to install the SessionEnd hook and to detect it on re-run.
+_SESSION_HOOK_MARKER = SESSION_MODULE
+
+
+def _hook_python() -> str:
+    """The interpreter that has `kb` installed (so the hooks can import it)."""
+    return sys.executable or "python3"
 
 
 def git_root_or_cwd() -> Path:
@@ -66,13 +74,26 @@ def mcp_server_block(base_url: str = DEFAULT_NODE_URL) -> dict[str, Any]:
     }
 
 
-def _session_hook() -> dict[str, Any]:
+def _session_hook(python: str | None = None) -> dict[str, Any]:
+    py = python or _hook_python()
     return {
         "type": "command",
-        "command": f'python3 "$CLAUDE_PROJECT_DIR/{_SESSION_HOOK_MARKER}"',
+        "command": f'"{py}" -m {SESSION_MODULE}',
         "timeout": 20,
         "allowedEnvVars": [TOKEN_ENV],
     }
+
+
+def pre_push_hook_script(python: str | None = None) -> str:
+    """Self-contained git pre-push hook that runs the bundled module, fail-silent."""
+    py = python or _hook_python()
+    return (
+        "#!/bin/sh\n"
+        "# Citadel autosync — installed by `citadel onboard`.\n"
+        "# Fail-silent: never blocks `git push`.\n"
+        f'"{py}" -m {PUSH_MODULE} "$@" 2>/dev/null || true\n'
+        "exit 0\n"
+    )
 
 
 def _load_json_object(path: Path) -> dict[str, Any]:
@@ -121,7 +142,7 @@ def merge_mcp_config(path: Path, base_url: str = DEFAULT_NODE_URL) -> str:
     return status
 
 
-def merge_claude_settings(path: Path) -> str:
+def merge_claude_settings(path: Path, python: str | None = None) -> str:
     """Merge the SessionEnd hook into .claude/settings.json without duplicating it."""
     data = _load_json_object(path)
     hooks = data.setdefault("hooks", {})
@@ -141,7 +162,7 @@ def merge_claude_settings(path: Path) -> str:
     )
     changed = False
     if not has_marker:
-        session_end.append({"hooks": [_session_hook()]})
+        session_end.append({"hooks": [_session_hook(python)]})
         changed = True
     allowed = data.setdefault("httpHookAllowedEnvVars", [])
     if isinstance(allowed, list) and TOKEN_ENV not in allowed:
@@ -153,15 +174,12 @@ def merge_claude_settings(path: Path) -> str:
     return "added"
 
 
-def install_pre_push_hook(repo: Path) -> str:
-    """Copy the vendored pre-push template into .git/hooks/pre-push (executable)."""
+def install_pre_push_hook(repo: Path, python: str | None = None) -> str:
+    """Install a self-contained pre-push hook that runs the bundled sync module."""
     if not (repo / ".git").is_dir():
         return "skipped:not-git"
-    src = repo / _PRE_PUSH_TEMPLATE
-    if not src.exists():
-        return "skipped:no-template"
     dst = repo / ".git" / "hooks" / "pre-push"
-    payload = src.read_text()
+    payload = pre_push_hook_script(python)
     if dst.exists() and dst.read_text() == payload:
         return "unchanged"
     dst.parent.mkdir(parents=True, exist_ok=True)
