@@ -107,6 +107,46 @@ def test_parse_root_arg() -> None:
     )
 
 
+def test_save_creates_private_parent_dir(tmp_path: Path) -> None:
+    nested = tmp_path / "dot-citadel" / "capture.json"
+    save_capture_config(CaptureConfig().with_root("/tmp/a", ["personal"]), path=nested)
+    assert oct(nested.parent.stat().st_mode & 0o777) == "0o700"
+    assert oct(nested.stat().st_mode & 0o777) == "0o600"
+
+
+def test_setup_interactive_wizard(tmp_path: Path, monkeypatch) -> None:
+    from kb import cli as cli_mod
+
+    path = tmp_path / "capture.json"
+    repo = tmp_path / "repo"
+    answers = iter(
+        [
+            "https://wizard-node.example",  # Node URL prompt
+            str(repo),                       # first root path
+            "org-work, notes",               # tags
+            "",                              # empty path -> finish
+        ]
+    )
+    monkeypatch.setattr("builtins.input", lambda *a, **k: next(answers))
+
+    class _Tty:
+        def isatty(self) -> bool:
+            return True
+
+    monkeypatch.setattr(cli_mod.sys, "stdin", _Tty())
+
+    args = argparse.Namespace(
+        config=str(path), node_url=None, root=None, non_interactive=False, show=False
+    )
+    rc = asyncio.run(cli_mod._setup(args))
+
+    assert rc == 0
+    loaded = load_capture_config(path)
+    assert loaded.node_url == "https://wizard-node.example"
+    assert len(loaded.roots) == 1
+    assert loaded.roots[0].tags == ("org-work", "notes")
+
+
 def test_setup_non_interactive_writes_roots(tmp_path: Path) -> None:
     path = tmp_path / "capture.json"
     args = argparse.Namespace(

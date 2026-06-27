@@ -66,7 +66,7 @@ def capture_token() -> str:
     omitted so capture never routes to Central with elevated privileges.
     """
     return (
-        os.getenv("CITADEL_MCP_ACCESS_TOKEN")
+        (os.getenv("CITADEL_MCP_ACCESS_TOKEN") or "").strip()
         or os.getenv("CITADEL_WRITER_KEYS", "").split(",")[0].strip()
     )
 
