@@ -118,28 +118,45 @@ def capture_config_path() -> Path:
     return base / "capture.json"
 
 
+def _norm_path(value: str) -> str:
+    """Expand ~/$VARs, make absolute, and resolve symlinks (realpath).
+
+    Symlink resolution matters on macOS where ``git rev-parse --show-toplevel``
+    reports the physical path (``/private/tmp/x``) while a config root may be the
+    symlinked path (``/tmp/x``); without it, an approved repo would be skipped.
+    """
+    expanded = os.path.expandvars(os.path.expanduser(value.strip()))
+    return os.path.realpath(os.path.abspath(expanded))
+
+
 def load_capture_roots() -> list[dict[str, Any]] | None:
     """Approved Capture Roots from the local config.
 
-    Returns ``None`` when no config file exists — the user has not opted into
-    the allowlist, so the hook keeps its original always-capture behavior. An
-    empty list means a config exists but approves no roots.
+    Returns ``None`` only when no config file exists — the user has not opted
+    into the allowlist, so the hook keeps its original always-capture behavior.
+    A config that exists but is empty/corrupt returns ``[]`` (approve nothing):
+    once a user opts into the allowlist we fail CLOSED, never silently re-enable
+    global capture.
     """
     path = capture_config_path()
+    if not path.exists():
+        return None
     try:
-        if not path.exists():
-            return None
         data = json.loads(path.read_text())
     except Exception:
-        return None
+        return []
+    if not isinstance(data, dict):
+        return []
     roots: list[dict[str, Any]] = []
     for item in data.get("roots") or []:
+        if not isinstance(item, dict):
+            continue
         raw_path = str(item.get("path", "")).strip()
         if not raw_path:
             continue
         roots.append(
             {
-                "path": os.path.abspath(os.path.expanduser(raw_path)),
+                "path": _norm_path(raw_path),
                 "tags": [
                     str(tag).strip().lower()
                     for tag in (item.get("tags") or [])
@@ -152,10 +169,11 @@ def load_capture_roots() -> list[dict[str, Any]] | None:
 
 def matched_root(repo_root: str, roots: list[dict[str, Any]]) -> dict[str, Any] | None:
     """Return the approved root containing ``repo_root``, if any."""
-    target = os.path.abspath(os.path.expanduser(repo_root))
+    target = _norm_path(repo_root)
     for root in roots:
-        base = root["path"]
-        if target == base or target.startswith(base + os.sep):
+        base = _norm_path(root["path"])
+        prefix = base.rstrip(os.sep) + os.sep  # handles a root of "/" and trailing slashes
+        if target == base or target.startswith(prefix):
             return root
     return None
 
