@@ -32,6 +32,7 @@ from kb.onboard import (
     merge_claude_settings,
     merge_mcp_config,
 )
+from kb.status import gather_status, render_text
 from kb.github_sync import GitHubOrgSyncer
 from kb.learning_agent import LearningAgent
 from kb.models import FeedbackRequest
@@ -261,6 +262,31 @@ async def _capture(args: argparse.Namespace) -> int:
     return 1 if failures else 0
 
 
+async def _status(args: argparse.Namespace) -> int:
+    repo = Path(args.repo).expanduser() if args.repo else git_root_or_cwd()
+    config_path = Path(args.config).expanduser() if args.config else capture_config_path()
+    try:
+        node_url = args.node_url or load_capture_config(config_path).node_url
+    except ValueError:
+        node_url = args.node_url or DEFAULT_NODE_URL
+    token = capture_token() or None
+
+    report = await asyncio.to_thread(
+        gather_status,
+        node_url,
+        token,
+        repo=repo,
+        config_path=config_path,
+        with_search=not args.no_search,
+        with_recent=not args.no_recent,
+    )
+    if args.json:
+        _print_json(report.to_dict())
+    else:
+        print(render_text(report))
+    return 0 if report.healthy else 1
+
+
 async def _onboard(args: argparse.Namespace) -> int:
     repo = Path(args.repo).expanduser() if args.repo else git_root_or_cwd()
     interactive = sys.stdin.isatty() and not args.non_interactive
@@ -311,6 +337,18 @@ async def _onboard(args: argparse.Namespace) -> int:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="citadel")
     subcommands = parser.add_subparsers(dest="command", required=True)
+
+    status = subcommands.add_parser(
+        "status",
+        help="Check Citadel connection, identity, and local setup (--json for agents)",
+    )
+    status.add_argument("--json", action="store_true", help="Machine-readable output")
+    status.add_argument("--node-url", help="Override Node URL (default: from config)")
+    status.add_argument("--repo", help="Repo to check hooks/MCP in (default: git toplevel or cwd)")
+    status.add_argument("--config", help="Override capture config path")
+    status.add_argument("--no-search", action="store_true", help="Skip the search smoke check")
+    status.add_argument("--no-recent", action="store_true", help="Skip recent-activity fetch")
+    status.set_defaults(handler=_status)
 
     onboard = subcommands.add_parser(
         "onboard",
