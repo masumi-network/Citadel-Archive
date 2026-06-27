@@ -37,6 +37,7 @@ import os
 import subprocess
 import sys
 import urllib.request
+from pathlib import Path
 from typing import Any
 
 DEFAULT_MAX_INGEST_BYTES = 200_000
@@ -105,6 +106,58 @@ def ref_branch_name(ref: str) -> str:
     if ref.startswith(prefix):
         return ref[len(prefix) :]
     return ref.rsplit("/", 1)[-1] if ref else ""
+
+
+def capture_config_path() -> Path:
+    """Locate ~/.citadel/capture.json (the Approved Capture Roots allowlist)."""
+    override = os.getenv("CITADEL_CAPTURE_CONFIG_PATH")
+    if override:
+        return Path(override).expanduser()
+    home = os.getenv("CITADEL_HOME")
+    base = Path(home).expanduser() if home else Path.home() / ".citadel"
+    return base / "capture.json"
+
+
+def load_capture_roots() -> list[dict[str, Any]] | None:
+    """Approved Capture Roots from the local config.
+
+    Returns ``None`` when no config file exists — the user has not opted into
+    the allowlist, so the hook keeps its original always-capture behavior. An
+    empty list means a config exists but approves no roots.
+    """
+    path = capture_config_path()
+    try:
+        if not path.exists():
+            return None
+        data = json.loads(path.read_text())
+    except Exception:
+        return None
+    roots: list[dict[str, Any]] = []
+    for item in data.get("roots") or []:
+        raw_path = str(item.get("path", "")).strip()
+        if not raw_path:
+            continue
+        roots.append(
+            {
+                "path": os.path.abspath(os.path.expanduser(raw_path)),
+                "tags": [
+                    str(tag).strip().lower()
+                    for tag in (item.get("tags") or [])
+                    if str(tag).strip()
+                ],
+            }
+        )
+    return roots
+
+
+def matched_root(repo_root: str, roots: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """Return the approved root containing ``repo_root``, if any."""
+    target = os.path.abspath(os.path.expanduser(repo_root))
+    for root in roots:
+        base = root["path"]
+        if target == base or target.startswith(base + os.sep):
+            return root
+    return None
 
 
 def parse_pre_push_lines(text: str) -> list[dict[str, str]]:
@@ -285,6 +338,7 @@ def _sync_one(
     remote_name: str,
     remote_ref: str,
     token: str,
+    capture_tags: list[str] | tuple[str, ...] = (),
 ) -> None:
     note = build_commit_snapshot(
         cwd,
@@ -298,6 +352,9 @@ def _sync_one(
     note = _truncate_utf8(note, _max_ingest_bytes())
     branch = ref_branch_name(local_ref) if local_ref else _git_branch(cwd)
     tags = build_tags(cwd, branch)
+    for tag in capture_tags:
+        if tag not in tags:
+            tags.append(tag)
     post_ingest(_base_url(), token, note, tags)
 
 
@@ -309,6 +366,22 @@ def run(stdin: Any, remote_name: str = "") -> int:
             return 0
 
         cwd = git_toplevel()
+
+        # ADR-0007 P4.3: once the user opts into the local allowlist
+        # (~/.citadel/capture.json exists), only push from an Approved Capture
+        # Root captures; other repos are skipped with a warning.
+        roots = load_capture_roots()
+        capture_tags: list[str] = []
+        if roots is not None:
+            match = matched_root(cwd, roots)
+            if match is None:
+                sys.stderr.write(
+                    f"citadel: {cwd} is not an Approved Capture Root; skipping "
+                    "capture (run `citadel setup` to approve it).\n"
+                )
+                return 0
+            capture_tags = list(match["tags"])
+
         raw = stdin.read() if hasattr(stdin, "read") else ""
         pushes = parse_pre_push_lines(raw)
 
@@ -326,6 +399,7 @@ def run(stdin: Any, remote_name: str = "") -> int:
                     remote_name=remote_name,
                     remote_ref=row["remote_ref"],
                     token=token,
+                    capture_tags=capture_tags,
                 )
             return 0
 
@@ -343,6 +417,7 @@ def run(stdin: Any, remote_name: str = "") -> int:
             remote_name=remote_name,
             remote_ref="",
             token=token,
+            capture_tags=capture_tags,
         )
     except Exception:
         return 0

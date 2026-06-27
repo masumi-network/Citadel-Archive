@@ -74,9 +74,11 @@ def test_missing_token_no_post(monkeypatch: Any) -> None:
     assert recorder == []
 
 
-def test_post_omits_dataset_field(monkeypatch: Any) -> None:
+def test_post_omits_dataset_field(monkeypatch: Any, tmp_path: Path) -> None:
     monkeypatch.setenv("CITADEL_MCP_ACCESS_TOKEN", "ctdl_test_token")
     monkeypatch.setenv("CITADEL_BASE_URL", "https://example.invalid")
+    # No allowlist config → original always-capture behavior (hermetic).
+    monkeypatch.setenv("CITADEL_CAPTURE_CONFIG_PATH", str(tmp_path / "absent.json"))
 
     captured: dict[str, Any] = {}
 
@@ -139,3 +141,58 @@ def test_run_swallows_post_errors(monkeypatch: Any) -> None:
 
 def test_ref_branch_name() -> None:
     assert sync_push.ref_branch_name("refs/heads/feature/foo") == "feature/foo"
+
+
+def _write_capture_config(path: Path, roots: list[dict[str, Any]]) -> None:
+    path.write_text(json.dumps({"version": 1, "roots": roots}))
+
+
+def test_load_capture_roots_none_when_absent(monkeypatch: Any, tmp_path: Path) -> None:
+    monkeypatch.setenv("CITADEL_CAPTURE_CONFIG_PATH", str(tmp_path / "absent.json"))
+    assert sync_push.load_capture_roots() is None
+
+
+def test_matched_root_containment(tmp_path: Path) -> None:
+    roots = [{"path": "/tmp/work", "tags": ["org-work"]}]
+    assert sync_push.matched_root("/tmp/work/sub", roots)["tags"] == ["org-work"]
+    assert sync_push.matched_root("/tmp/worktree", roots) is None
+
+
+def test_run_skips_repo_outside_allowlist(monkeypatch: Any, tmp_path: Path, capsys) -> None:
+    config = tmp_path / "capture.json"
+    _write_capture_config(config, [{"path": "/some/approved", "tags": ["personal"]}])
+    monkeypatch.setenv("CITADEL_CAPTURE_CONFIG_PATH", str(config))
+    monkeypatch.setenv("CITADEL_MCP_ACCESS_TOKEN", "ctdl_test_token")
+    monkeypatch.setattr(sync_push, "git_toplevel", lambda cwd="": "/tmp/other-repo")
+
+    posted: list[Any] = []
+    monkeypatch.setattr(sync_push, "_sync_one", lambda *a, **k: posted.append(k))
+
+    stdin = io.StringIO(
+        "refs/heads/main abcdef0123456789abcdef0123456789abcdef0 refs/heads/main "
+        + "0" * 40
+        + "\n"
+    )
+    assert sync_push.run(stdin, remote_name="origin") == 0
+    assert posted == []
+    assert "not an Approved Capture Root" in capsys.readouterr().err
+
+
+def test_run_captures_approved_repo_with_root_tags(monkeypatch: Any, tmp_path: Path) -> None:
+    config = tmp_path / "capture.json"
+    _write_capture_config(config, [{"path": "/tmp/approved", "tags": ["org-work"]}])
+    monkeypatch.setenv("CITADEL_CAPTURE_CONFIG_PATH", str(config))
+    monkeypatch.setenv("CITADEL_MCP_ACCESS_TOKEN", "ctdl_test_token")
+    monkeypatch.setattr(sync_push, "git_toplevel", lambda cwd="": "/tmp/approved")
+
+    calls: list[dict[str, Any]] = []
+    monkeypatch.setattr(sync_push, "_sync_one", lambda *a, **k: calls.append(k))
+
+    stdin = io.StringIO(
+        "refs/heads/main abcdef0123456789abcdef0123456789abcdef0 refs/heads/main "
+        + "0" * 40
+        + "\n"
+    )
+    assert sync_push.run(stdin, remote_name="origin") == 0
+    assert len(calls) == 1
+    assert calls[0]["capture_tags"] == ["org-work"]
