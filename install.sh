@@ -99,9 +99,25 @@ fi
 say "Installing ${PKG}…"
 run "$PIPX install $PKG"
 
+if [ "$DRY_RUN" = 1 ]; then
+  say ""
+  say "  [dry-run] would show the citadel home screen here"
+  exit 0
+fi
+
+# End on the brand: show the home screen if `citadel` is reachable this session.
+CITADEL_BIN="$(command -v citadel 2>/dev/null || true)"
+if [ -z "$CITADEL_BIN" ] && [ -x "$HOME/.local/bin/citadel" ]; then
+  CITADEL_BIN="$HOME/.local/bin/citadel"
+fi
+
 say ""
-say "Done. Next:"
-say "  citadel onboard     # set up this repo (token + hooks + MCP + capture roots)"
-say "  citadel status      # check the connection"
-say ""
-say "If 'citadel' isn't found, open a new shell so your PATH picks it up."
+if [ -n "$CITADEL_BIN" ]; then
+  "$CITADEL_BIN" || true
+  say ""
+  say "Next:  citadel onboard     # set up this repo (token · hooks · MCP · capture)"
+else
+  say "Done. Open a new shell so your PATH updates, then run:"
+  say "  citadel             # the home screen"
+  say "  citadel onboard     # set up this repo"
+fi
