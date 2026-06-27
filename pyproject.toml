@@ -1,6 +1,6 @@
 [project]
 name = "citadel-archive"
-version = "0.1.1"
+version = "0.1.2"
 description = "Citadel — a self-hosted Organization Vault and seat-capture CLI built on Cognee."
 readme = "README.md"
 requires-python = ">=3.10"

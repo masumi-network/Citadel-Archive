@@ -2,15 +2,17 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import difflib
 import functools
 import json
 import os
+import re
 import sys
 import urllib.error
 from collections.abc import Awaitable, Callable
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, NoReturn
 
 # Lightweight client modules only — the heavy server stack (kb.service,
 # kb.github_sync, …) is imported lazily inside the server handlers so the base
@@ -470,8 +472,37 @@ def _print_home() -> None:
     print("  " + paint("Run `citadel <command> --help` for details.", "dim", enable=color))
 
 
+class CitadelParser(argparse.ArgumentParser):
+    """argparse parser with a friendly, suggestion-aware unknown-command error."""
+
+    def error(self, message: str) -> NoReturn:
+        if "invalid choice:" in message and "argument command" in message:
+            color = supports_color(sys.stderr)
+            bad_match = re.search(r"invalid choice: '([^']*)'", message)
+            bad = bad_match.group(1) if bad_match else ""
+            choices_match = re.search(r"\(choose from (.+)\)\s*$", message)
+            choices = (
+                [c.strip().strip("'\"") for c in choices_match.group(1).split(",")]
+                if choices_match
+                else []
+            )
+            lines = [paint(f"✗ unknown command: {bad!r}", "red", enable=color), ""]
+            matches = difflib.get_close_matches(bad, choices, n=3, cutoff=0.5)
+            if matches:
+                lines.append("  did you mean?")
+                lines += [
+                    "    " + paint(f"citadel {name}", "bold", "cyan", enable=color)
+                    for name in matches
+                ]
+                lines.append("")
+            lines.append("  run " + paint("citadel", "cyan", enable=color) + " to see all commands.")
+            sys.stderr.write("\n".join(lines) + "\n")
+            raise SystemExit(2)
+        super().error(message)
+
+
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="citadel")
+    parser = CitadelParser(prog="citadel")
     # Not required: bare `citadel` shows the banner + command list instead of an error.
     subcommands = parser.add_subparsers(dest="command")
 
