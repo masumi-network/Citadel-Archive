@@ -4,6 +4,14 @@ All notable changes to `citadel-archive` are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses
 [Semantic Versioning](https://semver.org/).
 
+## [0.1.2] — 2026-06-27
+
+### Changed
+
+- **Friendly unknown-command error** — a mistyped command (e.g. `citadel stauts`)
+  now shows `✗ unknown command` + a fuzzy "did you mean? `citadel status`"
+  suggestion, instead of the raw argparse usage dump.
+
 ## [0.1.1] — 2026-06-27
 
 ### Added
@@ -57,5 +65,6 @@ self-hosted Organization Vault server.
   references it as `${CITADEL_MCP_ACCESS_TOKEN}` and it is never echoed.
 - The pre-push allowlist fails **closed** on a corrupt config.
 
+[0.1.2]: https://github.com/masumi-network/Citadel-Archive/releases/tag/v0.1.2
 [0.1.1]: https://github.com/masumi-network/Citadel-Archive/releases/tag/v0.1.1
 [0.1.0]: https://github.com/masumi-network/Citadel-Archive/releases/tag/v0.1.0

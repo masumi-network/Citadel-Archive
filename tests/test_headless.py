@@ -47,6 +47,23 @@ def test_bare_citadel_shows_home_screen(monkeypatch, capsys) -> None:
     assert "Get started" in out                     # grouped menu
 
 
+def test_unknown_command_suggests_closest(capsys) -> None:
+    with pytest.raises(SystemExit) as exc:
+        build_parser().parse_args(["stauts"])
+    assert exc.value.code == 2
+    err = capsys.readouterr().err
+    assert "unknown command" in err
+    assert "citadel status" in err  # fuzzy suggestion
+
+
+def test_unknown_command_no_match_is_clean(capsys) -> None:
+    with pytest.raises(SystemExit):
+        build_parser().parse_args(["zzzzz"])
+    err = capsys.readouterr().err
+    assert "unknown command" in err
+    assert "see all commands" in err
+
+
 def test_setup_json_never_prompts_even_on_tty(tmp_path: Path, monkeypatch, capsys) -> None:
     # --json implies non-interactive: must not call input() even with a TTY.
     monkeypatch.setattr("sys.stdin.isatty", lambda: True)
