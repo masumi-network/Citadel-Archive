@@ -2,6 +2,26 @@
 
 Last updated: 2026-06-27.
 
+## 2026-06-27 — Published to PyPI + CLI polish (v0.1.0 → v0.1.2)
+
+- **Published `citadel-archive` to PyPI** via GitHub Actions **trusted publishing**
+  (OIDC, no stored tokens) — `pipx install citadel-archive`. Each tag →
+  Action build+publish → GitHub Release. Shipped **v0.1.0, v0.1.1, v0.1.2**
+  (latest release also carries the wheel + sdist as assets).
+- **Professional README** rewrite (898 → 200 lines) + new
+  [`docs/operations.md`](operations.md) for deploy/env/integrations; castle
+  figlet hero. (PR #13)
+- **Bootstrap installer** [`install.sh`](../install.sh) (`curl … | sh`): detects
+  Python 3.10+, **prompts y/N to install it** (brew/apt/dnf/pacman) if missing,
+  sets up pipx + the CLI, and ends by showing the home screen. (PR #14, #16)
+- **Branded home screen** — bare `citadel` shows the large castle hero + a
+  curated, colorized command menu instead of the argparse usage dump.
+  (PR #15, v0.1.1)
+- **Friendly unknown-command error** — `citadel stauts` → `✗ unknown command` +
+  "did you mean? `citadel status`" (difflib). (PR #17, v0.1.2)
+- **Verified live:** main `13eba2a` deployed on Railway (healthz 200, authed
+  session OK); PyPI serving 0.1.2; **487 tests**, ruff + twine clean.
+
 ## 2026-06-27 — Teammate CLI shipped to prod (PR #11 merged + deployed)
 
 - **Published-ready CLI** `citadel-archive` (command stays `citadel`): zero-dep
@@ -16,7 +36,7 @@ Last updated: 2026-06-27.
   rotation + shell-quote safety, status corrupt-config safety.
 - **Merged PR #11 → main → Railway auto-deploy verified** (commit a53b1bb live,
   uvicorn up, /healthz 200, authed session OK). 484 tests, ruff + twine clean.
-- Pending: PyPI publish (one-time trusted-publisher setup + `git tag v0.1.0`).
+- Followed by the PyPI publish + CLI polish — see the entry above.
 
 ## 2026-06-27 — ADR-0007 design + security tightening
 
