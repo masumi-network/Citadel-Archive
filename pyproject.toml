@@ -14,10 +14,9 @@ classifiers = [
     "Topic :: Software Development :: Libraries",
 ]
 # Base install = the lightweight teammate CLI (onboard / status / capture / setup).
-# Client commands are stdlib + python-dotenv only; the server stack is an extra.
-dependencies = [
-    "python-dotenv>=1.0.1,<2.0.0",
-]
+# These commands are pure standard library — zero third-party deps. The server
+# stack (and python-dotenv for .env loading) lives in the [server] extra.
+dependencies = []
 
 [project.optional-dependencies]
 # `pip install citadel-archive[server]` — run the Node/MCP server + sync jobs.
@@ -27,6 +26,7 @@ server = [
     "google-auth>=2.40.0,<3.0.0",
     "mcp>=1.23.0,<2.0.0",
     "pydantic>=2.10.5,<3.0.0",
+    "python-dotenv>=1.0.1,<2.0.0",
     "requests>=2.32.0,<3.0.0",
     "uvicorn[standard]>=0.34.0,<1.0.0",
 ]

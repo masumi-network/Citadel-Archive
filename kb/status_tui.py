@@ -2,7 +2,7 @@
 
 Thin presentation layer over ``kb.status.gather_status`` (the same checks that
 back ``citadel status --json``). Requires the optional ``textual`` dependency
-(`pip install 'citadel[tui]'`); imported lazily so the base CLI stays light.
+(`pip install 'citadel-archive[tui]'`); imported lazily so the base CLI stays light.
 """
 
 from __future__ import annotations

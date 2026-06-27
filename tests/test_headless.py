@@ -7,6 +7,8 @@ import asyncio
 import json
 from pathlib import Path
 
+import pytest
+
 from kb.cli import build_parser
 
 
@@ -29,6 +31,16 @@ def test_setup_json_emits_pure_config(tmp_path: Path, capsys) -> None:
     out = json.loads(capsys.readouterr().out)  # pure JSON, no "Saved …" prose
     assert out["node_url"] == "https://node.example"
     assert out["roots"][0]["tags"] == ["org-work"]
+
+
+def test_setup_json_never_prompts_even_on_tty(tmp_path: Path, monkeypatch, capsys) -> None:
+    # --json implies non-interactive: must not call input() even with a TTY.
+    monkeypatch.setattr("sys.stdin.isatty", lambda: True)
+    monkeypatch.setattr("builtins.input", lambda *a, **k: pytest.fail("prompted under --json"))
+    cfg = tmp_path / "cap.json"
+    rc = _run(["setup", "--json", "--config", str(cfg)])
+    assert rc == 0
+    json.loads(capsys.readouterr().out)  # valid JSON, no wizard prose
 
 
 def test_capture_json_dry_run_is_clean(tmp_path: Path, capsys) -> None:

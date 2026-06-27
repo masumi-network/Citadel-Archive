@@ -225,7 +225,12 @@ async def _setup(args: argparse.Namespace) -> int:
         return 0
 
     node_url = (args.node_url or config.node_url or DEFAULT_NODE_URL).rstrip("/")
-    interactive = not args.non_interactive and not args.root and sys.stdin.isatty()
+    interactive = (
+        not args.non_interactive
+        and not args.root
+        and not getattr(args, "json", False)
+        and sys.stdin.isatty()
+    )
 
     if interactive:
         prompt = f"Node URL [{node_url}]: "
@@ -358,7 +363,7 @@ async def _tui(args: argparse.Namespace) -> int:
     except ImportError:
         print(
             "citadel tui needs the optional 'textual' dependency.\n"
-            "  pip install 'citadel[tui]'   (or: uv pip install textual)\n"
+            "  pip install 'citadel-archive[tui]'   (or: uv pip install textual)\n"
             "Meanwhile, `citadel status` gives the same checks as plain text.",
             file=sys.stderr,
         )
