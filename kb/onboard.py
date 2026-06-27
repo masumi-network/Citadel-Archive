@@ -60,10 +60,14 @@ def detect_shell_rc(home: Path | None = None) -> Path:
 
 
 def mask_token(token: str) -> str:
+    # Reveal only the last 4 chars — no contiguous bytes from the secret's start.
     token = token.strip()
-    if len(token) <= 10:
-        return "****"
-    return f"{token[:6]}…{token[-4:]}"
+    return f"…{token[-4:]}" if len(token) > 10 else "****"
+
+
+def _sh_single_quote(value: str) -> str:
+    """POSIX-safe single-quoting (close, escaped quote, reopen) for shell rc."""
+    return "'" + value.replace("'", "'\"'\"'") + "'"
 
 
 def mcp_server_block(base_url: str = DEFAULT_NODE_URL) -> dict[str, Any]:
@@ -114,16 +118,26 @@ def _write_json(path: Path, data: dict[str, Any]) -> None:
 
 
 def ensure_token_in_rc(rc_path: Path, token: str) -> str:
-    """Append ``export CITADEL_MCP_ACCESS_TOKEN=…`` to the shell rc, idempotently."""
+    """Write ``export CITADEL_MCP_ACCESS_TOKEN=…`` to the shell rc.
+
+    Idempotent, and rotation-aware: if the var is already exported with a
+    *different* value, that line is rewritten (returns ``updated``) instead of
+    being left stale. The token is single-quoted POSIX-safely.
+    """
     token = token.strip()
-    existing = rc_path.read_text() if rc_path.exists() else ""
-    for raw in existing.splitlines():
+    export_line = f"export {TOKEN_ENV}={_sh_single_quote(token)}"
+    lines = rc_path.read_text().splitlines() if rc_path.exists() else []
+    for index, raw in enumerate(lines):
         stripped = raw.strip()
         if stripped.startswith(f"export {TOKEN_ENV}=") or stripped.startswith(f"{TOKEN_ENV}="):
-            return "present"
+            if stripped == export_line:
+                return "present"
+            lines[index] = export_line
+            rc_path.write_text("\n".join(lines) + "\n")
+            return "updated"
     rc_path.parent.mkdir(parents=True, exist_ok=True)
     with rc_path.open("a", encoding="utf-8") as handle:
-        handle.write(f"\n# Citadel seat token (added by `citadel onboard`)\nexport {TOKEN_ENV}='{token}'\n")
+        handle.write(f"\n# Citadel seat token (added by `citadel onboard`)\n{export_line}\n")
     return "added"
 
 
@@ -165,7 +179,9 @@ def merge_claude_settings(path: Path, python: str | None = None) -> str:
         session_end.append({"hooks": [_session_hook(python)]})
         changed = True
     allowed = data.setdefault("httpHookAllowedEnvVars", [])
-    if isinstance(allowed, list) and TOKEN_ENV not in allowed:
+    if not isinstance(allowed, list):
+        raise ValueError(f"corrupt {path}: httpHookAllowedEnvVars must be an array")
+    if TOKEN_ENV not in allowed:
         allowed.append(TOKEN_ENV)
         changed = True
     if not changed:
@@ -175,14 +191,24 @@ def merge_claude_settings(path: Path, python: str | None = None) -> str:
 
 
 def install_pre_push_hook(repo: Path, python: str | None = None) -> str:
-    """Install a self-contained pre-push hook that runs the bundled sync module."""
+    """Install a self-contained pre-push hook that runs the bundled sync module.
+
+    Merge-not-clobber: a pre-existing *foreign* hook (not Citadel-managed) is
+    backed up to ``pre-push.citadel-bak`` rather than silently destroyed.
+    """
     if not (repo / ".git").is_dir():
         return "skipped:not-git"
     dst = repo / ".git" / "hooks" / "pre-push"
     payload = pre_push_hook_script(python)
-    if dst.exists() and dst.read_text() == payload:
-        return "unchanged"
+    result = "installed"
+    if dst.exists():
+        existing = dst.read_text()
+        if existing == payload:
+            return "unchanged"
+        if "Citadel autosync" not in existing:
+            dst.with_name("pre-push.citadel-bak").write_text(existing)
+            result = "installed (backed up existing hook → pre-push.citadel-bak)"
     dst.parent.mkdir(parents=True, exist_ok=True)
     dst.write_text(payload)
     dst.chmod(dst.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
-    return "installed"
+    return result

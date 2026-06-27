@@ -31,7 +31,8 @@ def test_detect_shell_rc(monkeypatch, tmp_path: Path) -> None:
 
 def test_mask_token() -> None:
     assert mask_token("short") == "****"
-    assert mask_token("ctdl_abcdef1234567890") == "ctdl_a…7890"
+    # Only the last 4 chars — no contiguous bytes from the token's start.
+    assert mask_token("ctdl_abcdef1234567890") == "…7890"
 
 
 def test_mcp_block_references_env_not_secret() -> None:
@@ -53,6 +54,48 @@ def test_ensure_token_in_rc_adds_then_idempotent(tmp_path: Path) -> None:
     # re-run does not duplicate
     assert ensure_token_in_rc(rc, "ctdl_secret") == "present"
     assert rc.read_text().count("CITADEL_MCP_ACCESS_TOKEN") == 1
+
+
+def test_ensure_token_rotation_updates_in_place(tmp_path: Path) -> None:
+    rc = tmp_path / ".zshrc"
+    assert ensure_token_in_rc(rc, "ctdl_old") == "added"
+    assert ensure_token_in_rc(rc, "ctdl_new") == "updated"
+    body = rc.read_text()
+    assert "ctdl_new" in body and "ctdl_old" not in body
+    assert body.count("CITADEL_MCP_ACCESS_TOKEN") == 1  # rewritten, not appended
+
+
+def test_ensure_token_shell_quote_safe(tmp_path: Path) -> None:
+    import subprocess
+
+    rc = tmp_path / ".bashrc"
+    nasty = "ctdl_a'b$(whoami)`id`"  # quotes + shell metachars
+    ensure_token_in_rc(rc, nasty)
+    out = subprocess.run(
+        ["sh", "-c", f". {rc} >/dev/null 2>&1; printf %s \"$CITADEL_MCP_ACCESS_TOKEN\""],
+        capture_output=True,
+        text=True,
+    )
+    assert out.stdout == nasty  # sourced value is exactly the token, no execution
+
+
+def test_merge_claude_settings_corrupt_allowed_envvars_raises(tmp_path: Path) -> None:
+    path = tmp_path / "settings.json"
+    path.write_text(json.dumps({"httpHookAllowedEnvVars": "not-a-list"}))
+    with pytest.raises(ValueError, match="httpHookAllowedEnvVars must be an array"):
+        merge_claude_settings(path, python="/usr/bin/python3")
+
+
+def test_install_pre_push_backs_up_foreign_hook(tmp_path: Path) -> None:
+    repo = _make_repo(tmp_path)
+    foreign = repo / ".git" / "hooks" / "pre-push"
+    foreign.write_text("#!/bin/sh\n# husky\nnpm test\n")
+
+    status = install_pre_push_hook(repo, python="/usr/bin/python3")
+    assert "backed up" in status
+    backup = repo / ".git" / "hooks" / "pre-push.citadel-bak"
+    assert backup.exists() and "husky" in backup.read_text()
+    assert "kb.hooks.sync_push" in foreign.read_text()  # new hook installed
 
 
 def test_merge_mcp_config_preserves_other_servers(tmp_path: Path) -> None:
