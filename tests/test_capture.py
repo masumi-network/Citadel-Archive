@@ -5,8 +5,19 @@ import asyncio
 import json
 import subprocess
 from pathlib import Path
+from typing import Any
 
-from kb.capture import build_capture_payload, summarize_root
+import pytest
+
+from kb import capture as capture_mod
+from kb.capture import (
+    _redact_url_userinfo,
+    _truncate_utf8,
+    build_capture_payload,
+    capture_token,
+    post_capture,
+    summarize_root,
+)
 from kb.capture_config import CaptureConfig, CaptureRoot, save_capture_config
 from kb.cli import _capture
 
@@ -66,3 +77,75 @@ def test_capture_no_roots_warns(tmp_path: Path, capsys) -> None:
     args = argparse.Namespace(config=str(config_path), root=None, dry_run=True)
     asyncio.run(_capture(args))
     assert "Run `citadel setup`" in capsys.readouterr().err
+
+
+def test_post_capture_refuses_non_https() -> None:
+    with pytest.raises(ValueError, match="non-HTTPS"):
+        post_capture("http://node.example", "ctdl_x", {"data": "x", "tags": []})
+
+
+def test_post_capture_posts_payload(monkeypatch) -> None:
+    captured: dict[str, Any] = {}
+
+    class _FakeResp:
+        def __enter__(self) -> "_FakeResp":
+            return self
+
+        def __exit__(self, *a: Any) -> None:
+            return None
+
+        def read(self) -> bytes:
+            return json.dumps({"status": "ok"}).encode()
+
+    def fake_open(request: Any, timeout: float | None = None) -> _FakeResp:
+        captured["url"] = request.full_url
+        captured["headers"] = dict(request.header_items())
+        captured["body"] = json.loads(request.data.decode())
+        return _FakeResp()
+
+    monkeypatch.setattr(capture_mod._OPENER, "open", fake_open)
+    result = post_capture("https://node.example/", "ctdl_tok", {"data": "d", "tags": ["personal"]})
+
+    assert result == {"status": "ok"}
+    assert captured["url"] == "https://node.example/ingest"
+    assert captured["headers"]["Authorization"] == "Bearer ctdl_tok"
+    assert captured["body"] == {"data": "d", "tags": ["personal"]}
+
+
+def test_capture_token_drops_admin_fallback(monkeypatch) -> None:
+    monkeypatch.delenv("CITADEL_MCP_ACCESS_TOKEN", raising=False)
+    monkeypatch.delenv("CITADEL_WRITER_KEYS", raising=False)
+    monkeypatch.setenv("CITADEL_ADMIN_KEY", "admin-should-not-be-used")
+    assert capture_token() == ""
+
+    monkeypatch.setenv("CITADEL_WRITER_KEYS", "writer-key, second")
+    assert capture_token() == "writer-key"
+
+    monkeypatch.setenv("CITADEL_MCP_ACCESS_TOKEN", "seat-token")
+    assert capture_token() == "seat-token"
+
+
+def test_build_capture_payload_truncates_oversized_summary(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("CITADEL_MCP_MAX_INGEST_BYTES", "200")
+    (tmp_path / "README.md").write_text("x " * 5000 + "\n")
+    payload = build_capture_payload(CaptureRoot(path=str(tmp_path), tags=("personal",)))
+    assert len(payload["data"].encode("utf-8")) <= 200
+
+
+def test_truncate_utf8_does_not_split_codepoints() -> None:
+    text = "é" * 100  # 2 bytes each
+    out = _truncate_utf8(text, 5)
+    assert out == "éé"  # 4 bytes, never a half codepoint
+
+
+def test_redact_url_userinfo() -> None:
+    assert _redact_url_userinfo("https://user:tok@github.com/o/r.git") == "https://github.com/o/r.git"
+    assert _redact_url_userinfo("git@github.com:o/r.git") == "git@github.com:o/r.git"
+
+
+def test_git_helper_survives_missing_git(monkeypatch) -> None:
+    def boom(*a: Any, **k: Any) -> None:
+        raise FileNotFoundError("git not installed")
+
+    monkeypatch.setattr(capture_mod.subprocess, "run", boom)
+    assert capture_mod._git("/tmp", "status") is None
