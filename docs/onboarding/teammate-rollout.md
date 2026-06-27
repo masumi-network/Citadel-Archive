@@ -32,14 +32,23 @@ it like a password.
 Install the CLI, then run onboard from the repo:
 
 ```bash
-pipx install citadel-archive     # the `citadel` command (lightweight client)
+pipx install citadel-archive     # the `citadel` command (lightweight, zero-dep client)
 citadel onboard
 ```
 
+```
+  ▙ ▟ ▙ ▟ ▙ ▟ ▙ ▟
+  ███████████████   CITADEL
+  ██ ▟▀▙   ▟▀▙ ██   the organization vault     ← citadel onboard / status
+  ██ █ █   █ █ ██
+  ███████████████
+```
+
 This runs all of the steps below for you — pastes your token into your shell rc
-(once, masked), installs the git-push + SessionEnd hooks, adds the Citadel MCP
-server, and offers to set up Approved Capture Roots. Idempotent; safe to re-run.
-`--no-mcp` for capture-only; `--non-interactive --token …` for scripts. See the
+(once, masked), installs the bundled git-push + SessionEnd hooks (`kb.hooks.*`,
+no vendoring), adds the Citadel MCP server, and offers to set up Approved
+Capture Roots. Idempotent; safe to re-run. `--no-mcp` for capture-only;
+`--non-interactive --json --token …` for agents/CI. See the
 [`citadel-onboard`](../../skills/citadel-onboard/SKILL.md) skill.
 
 The manual steps below are what `onboard` does under the hood (and the path if

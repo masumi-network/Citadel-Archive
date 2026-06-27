@@ -6,16 +6,17 @@ description: One-command teammate onboarding for Citadel. Use when a teammate wa
 # Citadel Onboard
 
 `citadel onboard` collapses the whole teammate rollout into **one idempotent
-command**. Install the CLI, then run it from a repo that has
-`skills/citadel-proactive-ingest/` vendored (the hooks live there).
+command**. Install the CLI and run it from your repo — the autosync hooks are
+**bundled in the package** (`kb.hooks.*`), so no vendored skill directory is needed.
 
 ```bash
 pipx install citadel-archive    # the `citadel` command (or [tui]/[server] extras)
 citadel onboard
 ```
 
-It walks these steps, merging into existing config (never clobbering) and safe
-to re-run:
+On a terminal you'll see the Citadel castle banner (cyan walls, bold wordmark);
+`--json`/piped output is always plain. It walks these steps, merging into
+existing config (never clobbering) and safe to re-run:
 
 | Step | What it does | Required? |
 |---|---|---|

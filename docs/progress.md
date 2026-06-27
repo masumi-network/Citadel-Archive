@@ -2,6 +2,22 @@
 
 Last updated: 2026-06-27.
 
+## 2026-06-27 — Teammate CLI shipped to prod (PR #11 merged + deployed)
+
+- **Published-ready CLI** `citadel-archive` (command stays `citadel`): zero-dep
+  client base; `[server]` / `[tui]` extras. `citadel onboard` (one-command,
+  idempotent, self-contained bundled hooks), `citadel status` / `citadel tui`
+  (dashboard replacement), `citadel setup` / `citadel capture`.
+- **Headless** `--json` on onboard/setup/capture/status — agent- and CI-drivable
+  (token from env, never argv); clean stdout, exit codes.
+- **Brand:** castle banner + TTY-aware color (`kb/banner.py`); see `brand.md`.
+- **Adversarial audit** (35 agents): 14 findings fixed feat-by-feat — incl. a
+  HIGH TUI Rich-markup injection/crash, onboard foreign-hook backup + token
+  rotation + shell-quote safety, status corrupt-config safety.
+- **Merged PR #11 → main → Railway auto-deploy verified** (commit a53b1bb live,
+  uvicorn up, /healthz 200, authed session OK). 484 tests, ruff + twine clean.
+- Pending: PyPI publish (one-time trusted-publisher setup + `git tag v0.1.0`).
+
 ## 2026-06-27 — ADR-0007 design + security tightening
 
 - **Design session (grill-with-docs):** locked **Seat Node Write Policy** — all
