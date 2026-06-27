@@ -75,8 +75,60 @@ def test_capture_no_roots_warns(tmp_path: Path, capsys) -> None:
     config_path = tmp_path / "empty.json"
     save_capture_config(CaptureConfig(), path=config_path)
     args = argparse.Namespace(config=str(config_path), root=None, dry_run=True)
-    asyncio.run(_capture(args))
+    rc = asyncio.run(_capture(args))
+    assert rc == 1
     assert "Run `citadel setup`" in capsys.readouterr().err
+
+
+def test_capture_root_filter_no_match_message(tmp_path: Path, capsys) -> None:
+    config_path = tmp_path / "capture.json"
+    save_capture_config(
+        CaptureConfig().with_root("/tmp/approved", ["personal"]), path=config_path
+    )
+    args = argparse.Namespace(config=str(config_path), root=["/tmp/nope"], dry_run=True)
+    rc = asyncio.run(_capture(args))
+    assert rc == 1
+    err = capsys.readouterr().err
+    assert "No configured root matches" in err
+    assert "Run `citadel setup`" not in err
+
+
+def test_capture_corrupt_config_exits_clean(tmp_path: Path, capsys) -> None:
+    config_path = tmp_path / "capture.json"
+    config_path.write_text("{ broken json")
+    args = argparse.Namespace(config=str(config_path), root=None, dry_run=True)
+    rc = asyncio.run(_capture(args))
+    assert rc == 1
+    assert "corrupt capture config" in capsys.readouterr().err
+
+
+def test_capture_node_down_is_handled_and_exits_nonzero(tmp_path: Path, monkeypatch, capsys) -> None:
+    config_path = tmp_path / "capture.json"
+    save_capture_config(
+        CaptureConfig(node_url="https://node.example").with_root(str(tmp_path), ["personal"]),
+        path=config_path,
+    )
+    monkeypatch.setenv("CITADEL_MCP_ACCESS_TOKEN", "ctdl_test")
+
+    import urllib.error
+
+    def boom(*a: Any, **k: Any) -> None:
+        raise urllib.error.URLError("connection refused")
+
+    monkeypatch.setattr("kb.cli.post_capture", boom)
+    args = argparse.Namespace(config=str(config_path), root=None, dry_run=False)
+    rc = asyncio.run(_capture(args))
+    assert rc == 1
+    assert "FAIL" in capsys.readouterr().err
+
+
+def test_capture_dry_run_returns_zero(tmp_path: Path) -> None:
+    config_path = tmp_path / "capture.json"
+    save_capture_config(
+        CaptureConfig().with_root(str(tmp_path), ["personal"]), path=config_path
+    )
+    args = argparse.Namespace(config=str(config_path), root=None, dry_run=True)
+    assert asyncio.run(_capture(args)) == 0
 
 
 def test_post_capture_refuses_non_https() -> None:

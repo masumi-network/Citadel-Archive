@@ -4,6 +4,7 @@ import argparse
 import asyncio
 import json
 import sys
+import urllib.error
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -142,13 +143,25 @@ def _wizard_roots(config: CaptureConfig) -> CaptureConfig:
     return config
 
 
-async def _setup(args: argparse.Namespace) -> None:
+def _load_config_or_exit(args: argparse.Namespace, command: str) -> CaptureConfig | None:
+    """Load config, printing a clean error (and signalling exit 1) on corruption."""
     config_path = Path(args.config).expanduser() if args.config else capture_config_path()
-    config = load_capture_config(config_path)
+    try:
+        return load_capture_config(config_path)
+    except ValueError as exc:
+        print(f"citadel {command}: {exc}", file=sys.stderr)
+        return None
+
+
+async def _setup(args: argparse.Namespace) -> int:
+    config_path = Path(args.config).expanduser() if args.config else capture_config_path()
+    config = _load_config_or_exit(args, "setup")
+    if config is None:
+        return 1
 
     if args.show:
         _print_json(config.to_dict())
-        return
+        return 0
 
     node_url = (args.node_url or config.node_url or DEFAULT_NODE_URL).rstrip("/")
     interactive = not args.non_interactive and not args.root and sys.stdin.isatty()
@@ -171,21 +184,25 @@ async def _setup(args: argparse.Namespace) -> None:
     )
     print(f"\nSaved {len(config.roots)} approved root(s) to {written}")
     _print_json(load_capture_config(config_path).to_dict())
+    return 0
 
 
-async def _capture(args: argparse.Namespace) -> None:
-    import urllib.error
+async def _capture(args: argparse.Namespace) -> int:
+    config = _load_config_or_exit(args, "capture")
+    if config is None:
+        return 1
 
-    config_path = Path(args.config).expanduser() if args.config else capture_config_path()
-    config = load_capture_config(config_path)
+    if not config.roots:
+        print("No approved roots to capture. Run `citadel setup` first.", file=sys.stderr)
+        return 1
 
     roots = config.roots
     if args.root:
         wanted = {normalize_path(raw) for raw in args.root}
-        roots = tuple(root for root in roots if root.path in wanted)
-    if not roots:
-        print("No approved roots to capture. Run `citadel setup` first.", file=sys.stderr)
-        return
+        roots = tuple(root for root in config.roots if root.path in wanted)
+        if not roots:
+            print(f"No configured root matches: {', '.join(args.root)}", file=sys.stderr)
+            return 1
 
     payloads = [(root, build_capture_payload(root)) for root in roots]
 
@@ -201,7 +218,7 @@ async def _capture(args: argparse.Namespace) -> None:
                 for root, payload in payloads
             ]
         )
-        return
+        return 0
 
     token = capture_token()
     if not token:
@@ -209,9 +226,10 @@ async def _capture(args: argparse.Namespace) -> None:
             "Missing CITADEL_MCP_ACCESS_TOKEN (or writer key) in environment.",
             file=sys.stderr,
         )
-        return
+        return 1
 
     results: list[dict[str, Any]] = []
+    failures = 0
     for root, payload in payloads:
         try:
             response = post_capture(config.node_url, token, payload)
@@ -219,10 +237,17 @@ async def _capture(args: argparse.Namespace) -> None:
             results.append({"root": root.path, "ok": True, "status": status, "tags": payload["tags"]})
             print(f"OK  {root.path} ({status})")
         except urllib.error.HTTPError as exc:
+            failures += 1
             detail = exc.read().decode(errors="replace")[:200]
             results.append({"root": root.path, "ok": False, "error": f"HTTP {exc.code} {detail}"})
             print(f"FAIL {root.path}: HTTP {exc.code} {detail}", file=sys.stderr)
+        except (urllib.error.URLError, OSError, ValueError) as exc:
+            # Node unreachable / DNS / timeout / non-HTTPS URL — isolate per root.
+            failures += 1
+            results.append({"root": root.path, "ok": False, "error": str(exc)})
+            print(f"FAIL {root.path}: {exc}", file=sys.stderr)
     _print_json(results)
+    return 1 if failures else 0
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -348,7 +373,8 @@ def main() -> None:
     configure_logging()
     parser = build_parser()
     args = parser.parse_args()
-    asyncio.run(args.handler(args))
+    # Handlers may return an int exit code (capture/setup); others return None.
+    raise SystemExit(asyncio.run(args.handler(args)) or 0)
 
 
 if __name__ == "__main__":
