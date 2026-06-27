@@ -12,6 +12,9 @@
 - [x] **P1 Seat write policy on all HTTP paths** (2026-06-27)
 - [x] P3 Server capture policy API + admin baseline (2026-06-27)
 - [x] P4 `citadel setup` + `citadel capture` + local allowlist (2026-06-27)
+- [x] **CLI shipped** — `citadel onboard`/`status`/`tui`, headless `--json`,
+  branded home screen; **published to PyPI** as `citadel-archive` v0.1.2 +
+  bootstrap installer (beyond ADR-0007 scope; see progress.md) (2026-06-27)
 - [ ] P5 Promotion Agent (GitHub + Central refs, tags, 6h + on demand)
 - [ ] P6 Promotion Approval queue (dashboard + MCP, admin delegate + audit)
 
