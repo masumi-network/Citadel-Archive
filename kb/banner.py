@@ -25,6 +25,22 @@ _LABELS: dict[int, tuple[str, tuple[str, ...]]] = {
     2: ("the organization vault", ("dim",)),
 }
 
+# Large hero — a figlet "CITADEL" framed in a crenellated fortress. Used on the
+# bare `citadel` home screen; the compact `banner()` is the in-command header.
+_HERO = r"""
+     ▛▜   ▛▜   ▛▜   ▛▜   ▛▜   ▛▜   ▛▜
+    ▕══════════════════════════════════▏
+    ▕   ____  _ _____ _   ___  ___ _    ▏
+    ▕  / ___|| |_   _/ \ |   \| __| |   ▏
+    ▕ | |__  | | | |/ _ \| |) | _|| |__ ▏
+    ▕  \___| |_| |_/_/ \_\___/|___|____|▏
+    ▕══════════════════════════════════▏
+    ▕    ▟▀▙       ▟▀▙       ▟▀▙        ▏
+    ▕▄▄▄▄█ █▄▄▄▄▄▄▄█ █▄▄▄▄▄▄▄█ █▄▄▄▄▄▄▄▄▏
+"""
+_HERO_LINES = tuple(_HERO.strip("\n").splitlines())
+_HERO_WORDMARK_ROWS = frozenset({2, 3, 4, 5})  # the figlet letter rows
+
 _ANSI = {
     "reset": "\033[0m",
     "bold": "\033[1m",
@@ -55,6 +71,15 @@ def paint(text: str, *styles: str, enable: bool = True) -> str:
         return text
     codes = "".join(_ANSI.get(style, "") for style in styles)
     return f"{codes}{text}{_ANSI['reset']}" if codes else text
+
+
+def banner_large(*, color: bool = True) -> str:
+    """The big hero: a figlet CITADEL in a castle frame (cyan walls, bold letters)."""
+    out: list[str] = []
+    for index, line in enumerate(_HERO_LINES):
+        styles = ("bold", "cyan") if index in _HERO_WORDMARK_ROWS else ("cyan",)
+        out.append(paint(line, *styles, enable=color))
+    return "\n".join(out)
 
 
 def banner(*, color: bool = True) -> str:
