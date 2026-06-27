@@ -4,6 +4,17 @@ All notable changes to `citadel-archive` are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses
 [Semantic Versioning](https://semver.org/).
 
+## [0.1.1] — 2026-06-27
+
+### Added
+
+- **Branded home screen** — bare `citadel` now shows the large castle hero
+  (figlet `CITADEL`) plus a curated, colorized command menu, replacing the raw
+  argparse usage dump.
+- **`install.sh` bootstrap** — `curl … | sh` entry point that detects Python
+  3.10+, **asks before installing it** if missing (brew/apt/dnf/pacman), then
+  installs pipx + the CLI.
+
 ## [0.1.0] — 2026-06-27
 
 First published release. Ships the lightweight teammate CLI alongside the
@@ -46,4 +57,5 @@ self-hosted Organization Vault server.
   references it as `${CITADEL_MCP_ACCESS_TOKEN}` and it is never echoed.
 - The pre-push allowlist fails **closed** on a corrupt config.
 
+[0.1.1]: https://github.com/masumi-network/Citadel-Archive/releases/tag/v0.1.1
 [0.1.0]: https://github.com/masumi-network/Citadel-Archive/releases/tag/v0.1.0

@@ -37,7 +37,7 @@ from kb.onboard import (
     merge_claude_settings,
     merge_mcp_config,
 )
-from kb.banner import banner, supports_color
+from kb.banner import banner, banner_large, paint, supports_color
 from kb.status import gather_status, render_text
 
 
@@ -438,6 +438,38 @@ async def _onboard(args: argparse.Namespace) -> int:
     return 0
 
 
+_HOME_MENU = (
+    ("Get started", (
+        ("onboard", "one-command setup — token · hooks · MCP · capture roots"),
+        ("status", "connection · identity · local setup    (--json for agents)"),
+    )),
+    ("Capture", (
+        ("setup", "declare Approved Capture Roots (~/.citadel/capture.json)"),
+        ("capture", "push summaries of approved roots to your Node"),
+        ("tui", "live terminal dashboard"),
+    )),
+    ("Knowledge", (
+        ("search", "search the Organization Vault"),
+        ("ingest", "add a durable note to your Node"),
+    )),
+)
+
+
+def _print_home() -> None:
+    color = supports_color()
+    print(banner_large(color=color))
+    print()
+    print("  " + paint("the organization vault", "dim", enable=color))
+    print()
+    for title, rows in _HOME_MENU:
+        print("  " + paint(title, "bold", enable=color))
+        for name, desc in rows:
+            label = paint(name.ljust(9), "cyan", enable=color)
+            print(f"    {label} {paint(desc, 'dim', enable=color)}")
+        print()
+    print("  " + paint("Run `citadel <command> --help` for details.", "dim", enable=color))
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="citadel")
     # Not required: bare `citadel` shows the banner + command list instead of an error.
@@ -605,10 +637,8 @@ def main() -> None:
     parser = build_parser()
     args = parser.parse_args()
     if not getattr(args, "command", None):
-        # Bare `citadel` → branded banner + the command list.
-        print(banner(color=supports_color()))
-        print()
-        parser.print_help()
+        # Bare `citadel` → branded home screen (hero + curated command menu).
+        _print_home()
         raise SystemExit(0)
     # Handlers may return an int exit code (capture/setup); others return None.
     raise SystemExit(asyncio.run(args.handler(args)) or 0)

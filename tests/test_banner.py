@@ -2,7 +2,17 @@ from __future__ import annotations
 
 import io
 
-from kb.banner import banner, paint, supports_color
+from kb.banner import banner, banner_large, paint, supports_color
+
+
+def test_banner_large_has_castle_and_figlet() -> None:
+    plain = banner_large(color=False)
+    assert "▛▜" in plain          # crenellations
+    assert "▕══" in plain         # castle frame
+    assert "____" in plain        # figlet CITADEL
+    assert "\033[" not in plain
+    colored = banner_large(color=True)
+    assert "\033[1m" in colored and "\033[36m" in colored  # bold figlet + cyan walls
 
 
 def test_banner_plain_has_wordmark_and_no_ansi() -> None:

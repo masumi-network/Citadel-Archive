@@ -35,14 +35,16 @@ def test_setup_json_emits_pure_config(tmp_path: Path, capsys) -> None:
     assert out["roots"][0]["tags"] == ["org-work"]
 
 
-def test_bare_citadel_shows_banner(monkeypatch, capsys) -> None:
+def test_bare_citadel_shows_home_screen(monkeypatch, capsys) -> None:
     monkeypatch.setattr(sys, "argv", ["citadel"])
     with pytest.raises(SystemExit) as exc:
         kb.cli.main()
     assert exc.value.code == 0
     out = capsys.readouterr().out
-    assert "CITADEL" in out
-    assert "status" in out  # command list
+    assert "the organization vault" in out         # hero tagline
+    assert "▛▜" in out                              # castle hero art
+    assert "onboard" in out and "status" in out     # curated command menu
+    assert "Get started" in out                     # grouped menu
 
 
 def test_setup_json_never_prompts_even_on_tty(tmp_path: Path, monkeypatch, capsys) -> None:
