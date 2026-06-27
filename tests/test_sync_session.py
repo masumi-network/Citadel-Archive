@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import importlib.util
 import io
 import json
 from pathlib import Path
@@ -8,19 +7,7 @@ from typing import Any
 
 import pytest
 
-# sync_session lives under a skill dir (not an importable package), so load it
-# by file path.
-_MODULE_PATH = (
-    Path(__file__).resolve().parents[1]
-    / "skills"
-    / "citadel-proactive-ingest"
-    / "scripts"
-    / "sync_session.py"
-)
-_spec = importlib.util.spec_from_file_location("sync_session", _MODULE_PATH)
-assert _spec and _spec.loader
-sync_session = importlib.util.module_from_spec(_spec)
-_spec.loader.exec_module(sync_session)
+from kb.hooks import sync_session
 
 
 def _user(text: str) -> dict[str, Any]:

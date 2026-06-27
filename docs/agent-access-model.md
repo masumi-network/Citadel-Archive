@@ -1,7 +1,7 @@
 # Citadel Agent Access Model
 
 Research date: 2026-05-21.  
-Architecture update: 2026-06-16 (seat/node/central model).
+Architecture update: 2026-06-27 (**Seat Node Write Policy**, ADR-0007).
 
 This note defines how Citadel should expose the Organization Vault to humans,
 Claude Code, Codex, and autonomous agents. Agent-to-agent communication belongs
@@ -9,6 +9,7 @@ to Masumi Agent Messenger; Citadel remains the shared memory and access layer.
 
 Canonical domain language: [`CONTEXT.md`](../CONTEXT.md).  
 Private-memory architecture: [ADR-0003](adr/0003-seat-node-central-private-memory.md).  
+Seat capture + promotion: [ADR-0007](adr/0007-seat-capture-promotion-write-policy.md).  
 Phase roadmap: [`organization-vault-plan.md`](organization-vault-plan.md).
 
 ## Recommendation
@@ -58,20 +59,17 @@ short-circuit and silently drop Central — and dedup favors the node copy.
 | Action | Default target | Notes |
 |---|---|---|
 | Agent session memory, working notes | Own node | Light tiered ingestion |
-| Vault contributions with org tags | Central | Full Learning Process |
-| GitHub / repo sync | Central | Full Learning Process |
-| Promotion | Dual-write (node + Central) | Curated; original stays in node |
+| Seat `/ingest`, Obsidian push, MCP | Own node only | ADR-0007; org/promotion tags rejected or stripped |
+| Seat `/api/contribute` | Blocked (403) | Use **Promotion** to reach **Central** |
+| GitHub / repo sync | Central | Full Learning Process (operator cron) |
+| Promotion Agent | Node → Central | Governed; see ADR-0007 |
 
-Tags (Phase 2) separate automatic (node) and curated (Central) lanes.
-**Central is curated:** a caller holding a seat node cannot write raw content
-straight into it. A write targeting Central — named explicitly *or* reached as
-the caller's default target — must carry an org tag (`org-ready` /
-`vault-contribution`, which routes through promotion/dual-write) or go through
-`/api/contribute`; an untagged direct write is rejected (403). "Holds a seat
-node" is judged by storage scope (a `seat:` node in `default_dataset` or
-`allowed_datasets`), so the gate covers both the human's tokens and the agents
-scoped into their node. Admin/env callers and non-seat service accounts (no seat
-node in scope) keep their direct write path.
+**Seat Node Write Policy (ADR-0007):** seat-scoped callers write only to their
+**Node** on every channel. **Central** is read-only for seats. Org-bound and
+promotion tags cannot route seat writes to **Central**; Obsidian org tags are
+stripped and the note stays on the **Node**. **Central** is updated via org
+sync, **Promotion Agent**, and service-account contributions — not direct seat
+writes. Admin/env bypass with audit unchanged.
 
 ### Admin Override
 

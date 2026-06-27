@@ -161,6 +161,9 @@ args = [
 [mcp_servers.citadel.tools.citadel_ingest]
 approval_mode = "approve"
 
+[mcp_servers.citadel.tools.citadel_contribute]
+approval_mode = "approve"
+
 [mcp_servers.citadel.tools.citadel_record_feedback]
 approval_mode = "approve"
 
@@ -202,6 +205,13 @@ Open Cursor Settings → Features → Model Context Protocol. Add a new MCP serv
 
 Start a new chat in Cursor and ask it to use `citadel_discovery`, then
 `citadel_session`.
+
+### Step 3 — Require approval for writes
+
+In Cursor Settings → MCP (or Agent → Tool approval), require user confirmation
+before **write tools** run: `citadel_ingest`, `citadel_contribute`, and
+`citadel_record_feedback`. Seat-writer tokens only write to the personal node;
+Central is read-only from MCP.
 
 ---
 

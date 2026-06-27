@@ -8,15 +8,12 @@ Citadel autosync is **IDE-agnostic** for git workflows. Background capture is
 Install once per clone:
 
 ```bash
-skills/citadel-proactive-ingest/scripts/install_autosync.sh
+citadel onboard
 ```
 
-Or manually:
-
-```bash
-cp skills/citadel-proactive-ingest/templates/git-pre-push.sh .git/hooks/pre-push
-chmod +x .git/hooks/pre-push
-```
+`citadel onboard` is idempotent: it writes a self-contained `.git/hooks/pre-push`
+that runs `"<python>" -m kb.hooks.sync_push`, plus the SessionEnd hook, MCP
+server config, and capture roots.
 
 Requires `CITADEL_MCP_ACCESS_TOKEN` in your environment (same token as MCP).
 Every push snapshots commit metadata to your private **Node** — always exits 0,
@@ -24,8 +21,9 @@ never blocks push.
 
 ## Claude Code (optional extra)
 
-Merge `templates/claude-settings.json` into `.claude/settings.json` for
-SessionEnd session distill on top of git push snapshots.
+`citadel onboard` also writes a `.claude/settings.json` SessionEnd hook running
+`"<python>" -m kb.hooks.sync_session` for session distill on top of git push
+snapshots.
 
 ## Cursor
 

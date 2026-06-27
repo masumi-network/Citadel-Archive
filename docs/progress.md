@@ -1,6 +1,84 @@
 # Citadel Progress
 
-Last updated: 2026-06-26.
+Last updated: 2026-06-27.
+
+## 2026-06-27 — ADR-0007 design + security tightening
+
+- **Design session (grill-with-docs):** locked **Seat Node Write Policy** — all
+  seat-scoped writes → personal **Node** only; **Central** read-only for seats.
+  **Central** updates via org sync, **Promotion Agent**, service accounts.
+- **Capture model:** **Approved Capture Roots** (local) + **Capture Policy**
+  (server hybrid); v1 triggers git push + `citadel capture`; preset **Capture Root
+  Tags** (`personal` / `org-work`).
+- **Promotion model:** **Promotion Agent** cross-refs GitHub org repos + **Central**;
+  auto-promote known work; **New Org Project** → **Promotion Approval** (dashboard
+  + MCP; admin delegate with audit). 6h cron + on demand.
+- **ADR-0007** accepted; ADR-0003 partially superseded (seat org-tag → Central removed).
+- **Code (local, partial):** MCP seat write guards, extended secret scan (`ctdl_`,
+  DB URLs), skill/MCP doc updates. **384 tests** passing before P1 HTTP parity.
+- **Next:** P5 Promotion Agent (GitHub + Central refs, tag rules, 6h cron).
+
+### P4 shipped (same session) — capture CLI
+
+- **`citadel setup`** — wizard (interactive + non-interactive `--root PATH[=tags]`)
+  writes `~/.citadel/capture.json`: Node URL + Approved Capture Roots with
+  **Capture Root Tags** (`personal` never promotes, `org-work` eligible). Seat
+  token stays in env, never in the file. (`kb/capture_config.py`)
+- **`citadel capture`** — summarizes each approved root (git metadata + README
+  blurb, not raw files) and POSTs to the Node `/ingest`; `--dry-run`, `--root`,
+  `--config`. (`kb/capture.py`)
+- **Pre-push hook allowlist gate** — `sync_push.py` now only captures pushes
+  from inside an Approved Capture Root once a config exists (skip + warn
+  otherwise; back-compat always-on when no config). Matched root's tags ride
+  along. Stdlib-only contract kept.
+- **`citadel onboard`** — one-command teammate setup (`kb/onboard.py` + thin
+  `citadel-onboard` skill): pastes token → shell rc (masked, written once),
+  installs git-push + SessionEnd hooks, adds the Citadel MCP server
+  (optional, default-on; token stays an env reference, never in `.mcp.json`),
+  and offers Approved Capture Roots. Idempotent; merges into existing config.
+- **`citadel status` + `citadel tui`** — teammate dashboard replacement
+  (`kb/status.py` shared core): node `/healthz`, auth `/api/session` whoami
+  (seat/role/capabilities), search smoke, local setup (token/MCP/hooks/capture
+  roots), recent activity. `--json` is the AI-agent path (Claude/Codex/Cursor);
+  `citadel tui` is a live textual dashboard (`textual` optional `[tui]` extra).
+  Verified against prod (node 142ms, auth valid). MCP stays optional — sync is
+  HTTP+token; MCP only for in-session search/ingest.
+- **Self-contained hooks** — moved the autosync hooks into the package
+  (`kb/hooks/sync_push.py`, `kb/hooks/sync_session.py`, run as `python -m
+  kb.hooks.*`); `citadel onboard` now installs a self-contained `.git/hooks/
+  pre-push` + SessionEnd hook with **no vendored skill** (verified end-to-end in
+  a fresh repo). Removed the redundant `install_autosync.sh` + templates;
+  consolidated all install docs to `citadel onboard`. `twine check` passes.
+- **Packaged for publish** — renamed distribution to `citadel-archive`
+  (command stays `citadel`); base install is the lightweight client
+  (python-dotenv only), with `[server]` (cognee/fastapi/…) and `[tui]` (textual)
+  extras; lazy `kb/__init__` + server-handler imports keep the client free of
+  the server stack (subprocess boundary test guards it). PyPI Trusted Publishing
+  workflow (`.github/workflows/publish.yml`) + `PUBLISHING.md`: tag `v*` →
+  builds + publishes, no tokens. `pipx install citadel-archive`.
+- Docs: teammate-rollout step 5 + fast-path + status/tui + proactive-ingest skill.
+- **Production-hardening pass** (adversarial multi-agent audit, 47 confirmed
+  findings): `post_capture` HTTPS-only + no-redirect + size cap (token-leak /
+  unbounded-payload fixes, parity with `sync_push.post_ingest`); `citadel
+  capture` catches node-down errors + returns real exit codes; allowlist gate
+  **fails closed** on corrupt config (was fail-open) and matches symlinks via
+  realpath; dropped admin-key token fallback; removed dead `find_root_for_path`.
+- **435 tests** passing, ruff clean.
+
+### P3 shipped (same session)
+
+- **`GET/PUT /api/access/seats/{slug}/capture-policy`** — admin baseline per seat; seat token read-only.
+- **`GET /api/access/capture-baseline`** — org env excludes + default deny globs merged view.
+- **`kb/capture_policy.py`** — `merged_deny_globs()` merges `CITADEL_EXCLUDE_PATTERNS`, org defaults, seat baseline.
+- Settings + Access UI snippets for admin view/edit.
+- **396 tests** passing.
+
+### P1 shipped (same session)
+
+- **`guard_seat_write_policy`** on all channels (not MCP-only).
+- Seat **`resolve_write_targets`** always → own **Node**; org/promotion tags → 403.
+- Seat **`/api/contribute`** → 403; Obsidian org tags stripped on push.
+- **385 tests** passing.
 
 ## 2026-06-26
 

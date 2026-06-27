@@ -1,0 +1,49 @@
+# Changelog
+
+All notable changes to `citadel-archive` are documented here. Format follows
+[Keep a Changelog](https://keepachangelog.com/); this project uses
+[Semantic Versioning](https://semver.org/).
+
+## [0.1.0] — 2026-06-27
+
+First published release. Ships the lightweight teammate CLI alongside the
+self-hosted Organization Vault server.
+
+### Added
+
+- **`citadel onboard`** — one-command, idempotent teammate setup: writes the
+  seat token to your shell rc (masked, env-only), installs the git pre-push and
+  Claude Code `SessionEnd` autosync hooks, adds the Citadel MCP server to
+  `.mcp.json`, and offers Approved Capture Roots. Self-contained — no vendored
+  skill directory required.
+- **`citadel status`** — connection + identity + local-setup health check
+  (Node `/healthz`, `/api/session` whoami, search smoke, hooks/MCP/capture
+  roots). `--json` for AI agents; exits non-zero when not connected.
+- **`citadel tui`** — live terminal dashboard (optional `[tui]` extra).
+- **`citadel setup` / `citadel capture`** — declare Approved Capture Roots
+  (`~/.citadel/capture.json`) with Capture Root Tags (`personal` / `org-work`),
+  and POST per-root summaries to your Node.
+- **Bundled autosync hooks** (`kb.hooks.sync_push`, `kb.hooks.sync_session`) —
+  stdlib-only, fail-silent, HTTPS-only, personal-by-default; installed by
+  `citadel onboard` and runnable as `python -m kb.hooks.*`.
+- Server **Capture Policy** baseline API + admin UI; seat **Node Write Policy**
+  enforced on all HTTP + MCP write paths.
+
+### Packaging
+
+- Distribution renamed to **`citadel-archive`** (the installed command stays
+  `citadel`). Base install is a lightweight client (`python-dotenv` only); the
+  server stack is the **`[server]`** extra and the dashboard the **`[tui]`**
+  extra. Importing the client never pulls the server stack (guarded by test).
+- PyPI **Trusted Publishing** workflow (`.github/workflows/publish.yml`) — tag
+  `v*` to build + publish, no stored tokens. See `PUBLISHING.md`.
+
+### Security
+
+- `post_capture` / hooks enforce HTTPS-only and refuse redirects (the seat
+  Bearer token is never re-sent to another host); payloads are size-capped.
+- The seat token lives in exactly one place (the shell rc); `.mcp.json`
+  references it as `${CITADEL_MCP_ACCESS_TOKEN}` and it is never echoed.
+- The pre-push allowlist fails **closed** on a corrupt config.
+
+[0.1.0]: https://github.com/masumi-network/Citadel-Archive/releases/tag/v0.1.0

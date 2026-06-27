@@ -11,6 +11,8 @@ import secrets
 from typing import Any
 from uuid import uuid4
 
+from kb.capture_policy import SeatCapturePolicy, normalize_deny_globs
+
 logger = logging.getLogger(__name__)
 
 CENTRAL_DATASET = "masumi-network"
@@ -551,6 +553,45 @@ class AccessStore:
         )
         return TokenSession(identity=identity, token_hash=api_token.token_hash)
 
+    def find_seat_by_slug(self, slug: str) -> AccessPrincipal | None:
+        normalized = validate_seat_slug(slug)
+        for principal in self._principals(self._load()):
+            if principal.seat_slug == normalized:
+                return principal
+        return None
+
+    def get_capture_policy(self, slug: str) -> SeatCapturePolicy:
+        normalized = validate_seat_slug(slug)
+        data = self._load()
+        stored = data.get("capture_policies", {}).get(normalized, {})
+        return SeatCapturePolicy(
+            deny_globs=tuple(stored.get("deny_globs") or ()),
+            updated_at=stored.get("updated_at"),
+            updated_by=stored.get("updated_by"),
+        )
+
+    def set_capture_policy(
+        self,
+        slug: str,
+        *,
+        deny_globs: tuple[str, ...] | list[str],
+        actor_id: str | None = None,
+    ) -> SeatCapturePolicy:
+        normalized = validate_seat_slug(slug)
+        if not self.find_seat_by_slug(normalized):
+            raise ValueError(f"Seat not found: {normalized}")
+        policy = SeatCapturePolicy(
+            deny_globs=normalize_deny_globs(deny_globs),
+            updated_at=now_iso(),
+            updated_by=actor_id,
+        )
+        data = self._load()
+        capture_policies = dict(data.get("capture_policies", {}))
+        capture_policies[normalized] = policy.to_dict()
+        data["capture_policies"] = capture_policies
+        self._save(data)
+        return policy
+
     def _find_seat_by_dataset(self, dataset: str) -> AccessPrincipal | None:
         for principal in self._principals(self._load()):
             if principal.default_dataset == dataset:
@@ -626,7 +667,13 @@ class AccessStore:
 
     def _load(self) -> dict[str, Any]:
         if not self.path.exists():
-            return {"version": 1, "principals": [], "tokens": [], "audit_events": []}
+            return {
+                "version": 1,
+                "principals": [],
+                "tokens": [],
+                "audit_events": [],
+                "capture_policies": {},
+            }
         with self.path.open("r", encoding="utf-8") as handle:
             data = json.load(handle)
         return {
@@ -634,6 +681,7 @@ class AccessStore:
             "principals": data.get("principals", []),
             "tokens": data.get("tokens", []),
             "audit_events": data.get("audit_events", []),
+            "capture_policies": data.get("capture_policies", {}),
         }
 
     def _save(self, data: dict[str, Any]) -> None:

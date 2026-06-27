@@ -24,12 +24,13 @@ that powers `citadel_search`, MCP tools, and all background hooks.
 From the repo root:
 
 ```bash
-skills/citadel-proactive-ingest/scripts/install_autosync.sh
+citadel onboard
 ```
 
-This installs the git pre-push hook and prints SessionEnd instructions for
-Claude Code. Requires the skill directory vendored at
-`skills/citadel-proactive-ingest/`.
+This is idempotent: it wires the token into your shell rc, installs the git
+pre-push hook (`python -m kb.hooks.sync_push`), the Claude Code SessionEnd hook
+(`python -m kb.hooks.sync_session`), the MCP server (`.mcp.json`), and capture
+roots. Requires the `citadel` CLI (`pipx install citadel-archive`).
 
 ## What auto-syncs, and when
 
@@ -49,15 +50,16 @@ Server-side cron runs independently; you never trigger it manually.
 - **When:** on every `git push` (pre-push hook).
 - **What:** commit metadata — not raw diffs.
 - **Tags:** `git-push`, branch name, repo name.
-- **Install:** `install_autosync.sh` or copy `templates/git-pre-push.sh` to
-  `.git/hooks/pre-push`.
+- **Install:** `citadel onboard` (writes a `.git/hooks/pre-push` that runs
+  `python -m kb.hooks.sync_push`).
 
 ### Session close (Claude Code — optional extra)
 
 - **When:** once, on every Claude Code `SessionEnd`.
 - **What:** a short distilled note — **not** the raw transcript.
 - **Tags:** `dev-session`, your git branch, and the repo name.
-- **Setup:** merge `templates/claude-settings.json` into `.claude/settings.json`.
+- **Setup:** `citadel onboard` (writes a `.claude/settings.json` SessionEnd hook
+  that runs `python -m kb.hooks.sync_session`).
 
 ### Server-side cron (operators — not devs)
 

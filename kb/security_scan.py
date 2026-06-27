@@ -32,6 +32,18 @@ URL_SHORTENER_DOMAINS = {
 
 SECRET_PATTERNS: tuple[tuple[str, str, re.Pattern[str]], ...] = (
     (
+        "citadel_access_token",
+        "critical",
+        re.compile(r"\bctdl_[A-Za-z0-9_-]{20,}\b"),
+    ),
+    (
+        "database_connection_url",
+        "critical",
+        re.compile(
+            r"(?i)\b(?:postgres(?:ql)?|mysql|mongodb(?:\+srv)?|redis)://[^\s'\"`<>]+"
+        ),
+    ),
+    (
         "github_token",
         "critical",
         re.compile(r"\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9_]{30,}\b"),

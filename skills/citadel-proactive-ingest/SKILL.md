@@ -84,10 +84,15 @@ citadel_ingest(
 phrases, PII, raw logs/debug dumps, ephemeral chatter, or large uncurated
 dumps. Summarize durable decisions and source facts instead.
 
+> **Install:** all hooks are now bundled in the `citadel-archive` package
+> (`kb.hooks.*`) and installed by **`citadel onboard`** — no vendored scripts.
+> See the [`citadel-onboard`](../citadel-onboard/SKILL.md) skill. The sections
+> below describe what each hook does and how to wire it by hand.
+
 ## Layer 2 — SessionEnd auto-sync (the hook)
 
-`scripts/sync_session.py` runs from a Claude Code `SessionEnd` hook. On every
-session close it:
+`python -m kb.hooks.sync_session` runs from a Claude Code `SessionEnd` hook. On
+every session close it:
 
 1. reads the hook payload (`transcript_path`, `cwd`, `session_id`,
    `hook_event_name`) from STDIN;
@@ -121,14 +126,13 @@ auto-syncs to your private node. With it unset, the hook is a clean no-op.
 
 ### Wire the hook into a repo
 
-Copy `templates/claude-settings.json` into the repo's `.claude/settings.json`
-(point the command at this skill's `scripts/sync_session.py`). See
-`README.md` in this skill for the drop-in steps and opt-out.
+`citadel onboard` merges a `SessionEnd` hook into `.claude/settings.json` whose
+command is `"<python>" -m kb.hooks.sync_session`. To do it by hand, add that
+command under `hooks.SessionEnd` with `allowedEnvVars: ["CITADEL_MCP_ACCESS_TOKEN"]`.
 
 ## Layer 3 — Git push auto-sync (universal baseline)
 
-`scripts/sync_push.py` runs from a git **pre-push** hook (`templates/git-pre-push.sh`).
-On every push it:
+`python -m kb.hooks.sync_push` runs from a git **pre-push** hook. On every push it:
 
 1. reads pre-push ref lines from STDIN (or HEAD when invoked manually);
 2. collects commit hash, message, author, branch, and changed file paths — **no
@@ -137,22 +141,50 @@ On every push it:
    `dataset` → personal **Node**), HTTPS only;
 4. **fails silently** — always exits 0, never blocks `git push`.
 
-**One-liner install** (from repo root):
+**Install:** `citadel onboard` writes a self-contained `.git/hooks/pre-push`
+that runs the bundled module. To do it by hand:
 
 ```bash
-skills/citadel-proactive-ingest/scripts/install_autosync.sh
-```
-
-Or manually:
-
-```bash
-cp skills/citadel-proactive-ingest/templates/git-pre-push.sh .git/hooks/pre-push
+printf '#!/bin/sh\n"%s" -m kb.hooks.sync_push "$@" 2>/dev/null || true\nexit 0\n' \
+  "$(command -v python3)" > .git/hooks/pre-push
 chmod +x .git/hooks/pre-push
 ```
 
 Same `CITADEL_MCP_ACCESS_TOKEN` as SessionEnd and MCP. Works in Cursor, Codex,
 and Claude — any tool that uses git. This is the **only required dev-side sync
 step** for non-Claude IDEs.
+
+### Approved Capture Roots (opt-in allowlist)
+
+By default the push hook captures from every repo. To scope capture to chosen
+folders, run the setup wizard once — it writes `~/.citadel/capture.json`:
+
+```bash
+citadel setup                                   # interactive
+citadel setup --root "$HOME/work/repo=org-work" # or non-interactive
+```
+
+Each root carries **Capture Root Tags**: `personal` (never promoted to Central)
+or `org-work` (eligible for Promotion Agent review). The token is **not** stored
+in the file — it stays in the environment.
+
+Once the config exists, `sync_push.py` only captures pushes from inside an
+Approved Capture Root (others are skipped with a warning), and the matched
+root's tags ride along on the snapshot. A missing/empty/corrupt config **fails
+closed** (captures nothing) — it never silently re-enables global capture.
+Capture on demand with:
+
+```bash
+citadel capture --dry-run   # preview per-root summaries (no network)
+citadel capture             # POST git-metadata + README summaries to your Node
+```
+
+Hardening notes: the Node URL must be **HTTPS** (`citadel capture` refuses
+`http://` before sending the token, and never follows redirects). Summaries are
+size-capped (`CITADEL_MCP_MAX_INGEST_BYTES`, default 200000) and git-remote
+credentials are redacted. `citadel capture` exits **non-zero** on any failure
+(corrupt config, no matching root, missing token, or a per-root POST error), so
+it is safe to gate CI on.
 
 ## Layer 4 — Server-side Railway cron (org-wide)
 

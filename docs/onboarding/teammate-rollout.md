@@ -27,7 +27,25 @@ it like a password.
 
 ---
 
-## Teammate (4 steps)
+## Teammate — fast path (one command)
+
+Install the CLI, then run onboard from the repo:
+
+```bash
+pipx install citadel-archive     # the `citadel` command (lightweight client)
+citadel onboard
+```
+
+This runs all of the steps below for you — pastes your token into your shell rc
+(once, masked), installs the git-push + SessionEnd hooks, adds the Citadel MCP
+server, and offers to set up Approved Capture Roots. Idempotent; safe to re-run.
+`--no-mcp` for capture-only; `--non-interactive --token …` for scripts. See the
+[`citadel-onboard`](../../skills/citadel-onboard/SKILL.md) skill.
+
+The manual steps below are what `onboard` does under the hood (and the path if
+you'd rather do it by hand).
+
+## Teammate — manual (4 steps)
 
 > All four use the **same** `CITADEL_MCP_ACCESS_TOKEN`. Set it once; everything
 > else points at it.
@@ -67,30 +85,71 @@ distill-and-save once per `SessionEnd`:
 ```bash
 # From the repo root
 mkdir -p .claude
-cp skills/citadel-proactive-ingest/templates/claude-settings.json .claude/settings.json
+# `citadel onboard` writes this for you; to do it by hand, add a SessionEnd
+# hook to .claude/settings.json that runs: "<python>" -m kb.hooks.sync_session
 ```
 
-The template wires a `SessionEnd` hook → `sync_session.py` with a 20s timeout.
+The hook wires a `SessionEnd` hook → `kb.hooks.sync_session` with a 20s timeout.
 
 ### 4 · Git push hook (auto-sync on every push — all IDEs)
 
 ```bash
-skills/citadel-proactive-ingest/scripts/install_autosync.sh
+citadel onboard
 ```
 
-Works for Cursor, Codex, and Claude — git hooks are IDE-agnostic. Installs
-`.git/hooks/pre-push` and prints SessionEnd instructions for Claude Code.
+Works for Cursor, Codex, and Claude — git hooks are IDE-agnostic. Installs a
+self-contained `.git/hooks/pre-push` that runs `"<python>" -m kb.hooks.sync_push`,
+and wires the SessionEnd hook for Claude Code.
+
+### 5 · (Optional) Approved Capture Roots
+
+By default the push hook captures from **every** repo you push. To scope capture
+to specific folders instead, declare **Approved Capture Roots** once:
+
+```bash
+# Interactive wizard — pick folders + Capture Root Tags, writes ~/.citadel/capture.json
+citadel setup
+
+# Or non-interactive:
+citadel setup --root "$HOME/work/our-repo=org-work" --root "$HOME/notes=personal"
+```
+
+Each root is tagged: `personal` (never promoted to Central) or `org-work`
+(eligible for Promotion Agent review). The seat token stays in your environment
+— it is never written to `capture.json`.
+
+Once the config exists, the push hook **only** captures pushes from inside an
+Approved Capture Root; pushes from other repos are skipped with a warning. A
+corrupt or empty config fails closed (captures nothing) — it never re-enables
+global capture. You can also capture on demand:
+
+```bash
+citadel capture --dry-run   # preview the per-root summaries (no network)
+citadel capture             # POST summaries to your Node
+```
+
+`citadel capture` sends a compact summary (git metadata + README blurb), never a
+raw file dump. The Node URL must be **HTTPS** (it refuses `http://` before the
+token is sent), and the command exits **non-zero** on any failure — safe to use
+in scripts/CI.
 
 ---
 
 ## Verify (30 seconds)
 
 ```bash
+citadel status        # connection + identity + local setup (expect all ●); --json for agents
+# or:  citadel tui    # live dashboard (needs the [tui] extra)
+
 # Token works + MCP search returns results:
 #   in Claude Code, ask: "use citadel_search to find what we decided about the vault"
 # Linear tasks (after server cron sync):
 #   ask: "what do I need to do?" → citadel_linear_my_issues
 ```
+
+`citadel status` is the teammate's dashboard replacement — it shows the Node
+health, your seat + role, and whether your hooks/MCP/capture roots are wired up.
+Agents run `citadel status --json` to check connectivity programmatically.
 
 You should get a short note back sourced from your node / Central. If you get an
 auth error, your token isn't in the environment of the client that's running
@@ -111,6 +170,8 @@ auth error, your token isn't in the environment of the client that's running
   down or the token is missing, your session close and your push still succeed.
 - **Always personal.** Auto-sync sends no `dataset`, so it lands in your private
   node. To share org-wide, ingest mid-session with an `org-ready` tag.
+- **Allowlist-aware (opt-in).** If you ran `citadel setup`, the push hook only
+  captures from Approved Capture Roots; without it, every repo is captured.
 - **No raw content.** Hooks capture metadata + a distilled recap, never raw
   transcripts or diffs.
 
@@ -122,7 +183,7 @@ auth error, your token isn't in the environment of the client that's running
 |---|---|
 | `citadel_search` auth error | Restart the MCP client so it re-reads `CITADEL_MCP_ACCESS_TOKEN`. |
 | Nothing lands in my node after a session | Confirm `.claude/settings.json` exists and the token env var is exported in the shell that *launched* Claude Code (not a later shell). |
-| Push still works but no node entry | Re-run `install_autosync.sh` from the repo root (needs `skills/citadel-proactive-ingest/` vendored). |
+| Push still works but no node entry | Re-run `citadel onboard` from the repo root to reinstall the `.git/hooks/pre-push` hook. |
 | Token leaked in chat/logs | Ask the admin to **revoke + re-mint** (Access page → revoke). Old captures stay. |
 
 ---

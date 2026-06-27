@@ -29,7 +29,9 @@ from kb.access import (
     default_scopes,
     hash_api_token,
     is_seat_dataset,
+    validate_seat_slug,
 )
+from kb.capture_policy import SeatCapturePolicy, capture_policy_payload
 from kb.backup_mirror import BackupMirror, BackupMirrorDisabled, BackupMirrorPublishError
 from kb.conflicts import KnowledgeConflictStore, obsidian_push_conflict_candidate
 from kb.tags import normalize_tags
@@ -264,6 +266,10 @@ class CreateSeatBody(BaseModel):
     role: str = Field(default="writer")
     issue_token: bool = True
     token_name: str | None = Field(default=None, max_length=120)
+
+
+class CapturePolicyBody(BaseModel):
+    deny_globs: list[str] = Field(default_factory=list, max_length=200)
 
 
 class ObsidianVaultBody(BaseModel):
@@ -559,6 +565,35 @@ def can_bypass_dataset_allowlist(identity: AccessIdentity) -> bool:
     return "access:manage" in effective_scopes(identity)
 
 
+def env_exclude_patterns() -> tuple[str, ...]:
+    return get_citadel().config.exclude_patterns
+
+
+def require_capture_policy_read(request: Request, slug: str) -> tuple[AccessIdentity, str]:
+    try:
+        normalized = validate_seat_slug(slug)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    identity = require_access(request, "reader", "kb:read")
+    if identity.role == "admin" or "access:manage" in effective_scopes(identity):
+        return identity, normalized
+    if identity.seat_slug == normalized:
+        return identity, normalized
+    raise HTTPException(status_code=403, detail="Capture policy is not available for this seat.")
+
+
+def seat_capture_policy_response(slug: str) -> dict[str, Any]:
+    store = get_access_store()
+    if not store.find_seat_by_slug(slug):
+        raise HTTPException(status_code=404, detail=f"Seat not found: {slug}")
+    baseline = store.get_capture_policy(slug)
+    return capture_policy_payload(
+        seat_slug=slug,
+        baseline=baseline,
+        env_exclude_patterns=env_exclude_patterns(),
+    )
+
+
 def enforce_dataset_allowlist(identity: AccessIdentity, dataset: str) -> None:
     if can_bypass_dataset_allowlist(identity):
         return
@@ -623,6 +658,15 @@ def is_promotion(tags: list[str] | tuple[str, ...]) -> bool:
     return bool(set(normalize_tags(tags)) & PROMOTION_TAGS)
 
 
+def seat_safe_tags(identity: AccessIdentity, tags: list[str] | tuple[str, ...]) -> list[str]:
+    """Drop org/promotion tags for seat writers (ADR-0007 Node-only writes)."""
+    normalized = list(normalize_tags(tags))
+    if not is_seat_identity(identity) or can_bypass_dataset_allowlist(identity):
+        return normalized
+    blocked = ORG_BOUND_TAGS | PROMOTION_TAGS
+    return [tag for tag in normalized if tag not in blocked]
+
+
 def resolve_search_datasets(
     identity: AccessIdentity,
     requested: str | None,
@@ -668,6 +712,62 @@ def is_seat_identity(identity: AccessIdentity) -> bool:
     return any(is_seat_dataset(dataset) for dataset in identity.allowed_datasets)
 
 
+def seat_node_dataset(identity: AccessIdentity) -> str | None:
+    if is_seat_dataset(identity.default_dataset):
+        return identity.default_dataset
+    for dataset in identity.allowed_datasets:
+        if is_seat_dataset(dataset):
+            return dataset
+    return None
+
+
+def guard_seat_write_policy(
+    identity: AccessIdentity,
+    *,
+    operation: str,
+    dataset: str | None,
+    tags: list[str] | tuple[str, ...],
+) -> None:
+    """ADR-0007: seat-scoped callers write to their Node only; Central is read-only."""
+    if not is_seat_identity(identity) or can_bypass_dataset_allowlist(identity):
+        return
+
+    node = seat_node_dataset(identity)
+    if not node:
+        raise HTTPException(
+            status_code=403,
+            detail="Seat identity has no personal node configured.",
+        )
+
+    if operation == "contribute":
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                "Seat holders cannot contribute directly to Central. Add durable notes "
+                "to your personal node; Central is updated via Promotion and org sync."
+            ),
+        )
+
+    normalized_tags = normalize_tags(tags)
+    if is_org_bound(normalized_tags) or is_promotion(normalized_tags):
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                "Seat writes cannot use org or promotion tags. Content stays in your "
+                "personal node; Central is updated via Promotion and org sync."
+            ),
+        )
+
+    if dataset and dataset != node:
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                f"Seat writes may only target your personal node ({node}). "
+                "Central is read-only; use Promotion to share org knowledge."
+            ),
+        )
+
+
 def guard_curated_central(
     identity: AccessIdentity,
     dataset: str,
@@ -699,6 +799,24 @@ def resolve_write_targets(
     tags: list[str],
     config: CitadelConfig,
 ) -> list[WriteTarget]:
+    normalized_tags = list(normalize_tags(tags))
+
+    if is_seat_identity(identity) and not can_bypass_dataset_allowlist(identity):
+        node = seat_node_dataset(identity)
+        if not node:
+            raise HTTPException(
+                status_code=403,
+                detail="Seat identity has no personal node configured.",
+            )
+        guard_seat_write_policy(
+            identity,
+            operation="ingest",
+            dataset=requested,
+            tags=normalized_tags,
+        )
+        enforce_dataset_allowlist(identity, node)
+        return [WriteTarget(node, "light")]
+
     if requested:
         dataset = requested
         guard_curated_central(identity, dataset, tags, config)
@@ -708,7 +826,6 @@ def resolve_write_targets(
 
     node_dataset = identity.default_dataset if is_seat_dataset(identity.default_dataset) else None
     central = central_dataset(config)
-    normalized_tags = list(normalize_tags(tags))
 
     if is_promotion(normalized_tags) and node_dataset:
         targets = [
@@ -1435,6 +1552,62 @@ async def create_access_seat(body: CreateSeatBody, request: Request) -> dict[str
     return payload
 
 
+@app.get("/api/access/capture-baseline")
+async def org_capture_baseline(request: Request) -> dict[str, Any]:
+    require_access(request, "admin", "access:manage")
+    return capture_policy_payload(
+        seat_slug=None,
+        baseline=SeatCapturePolicy(),
+        env_exclude_patterns=env_exclude_patterns(),
+    )
+
+
+@app.get("/api/access/seats/{slug}/capture-policy")
+async def get_seat_capture_policy(slug: str, request: Request) -> dict[str, Any]:
+    require_capture_policy_read(request, slug)
+    return seat_capture_policy_response(slug)
+
+
+@app.put("/api/access/seats/{slug}/capture-policy")
+async def update_seat_capture_policy(
+    slug: str,
+    body: CapturePolicyBody,
+    request: Request,
+) -> dict[str, Any]:
+    actor = require_access(request, "admin", "access:manage")
+    try:
+        normalized = validate_seat_slug(slug)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    store = get_access_store()
+    seat = store.find_seat_by_slug(normalized)
+    if not seat:
+        raise HTTPException(status_code=404, detail=f"Seat not found: {normalized}")
+    try:
+        baseline = store.set_capture_policy(
+            normalized,
+            deny_globs=body.deny_globs,
+            actor_id=actor.actor_id,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    store.record_event(
+        action="access.capture_policy.update",
+        actor=actor,
+        success=True,
+        dataset=seat.default_dataset,
+        detail={
+            "seat_slug": normalized,
+            "deny_glob_count": len(baseline.deny_globs),
+        },
+    )
+    return capture_policy_payload(
+        seat_slug=normalized,
+        baseline=baseline,
+        env_exclude_patterns=env_exclude_patterns(),
+    )
+
+
 @app.post("/api/access/tokens")
 async def create_access_token(body: AccessTokenBody, request: Request) -> dict[str, Any]:
     actor = require_access(request, "admin", "access:manage")
@@ -1561,6 +1734,23 @@ async def citadel_discovery_manifest(request: Request, response: Response) -> di
             "scope_model": {
                 "roles": ["reader", "writer", "admin"],
                 "custom_scopes": "Custom scopes can only reduce permissions within the selected role.",
+            },
+            "seat_mcp_write_policy": {
+                "personal_node_only": True,
+                "central_read_only_for_seats": True,
+                "contribute_via_mcp": False,
+                "secret_scan_on_all_writes": True,
+                "client_must_require_user_approval_for": [
+                    "citadel_ingest",
+                    "citadel_contribute",
+                    "citadel_record_feedback",
+                ],
+                "central_updates_via": [
+                    "github_sync_cron",
+                    "linear_sync_cron",
+                    "promotion_engine",
+                    "curated_contribute_non_mcp",
+                ],
             },
         },
     }
@@ -2074,10 +2264,10 @@ async def push_obsidian_sync(body: ObsidianPushBody, request: Request) -> Any:
         source_document = documents_by_path.get(accepted["path"])
         if not source_document:
             continue
-        document_tags = [*body.tags, *source_document.tags, "obsidian", "obsidian_vault"]
-        # Route with the document's real tags so org-bound notes reach Central
-        # (and dual-write promotions fire) exactly like /ingest, and the curated
-        # Central gate sees the tags it needs to allow a tagged explicit write.
+        document_tags = seat_safe_tags(
+            actor,
+            [*body.tags, *source_document.tags, "obsidian", "obsidian_vault"],
+        )
         document_targets = resolve_write_targets(
             actor,
             source_document.dataset or body.dataset,
@@ -2674,6 +2864,12 @@ async def contribute(body: ContributeBody, request: Request) -> Any:
     like any other accepted Source Material.
     """
     actor = require_access(request, "writer", "kb:ingest")
+    guard_seat_write_policy(
+        actor,
+        operation="contribute",
+        dataset=body.dataset,
+        tags=body.tags,
+    )
     citadel = get_citadel()
     learning = get_learning_process()
     contribution_tags = _contribution_tags(body.tags, actor)
