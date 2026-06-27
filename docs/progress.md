@@ -43,6 +43,12 @@ Last updated: 2026-06-27.
   `citadel tui` is a live textual dashboard (`textual` optional `[tui]` extra).
   Verified against prod (node 142ms, auth valid). MCP stays optional — sync is
   HTTP+token; MCP only for in-session search/ingest.
+- **Self-contained hooks** — moved the autosync hooks into the package
+  (`kb/hooks/sync_push.py`, `kb/hooks/sync_session.py`, run as `python -m
+  kb.hooks.*`); `citadel onboard` now installs a self-contained `.git/hooks/
+  pre-push` + SessionEnd hook with **no vendored skill** (verified end-to-end in
+  a fresh repo). Removed the redundant `install_autosync.sh` + templates;
+  consolidated all install docs to `citadel onboard`. `twine check` passes.
 - **Packaged for publish** — renamed distribution to `citadel-archive`
   (command stays `citadel`); base install is the lightweight client
   (python-dotenv only), with `[server]` (cognee/fastapi/…) and `[tui]` (textual)
