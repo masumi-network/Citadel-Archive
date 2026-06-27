@@ -19,6 +19,7 @@ from kb.capture_config import (
     normalize_tags,
     save_capture_config,
 )
+from kb.capture import build_capture_payload, capture_token, post_capture
 from kb.github_sync import GitHubOrgSyncer
 from kb.learning_agent import LearningAgent
 from kb.models import FeedbackRequest
@@ -172,6 +173,58 @@ async def _setup(args: argparse.Namespace) -> None:
     _print_json(load_capture_config(config_path).to_dict())
 
 
+async def _capture(args: argparse.Namespace) -> None:
+    import urllib.error
+
+    config_path = Path(args.config).expanduser() if args.config else capture_config_path()
+    config = load_capture_config(config_path)
+
+    roots = config.roots
+    if args.root:
+        wanted = {normalize_path(raw) for raw in args.root}
+        roots = tuple(root for root in roots if root.path in wanted)
+    if not roots:
+        print("No approved roots to capture. Run `citadel setup` first.", file=sys.stderr)
+        return
+
+    payloads = [(root, build_capture_payload(root)) for root in roots]
+
+    if args.dry_run:
+        _print_json(
+            [
+                {
+                    "root": root.path,
+                    "tags": payload["tags"],
+                    "chars": len(payload["data"]),
+                    "preview": payload["data"][:500],
+                }
+                for root, payload in payloads
+            ]
+        )
+        return
+
+    token = capture_token()
+    if not token:
+        print(
+            "Missing CITADEL_MCP_ACCESS_TOKEN (or writer key) in environment.",
+            file=sys.stderr,
+        )
+        return
+
+    results: list[dict[str, Any]] = []
+    for root, payload in payloads:
+        try:
+            response = post_capture(config.node_url, token, payload)
+            status = response.get("cognee_result", {}).get("status") or response.get("status")
+            results.append({"root": root.path, "ok": True, "status": status, "tags": payload["tags"]})
+            print(f"OK  {root.path} ({status})")
+        except urllib.error.HTTPError as exc:
+            detail = exc.read().decode(errors="replace")[:200]
+            results.append({"root": root.path, "ok": False, "error": f"HTTP {exc.code} {detail}"})
+            print(f"FAIL {root.path}: HTTP {exc.code} {detail}", file=sys.stderr)
+    _print_json(results)
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="citadel")
     subcommands = parser.add_subparsers(dest="command", required=True)
@@ -195,6 +248,22 @@ def build_parser() -> argparse.ArgumentParser:
     setup.add_argument("--show", action="store_true", help="Print current config and exit")
     setup.add_argument("--config", help="Override config path (testing)")
     setup.set_defaults(handler=_setup)
+
+    capture = subcommands.add_parser(
+        "capture",
+        help="Summarize Approved Capture Roots and POST to your Node",
+    )
+    capture.add_argument(
+        "--root",
+        action="append",
+        metavar="PATH",
+        help="Capture only this configured root (repeatable; default: all)",
+    )
+    capture.add_argument(
+        "--dry-run", action="store_true", help="Print payloads without posting"
+    )
+    capture.add_argument("--config", help="Override config path (testing)")
+    capture.set_defaults(handler=_capture)
 
     ingest = subcommands.add_parser("ingest", help="Ingest text or a path through Cognee")
     ingest.add_argument("data")

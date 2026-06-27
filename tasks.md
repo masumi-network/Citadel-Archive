@@ -32,7 +32,7 @@
 ### P4 — Capture CLI (in progress)
 
 - [x] 4.1 `citadel setup` wizard → `~/.citadel/capture.json` (roots + Capture Root Tags) (2026-06-27)
-- [ ] 4.2 `citadel capture` — scan approved roots, POST summaries to **Node**
+- [x] 4.2 `citadel capture` — summarize approved roots, POST to **Node** (2026-06-27)
 - [ ] 4.3 Git hook checks root is in local allowlist
 - [ ] 4.4 Docs: teammate-rollout + connect skill
 - [x] Unit + API tests
