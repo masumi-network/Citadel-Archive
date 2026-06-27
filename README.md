@@ -215,8 +215,23 @@ curl -fsS -X POST "$CITADEL_BASE_URL/api/contribute" \
 
 ## Install
 
+### Teammate CLI (lightweight)
+
 ```bash
-uv sync --dev
+pipx install citadel-archive            # the `citadel` command (onboard/status/capture)
+pipx install "citadel-archive[tui]"     # + the live `citadel tui` dashboard
+citadel onboard                         # one-command setup; then `citadel status`
+```
+
+The base install is a small, stdlib-first client. The server stack is an extra
+(`citadel-archive[server]`). Publishing is automated — see
+[`PUBLISHING.md`](PUBLISHING.md).
+
+### Server / development
+
+```bash
+uv sync --dev          # full server + tooling (cognee, fastapi, …)
+# or:  pip install "citadel-archive[server]"
 ```
 
 Copy `.env.example` to `.env` and fill in your providers, access keys, and

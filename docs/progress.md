@@ -43,6 +43,13 @@ Last updated: 2026-06-27.
   `citadel tui` is a live textual dashboard (`textual` optional `[tui]` extra).
   Verified against prod (node 142ms, auth valid). MCP stays optional — sync is
   HTTP+token; MCP only for in-session search/ingest.
+- **Packaged for publish** — renamed distribution to `citadel-archive`
+  (command stays `citadel`); base install is the lightweight client
+  (python-dotenv only), with `[server]` (cognee/fastapi/…) and `[tui]` (textual)
+  extras; lazy `kb/__init__` + server-handler imports keep the client free of
+  the server stack (subprocess boundary test guards it). PyPI Trusted Publishing
+  workflow (`.github/workflows/publish.yml`) + `PUBLISHING.md`: tag `v*` →
+  builds + publishes, no tokens. `pipx install citadel-archive`.
 - Docs: teammate-rollout step 5 + fast-path + status/tui + proactive-ingest skill.
 - **Production-hardening pass** (adversarial multi-agent audit, 47 confirmed
   findings): `post_capture` HTTPS-only + no-redirect + size cap (token-leak /

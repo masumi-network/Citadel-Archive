@@ -29,9 +29,11 @@ it like a password.
 
 ## Teammate — fast path (one command)
 
-From a repo that has `skills/citadel-proactive-ingest/` vendored:
+Install the CLI, then run onboard from a repo that has
+`skills/citadel-proactive-ingest/` vendored:
 
 ```bash
+pipx install citadel-archive     # the `citadel` command (lightweight client)
 citadel onboard
 ```
 

@@ -6,10 +6,11 @@ description: One-command teammate onboarding for Citadel. Use when a teammate wa
 # Citadel Onboard
 
 `citadel onboard` collapses the whole teammate rollout into **one idempotent
-command**. Run it from a repo that has `skills/citadel-proactive-ingest/`
-vendored (the hooks live there).
+command**. Install the CLI, then run it from a repo that has
+`skills/citadel-proactive-ingest/` vendored (the hooks live there).
 
 ```bash
+pipx install citadel-archive    # the `citadel` command (or [tui]/[server] extras)
 citadel onboard
 ```
 
