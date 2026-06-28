@@ -28,10 +28,11 @@ approval; secrets blocked everywhere.
 
 **Prod ops follow-ups (2026-06-29):** PyPI **v0.1.3 published** (`citadel
 promotion` CLI) + GitHub Release. 6h **evolve scheduler shipped + enabled** —
-in-process subprocess on the web container, NOT a separate Railway service
-(volume isn't shareable); its `cognify` stage has an `asyncio.run` loop bug
-pending fix (graph repopulation blocked on it). Browser QA on Promotion Queue is
-verifiable once a promotion is queued (queue empty at 0 seats with content).
+a subprocess on the web container, NOT a separate Railway service (volume isn't
+shareable). The cognify stage took two fixes (asyncio loop binding + Kuzu
+single-writer lock) — now runs heavy stages in a subprocess then cognifies
+in-loop; graph **repopulated to 280 nodes / 514 edges**. Browser QA on Promotion
+Queue is verifiable once a promotion is queued (queue empty at 0 seats).
 
 ## P1 — Seat write policy (all channels)
 

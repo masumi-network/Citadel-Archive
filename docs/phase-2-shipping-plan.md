@@ -152,8 +152,9 @@ Update the **Contributes** column as checkpoints close. Target: **100%** before 
 
 **Remaining operator work:** `CITADEL_LINEAR_API_KEY` set on web (2026-06-29) —
 still need the `linear-sync` cron + `GET /api/linear-sync` verify; per-dev
-onboarding via `citadel onboard` (replaces the removed `install_autosync.sh`); and
-the evolve `cognify` loop-bug fix so graph repopulation completes.
+onboarding via `citadel onboard` (replaces the removed `install_autosync.sh`).
+Graph repopulation is **done** (280 nodes; evolve cognify fixed via the
+subprocess-then-in-loop split).
 
 ---
 

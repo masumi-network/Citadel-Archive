@@ -104,15 +104,14 @@ pending: Linear read-only key, `linear-sync` cron, Central cognify verify, per-d
 - [x] Phase 2 merged to `main` (`5f6c0ed`+)
 - [x] Cognify **Central** unblocked (`LLM_MODEL` fix 2026-06-24; optional
       `POST /api/cognify/run?force=true` for stale graph store)
-- [ ] **Full graph repopulation** — BLOCKED on a cognify bug (2026-06-29). The
-      evolve scheduler re-syncs org content in-process (no public-proxy 502) and
-      `github_sync`/`repo_content_sync` add the data to pgvector, but the
-      `cognify` stage fails under `asyncio.run` (`Future attached to a different
-      loop` — cognee caches a global async engine on the first stage's loop, dead
-      by cognify time). Fix: route the evolve cognify through the working web-API
-      loop (`POST /api/cognify/run`) or run the chain in a single loop. Until
-      then the Kuzu graph isn't rebuilt (`/api/mesh/graph` stays partial).
-      (Optional cleanup: remove the `COGNIFY_TEST_MARKER` node.)
+- [x] **Full graph repopulation** (2026-06-29) — rebuilt to **280 nodes / 514
+      edges** (was ~25; past the ~214 target). Took fixing two evolve-cognify bugs:
+      (1) `Future attached to a different loop` (cognee caches an async engine on
+      the first `asyncio.run` loop) and (2) Kuzu single-writer lock contention
+      (the evolve subprocess held the graph lock). Fix (`35e4c64`): scheduler runs
+      heavy stages as a subprocess (cognify disabled → exits, frees the lock) then
+      cognifies **in-loop** on the web's own Citadel. (Optional cleanup: remove the
+      `COGNIFY_TEST_MARKER` node.)
 - [x] M6.5 teammate one-pager: [`docs/onboarding/teammate-rollout.md`](docs/onboarding/teammate-rollout.md)
 - [x] Set read-only `CITADEL_LINEAR_API_KEY` on Railway web (2026-06-29)
 - [ ] Create Railway `linear-sync` cron (`CITADEL_RUN_MODE=linear-sync`)

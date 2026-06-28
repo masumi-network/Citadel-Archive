@@ -23,15 +23,24 @@ landed.
   thread fails — cognee binds async resources to the loop that created them).
   Deployed (`69e9499`) + enabled on Railway web; boot log confirms
   `Evolve scheduler enabled`. 510 tests, ruff clean. Subprocess fix `8a52245`.
-- **Live pass result** — `github_sync` ✅, `repo_content_sync` ✅, `self_improve`
-  ✅, `promotion` ✅ (now sees `seat:sarthi`), **`cognify` ❌**: `got Future
-  attached to a different loop`. Root cause: each stage runs its own
-  `asyncio.run()`; cognee caches a global async engine on the first stage's loop,
-  which is closed by the time the cognify stage's loop runs. The web-API cognify
-  path (`POST /api/cognify/run`, one long-lived FastAPI loop) is unaffected and
-  remains the working path. **Graph repopulation is therefore still pending the
-  cognify fix** — org data is re-added to pgvector but the Kuzu graph is not
-  rebuilt (the familiar stranded-data state).
+- **Cognify fix (two bugs, two-phase scheduler).** The first live pass ran
+  `github_sync`/`repo_content_sync`/`self_improve`/`promotion` (now sees
+  `seat:sarthi`) but `cognify` failed twice in a row, each a distinct bug:
+  1. `got Future attached to a different loop` — each stage runs its own
+     `asyncio.run()`; cognee caches a global async engine on the first stage's
+     loop, dead by the cognify stage. (A worker thread and even a fresh
+     subprocess both hit this.)
+  2. `Could not set lock ... cognee_graph_kuzu (held by PID 123)` — Kuzu is a
+     single-writer embedded DB; the evolve subprocess holds the graph lock during
+     its add stages, so the web server can't cognify while it's alive.
+  **Fix (`35e4c64`):** the scheduler now runs the heavy stages as a subprocess
+  with `CITADEL_EVOLVE_COGNIFY_ENABLED=false` (it exits, releasing the Kuzu lock),
+  then awaits cognify **in-loop** on the web's own Citadel — the sole writer, in
+  the loop where cognee is happy. (Earlier `945e4a5` added a web-API cognify
+  route, kept as a fallback for standalone `evolve` runs.)
+- **Graph repopulated ✅** — a forced verification pass rebuilt the Kuzu graph to
+  **280 nodes / 514 edges** (was ~25; past the ~214 target), `grew=True`, no loop
+  or lock error. Steady state restored: 6h interval, incremental cognify.
 - **Cron LLM_MODEL drift fixed** — `Citadel-GitHub-Sync` `LLM_MODEL` →
   `openrouter/deepseek/deepseek-v4-flash` (was prefix-less `openrouter/free`;
   moot in HTTP-endpoint mode but no longer a landmine).
