@@ -237,6 +237,25 @@
                 <section class="window action-panel">
                   <div class="window-titlebar panel-heading">
                     <div>
+                      <h2>Promotion Queue</h2>
+                      <p class="panel-kicker">Node → Central approvals (ADR-0007)</p>
+                    </div>
+                    <span id="dashboardPromotionStatus" class="status-chip status-standby">Checking</span>
+                  </div>
+                  <div id="dashboardPromotionList" class="entity-list" aria-live="polite">
+                    <div class="entity-item">
+                      <div>
+                        <strong>Loading queue</strong>
+                        <p>Pending promotion items will appear here.</p>
+                      </div>
+                      <span class="status-chip status-standby">pending</span>
+                    </div>
+                  </div>
+                </section>
+
+                <section class="window action-panel">
+                  <div class="window-titlebar panel-heading">
+                    <div>
                       <h2>Shared Access</h2>
                       <p class="panel-kicker">Team and agent readers</p>
                     </div>

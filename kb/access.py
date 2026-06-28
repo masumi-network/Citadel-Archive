@@ -12,6 +12,12 @@ from typing import Any
 from uuid import uuid4
 
 from kb.capture_policy import SeatCapturePolicy, normalize_deny_globs
+from kb.promotion_queue import (
+    APPROVED_STATUS,
+    PENDING_STATUS,
+    REJECTED_STATUS,
+    PromotionPendingItem,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -592,6 +598,123 @@ class AccessStore:
         self._save(data)
         return policy
 
+    def list_promotion_pending(
+        self,
+        *,
+        seat_slug: str | None = None,
+        status: str | None = PENDING_STATUS,
+    ) -> list[PromotionPendingItem]:
+        data = self._load()
+        items: list[PromotionPendingItem] = []
+        normalized_seat = validate_seat_slug(seat_slug) if seat_slug else None
+        for raw in data.get("promotion_pending", []):
+            try:
+                item = PromotionPendingItem.from_dict(raw)
+            except ValueError:
+                continue
+            if status is not None and item.status != status:
+                continue
+            if normalized_seat is not None and item.seat_slug != normalized_seat:
+                continue
+            items.append(item)
+        items.sort(key=lambda entry: entry.created_at)
+        return items
+
+    def get_promotion_pending(self, item_id: str) -> PromotionPendingItem | None:
+        data = self._load()
+        for raw in data.get("promotion_pending", []):
+            try:
+                item = PromotionPendingItem.from_dict(raw)
+            except ValueError:
+                continue
+            if item.id == item_id:
+                return item
+        return None
+
+    def add_promotion_pending(self, item: PromotionPendingItem) -> PromotionPendingItem:
+        data = self._load()
+        pending: list[PromotionPendingItem] = []
+        for raw in data.get("promotion_pending", []):
+            try:
+                pending.append(PromotionPendingItem.from_dict(raw))
+            except ValueError:
+                continue
+        for existing in pending:
+            if (
+                existing.status == PENDING_STATUS
+                and existing.seat_slug == item.seat_slug
+                and existing.candidate_hash == item.candidate_hash
+            ):
+                return existing
+        pending.append(item)
+        data["promotion_pending"] = [entry.to_dict() for entry in pending][-500:]
+        self._save(data)
+        return item
+
+    def is_promotion_rejected(self, seat_slug: str, content_hash: str) -> bool:
+        normalized = validate_seat_slug(seat_slug)
+        data = self._load()
+        for raw in data.get("promotion_pending", []):
+            try:
+                item = PromotionPendingItem.from_dict(raw)
+            except ValueError:
+                continue
+            if (
+                item.seat_slug == normalized
+                and item.candidate_hash == content_hash
+                and item.status == REJECTED_STATUS
+            ):
+                return True
+        return False
+
+    def decide_promotion_pending(
+        self,
+        item_id: str,
+        *,
+        decision: str,
+        actor_id: str,
+        actor_name: str,
+        delegate: bool = False,
+    ) -> PromotionPendingItem:
+        if decision not in {APPROVED_STATUS, REJECTED_STATUS}:
+            raise ValueError(f"Unsupported promotion decision: {decision}")
+        data = self._load()
+        updated: PromotionPendingItem | None = None
+        next_items: list[dict[str, Any]] = []
+        for raw in data.get("promotion_pending", []):
+            item = PromotionPendingItem.from_dict(raw)
+            if item.id != item_id:
+                next_items.append(item.to_dict())
+                continue
+            if item.status != PENDING_STATUS:
+                raise ValueError(f"Promotion item is not pending: {item_id}")
+            updated = PromotionPendingItem(
+                id=item.id,
+                seat_slug=item.seat_slug,
+                seat_dataset=item.seat_dataset,
+                candidate_text=item.candidate_text,
+                candidate_hash=item.candidate_hash,
+                preview=item.preview,
+                reference_status=item.reference_status,
+                reference_reason=item.reference_reason,
+                repo_hints=item.repo_hints,
+                status=decision,
+                created_at=item.created_at,
+                decided_at=now_iso(),
+                decided_by=actor_id,
+                decided_by_name=actor_name,
+                delegate=delegate,
+                score=item.score,
+                relevant=item.relevant,
+                sensitive=item.sensitive,
+            )
+            next_items.append(updated.to_dict())
+        if updated is None:
+            raise ValueError(f"Promotion item not found: {item_id}")
+        data["promotion_pending"] = next_items
+        self._save(data)
+        return updated
+
     def _find_seat_by_dataset(self, dataset: str) -> AccessPrincipal | None:
         for principal in self._principals(self._load()):
             if principal.default_dataset == dataset:
@@ -673,6 +796,7 @@ class AccessStore:
                 "tokens": [],
                 "audit_events": [],
                 "capture_policies": {},
+                "promotion_pending": [],
             }
         with self.path.open("r", encoding="utf-8") as handle:
             data = json.load(handle)
@@ -682,6 +806,7 @@ class AccessStore:
             "tokens": data.get("tokens", []),
             "audit_events": data.get("audit_events", []),
             "capture_policies": data.get("capture_policies", {}),
+            "promotion_pending": data.get("promotion_pending", []),
         }
 
     def _save(self, data: dict[str, Any]) -> None:

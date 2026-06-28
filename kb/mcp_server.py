@@ -240,6 +240,39 @@ TOOL_POLICIES: dict[str, ToolPolicy] = {
             openWorldHint=True,
         ),
     ),
+    "citadel_promotion_pending": ToolPolicy(
+        role="reader",
+        scope="kb:read",
+        risk="read",
+        annotations=ToolAnnotations(
+            readOnlyHint=True,
+            destructiveHint=False,
+            idempotentHint=True,
+            openWorldHint=False,
+        ),
+    ),
+    "citadel_promotion_approve": ToolPolicy(
+        role="writer",
+        scope="kb:ingest",
+        risk="additive_write",
+        annotations=ToolAnnotations(
+            readOnlyHint=False,
+            destructiveHint=False,
+            idempotentHint=False,
+            openWorldHint=False,
+        ),
+    ),
+    "citadel_promotion_reject": ToolPolicy(
+        role="writer",
+        scope="kb:ingest",
+        risk="additive_write",
+        annotations=ToolAnnotations(
+            readOnlyHint=False,
+            destructiveHint=False,
+            idempotentHint=False,
+            openWorldHint=False,
+        ),
+    ),
 }
 
 
@@ -878,6 +911,58 @@ def create_mcp_server(
                 tool_name="citadel_improve",
             ),
         )
+
+    @mcp.tool(annotations=TOOL_POLICIES["citadel_promotion_pending"].annotations)
+    async def citadel_promotion_pending(
+        ctx: Context,
+        status: str = "pending",
+    ) -> dict[str, Any]:
+        """List Node→Central promotion items awaiting approval for your seat (or all seats if admin)."""
+        return await _call_async(
+            "citadel_promotion_pending",
+            lambda: resolve_client(ctx).get(
+                f"/api/promotion/pending?status={quote(status)}",
+                tool_name="citadel_promotion_pending",
+            ),
+        )
+
+    @mcp.tool(annotations=TOOL_POLICIES["citadel_promotion_approve"].annotations)
+    async def citadel_promotion_approve(
+        item_id: str,
+        ctx: Context,
+        note: str | None = None,
+    ) -> dict[str, Any]:
+        """Approve a pending promotion item. Requires explicit user confirmation first."""
+        normalized_id = _require_non_empty(item_id, "item_id")
+
+        def approve() -> dict[str, Any]:
+            payload = {"note": note} if note else {}
+            return resolve_client(ctx).post(
+                f"/api/promotion/pending/{quote(normalized_id, safe='')}/approve",
+                payload,
+                tool_name="citadel_promotion_approve",
+            )
+
+        return await _call_async("citadel_promotion_approve", approve)
+
+    @mcp.tool(annotations=TOOL_POLICIES["citadel_promotion_reject"].annotations)
+    async def citadel_promotion_reject(
+        item_id: str,
+        ctx: Context,
+        note: str | None = None,
+    ) -> dict[str, Any]:
+        """Reject a pending promotion item. Requires explicit user confirmation first."""
+        normalized_id = _require_non_empty(item_id, "item_id")
+
+        def reject() -> dict[str, Any]:
+            payload = {"note": note} if note else {}
+            return resolve_client(ctx).post(
+                f"/api/promotion/pending/{quote(normalized_id, safe='')}/reject",
+                payload,
+                tool_name="citadel_promotion_reject",
+            )
+
+        return await _call_async("citadel_promotion_reject", reject)
 
     @mcp.resource("citadel://session")
     def session_resource() -> str:

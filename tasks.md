@@ -8,6 +8,7 @@
 ### Checkpoints
 
 - [x] P0 Glossary + ADR-0007 + shipping plan + progress (2026-06-27)
+- [x] **P0b Grill refinements** — promotion decision tree locked; CONTEXT + ADR-0007 refinements section (2026-06-27)
 - [x] P2 MCP seat write guards + secret scan extensions (local, pending deploy)
 - [x] **P1 Seat write policy on all HTTP paths** (2026-06-27)
 - [x] P3 Server capture policy API + admin baseline (2026-06-27)
@@ -15,8 +16,35 @@
 - [x] **CLI shipped** — `citadel onboard`/`status`/`tui`, headless `--json`,
   branded home screen; **published to PyPI** as `citadel-archive` v0.1.2 +
   bootstrap installer (beyond ADR-0007 scope; see progress.md) (2026-06-27)
-- [ ] P5 Promotion Agent (GitHub + Central refs, tags, 6h + on demand)
-- [ ] P6 Promotion Approval queue (dashboard + MCP, admin delegate + audit)
+- [x] P5 Promotion Agent (GitHub + Central refs, tags, 6h + on demand)
+- [x] P6 Promotion Approval queue (dashboard + MCP, admin delegate + audit)
+
+### P5 — Promotion Agent (in progress, local)
+
+- [x] `kb/promotion_refs.py` — GitHub org repo list + Central search reference checks
+- [x] Capture Root Tag gate (`personal` never auto-promotes)
+- [x] **New Org Project** → `pending_approval` queue instead of auto-promote
+- [x] Wired into `PromotionEngine.run` (6h evolve cron already calls it via `run_railway.py`)
+- [x] **Grill parity:** masumi-org-only auto-promote (no LLM-only path for `no_reference_signal`)
+- [x] **Grill parity:** require `org-work` tag on capture-root candidates
+- [x] **Grill parity:** no-repo-hint → Central match only, else skip (no queue)
+- [x] **Grill parity:** secret scan + LLM always required on every candidate
+- [x] **Grill parity:** promotion metadata on Central writes (traceability v1)
+- [x] **Grill parity:** reject dedupe / candidate hash — no re-queue unchanged notes
+- [x] Seat-scoped `POST /api/promote/run` (member own seat; admin any)
+- [x] `citadel promotion run|list|approve|reject` CLI + `--json`
+- [ ] Deploy + production verify with `CITADEL_PROMOTION_ENABLED` (PR #TBD)
+- [ ] Add Railway `evolve` cron (`0 */6 * * *`) for scheduled promotion pass
+
+### P6 — Promotion Approval (in progress, local)
+
+- [x] `GET /api/promotion/pending` + `POST .../approve` + `POST .../reject`
+- [x] Dashboard **Promotion Queue** panel + Access-style approve button
+- [x] MCP: `citadel_promotion_pending`, `citadel_promotion_approve`, `citadel_promotion_reject`
+- [x] Admin delegate audit on approve/reject
+- [x] **Grill parity:** document agent-proposes / member-responds (no manual queue add)
+- [x] `citadel promotion approve|reject` CLI + `--json`
+- [ ] Browser QA on production
 
 ### P1 — Seat write policy ✅ (2026-06-27)
 

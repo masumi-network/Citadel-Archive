@@ -142,10 +142,10 @@ Either is enough:
 - **Non-blocking.** The script catches everything and exits 0; it cannot block
   or fail a session close.
 
-## Promote to shared Central
+## Share with Central (Promotion Agent)
 
-Auto-sync is always personal. To share a fact org-wide, ingest it mid-session
-with a promotion **tag** (`org-ready` or `vault-contribution`) and still no
-`dataset` field — see `SKILL.md`. Promote only ADRs, shared runbooks, and
-interface contracts, and only when the user asks or the content is plainly
-org-wide.
+Auto-sync is always personal (**Node** only). **Central** copies are governed:
+the **Promotion Agent** auto-promotes known masumi-org work; **New Org Project**
+notes wait for your **Promotion Approval** (dashboard, MCP with confirm, or
+`citadel promotion` CLI). Seat ingest tags do **not** dual-write to **Central**
+— see ADR-0007 and `SKILL.md`.

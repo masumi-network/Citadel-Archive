@@ -1,6 +1,6 @@
 ---
 name: citadel-proactive-ingest
-description: Use to capture durable engineering knowledge into Citadel automatically and proactively while working in an org repo. Covers (1) mid-session citadel_ingest for durable facts (personal-by-default; org-ready/vault-contribution tags promote to Central), (2) git pre-push commit snapshots (universal baseline — Cursor, Codex, Claude), (3) optional Claude Code SessionEnd distill, and (4) server-side Railway cron for GitHub org sync, Linear sync, and the learning pipeline. Triggers include "auto sync my sessions", "remember this in citadel", "proactive ingest", "set up citadel autosync", "personal kb sync", "install autosync", and https://citadel-archive-production.up.railway.app/skills/proactive-ingest.
+description: Use to capture durable engineering knowledge into Citadel automatically and proactively while working in an org repo. Covers (1) mid-session citadel_ingest for durable facts (personal-by-default; all seat writes land on the Node — Central via Promotion Agent only), (2) git pre-push commit snapshots (universal baseline — Cursor, Codex, Claude), (3) optional Claude Code SessionEnd distill, and (4) server-side Railway cron for GitHub org sync, Linear sync, and the learning pipeline. Triggers include "auto sync my sessions", "remember this in citadel", "proactive ingest", "set up citadel autosync", "personal kb sync", "install autosync", and https://citadel-archive-production.up.railway.app/skills/proactive-ingest.
 ---
 
 # Citadel Proactive Ingest
@@ -24,7 +24,7 @@ cron — all **fail-silent** and **personal-by-default** unless explicitly promo
 
 ```
 Personal node:  seat:{slug}   (the dev's private Citadel node — default target)
-Shared Central: masumi-network (org-wide; only via explicit promotion tags)
+Shared Central: masumi-network (org-wide; Promotion Agent + org sync — not seat tags)
 Hosted base:    https://citadel-archive-production.up.railway.app
 ```
 
@@ -33,20 +33,20 @@ Read/write rules: `https://citadel-archive-production.up.railway.app/skills/vaul
 
 ## Personal-by-default (read first)
 
-| Personal (default) | Shared Central (opt-in) |
+| Personal (default) | Shared Central |
 |---|---|
-| No `dataset` field on writes | tag `org-ready` or `vault-contribution` |
-| Lands in your `seat:{slug}` node | Promotes to `masumi-network` |
-| Only you (+ Central) can read it | Whole org can read it |
+| No `dataset` field on writes | **Promotion Agent** (6h cron + on demand) |
+| Lands in your `seat:{slug}` node | Org GitHub / Linear sync (operator cron) |
+| Only you (+ Central readers) can read your node | Whole org reads promoted **Central** copies |
 
 A **seat-writer token** carries `default_dataset=seat:{slug}`. Send writes with
 **no `dataset` field** and the server's `resolve_write_targets` routes them to
-your private node. Do not set `dataset` to promote — use a promotion **tag**
-instead, so the seat-node default still applies and the dual-write is audited.
+your private **Node**. Seat-scoped writes **never** dual-write to **Central**
+via tags — ADR-0007 **Seat Node Write Policy**.
 
-Never let promotion be a surprise. Promote to Central **only** when the user
-explicitly asks to share, or the content is plainly org-wide (an ADR, a shared
-runbook, an interface contract).
+**Central** updates for your notes happen when the **Promotion Agent** rules
+pass (known masumi-org work) or when you **approve** a **New Org Project**
+proposal in the **Operations Dashboard**, MCP, or `citadel promotion` CLI.
 
 ## Layer 1 — proactive mid-session ingest (agent behavior)
 
@@ -69,16 +69,8 @@ citadel_ingest(
 )
 ```
 
-No `dataset` field → seat node. To promote a genuinely org-wide fact, add a
-promotion tag (still no `dataset`):
-
-```
-citadel_ingest(
-  data="ADR: seat tokens default to their seat:{slug} node; writes omit "
-       "dataset; promotion is by tag, not by dataset override.",
-  tags=["org-ready", "adr"],
-)
-```
+No `dataset` field → seat **Node**. Tag with context (`adr`, `runbook`, repo
+name) for search — tags do **not** route seat writes to **Central**.
 
 **Never ingest** (same rules as `citadel-vault`): secrets, tokens, keys, seed
 phrases, PII, raw logs/debug dumps, ephemeral chatter, or large uncurated

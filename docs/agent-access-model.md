@@ -62,7 +62,8 @@ short-circuit and silently drop Central — and dedup favors the node copy.
 | Seat `/ingest`, Obsidian push, MCP | Own node only | ADR-0007; org/promotion tags rejected or stripped |
 | Seat `/api/contribute` | Blocked (403) | Use **Promotion** to reach **Central** |
 | GitHub / repo sync | Central | Full Learning Process (operator cron) |
-| Promotion Agent | Node → Central | Governed; see ADR-0007 |
+| Promotion Agent | Node → Central | Governed; see ADR-0007 refinements (2026-06-27) |
+| `citadel promotion …` CLI | Node → Central / queue | Member own seat; admin any; `--json` (planned) |
 
 **Seat Node Write Policy (ADR-0007):** seat-scoped callers write only to their
 **Node** on every channel. **Central** is read-only for seats. Org-bound and
@@ -70,6 +71,27 @@ promotion tags cannot route seat writes to **Central**; Obsidian org tags are
 stripped and the note stays on the **Node**. **Central** is updated via org
 sync, **Promotion Agent**, and service-account contributions — not direct seat
 writes. Admin/env bypass with audit unchanged.
+
+### Promotion Agent rules (ADR-0007, 2026-06-27 grill)
+
+Every promotion candidate from a seat **Node**:
+
+1. **Secret scan** — block on high/critical findings.
+2. **Capture Root Tags** (capture-root content only) — `personal` and custom
+   tags never auto-promote; only `org-work` roots may auto-promote.
+3. **Structured reference** — repo hints vs masumi **GitHub org repo list** and
+   **Central** search.
+4. **LLM classification** — always required, even when structured match succeeds.
+5. **Route:** masumi-org match → auto-promote; **New Org Project** →
+   **Promotion Approval** queue; no-repo-hint → **Central** match only or skip.
+
+**Member model:** hooks, `citadel capture`, and MCP ingest fill the **Node**.
+The **Promotion Agent** (6h cron + on demand) proposes **New Org Project**
+promotions; **Vault Members** approve or reject — they do not add queue items.
+Reject sticks for unchanged content; each approve is one-shot.
+
+**Surfaces:** Operations Dashboard, MCP (`citadel_promotion_*` with human
+confirm), CLI (`citadel promotion list|approve|reject|run`, `--json`).
 
 ### Admin Override
 
@@ -109,6 +131,15 @@ Expose these tools first:
   - Role: writer
   - Input: `qa_id`, `score`, optional `text`
   - Output: recorded/improved
+
+- `citadel_promotion_pending`
+  - Role: writer (seat) or admin
+  - Output: pending **New Org Project** proposals for the caller's seat (admin: all seats)
+  - Notes: agent proposes items; member approves/rejects only
+
+- `citadel_promotion_approve` / `citadel_promotion_reject`
+  - Role: writer (own queue) or admin (delegate, audited)
+  - Requires explicit user confirmation in MCP clients (same bar as `citadel_ingest`)
 
 - `citadel_run_source_sync`
   - Role: admin
@@ -170,7 +201,7 @@ Resolution order: token fields → principal defaults → server config.
 Roles:
 
 - Reader: search, view sources/status/events, read resources (own node + Central).
-- Writer: reader plus ingest, feedback, and promotion into Central.
+- Writer: reader plus ingest, feedback, and **Promotion Approval** on own queue.
 - Admin: writer plus source sync, seat/token management, agent tokens, settings, audited overrides.
 
 ### Agent Action Policy

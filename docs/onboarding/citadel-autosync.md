@@ -105,12 +105,14 @@ search: `citadel_linear_search`.
 
 | | Goes where | Who reads it |
 |---|---|---|
-| **Auto-sync (default)** | your private **Node** `seat:{slug}` | only you (+ **Central** promotion rules) |
-| **Promoted** (tag `org-ready` / `vault-contribution`) | shared **Central** `masumi-network` | the whole org |
+| **Auto-sync (default)** | your private **Node** `seat:{slug}` | you (+ org readers after **Promotion**) |
+| **Promotion Agent** (6h cron + on demand) | curated copy → **Central** | the whole org |
+| **New Org Project approval** | your approve → **Central** copy | the whole org |
 
 Auto-sync sends no `dataset` field, so your seat-writer token routes it to your
-own **Node**. To share org-wide, ask your agent to `citadel_ingest` with an
-`org-ready` tag. Promotion is always explicit.
+own **Node**. Seat tags do **not** promote to **Central** (ADR-0007). Approve
+**Promotion Agent** proposals in the dashboard, MCP, or `citadel promotion` CLI
+when you want external-project notes shared org-wide.
 
 ## Privacy
 

@@ -75,6 +75,8 @@ const dashboardCronStatus = document.getElementById("dashboardCronStatus");
 const dashboardCronMeta = document.getElementById("dashboardCronMeta");
 const dashboardIngestStatus = document.getElementById("dashboardIngestStatus");
 const dashboardIngestionList = document.getElementById("dashboardIngestionList");
+const dashboardPromotionStatus = document.getElementById("dashboardPromotionStatus");
+const dashboardPromotionList = document.getElementById("dashboardPromotionList");
 const dashboardMcpClients = document.getElementById("dashboardMcpClients");
 const dashboardMcpMeta = document.getElementById("dashboardMcpMeta");
 const dashboardMcpStatus = document.getElementById("dashboardMcpStatus");
@@ -1730,6 +1732,83 @@ async function loadConflicts() {
   }
 }
 
+async function loadPromotionQueue() {
+  if (!dashboardPromotionList) return;
+  if (dashboardPromotionStatus) {
+    dashboardPromotionStatus.textContent = "Loading";
+    dashboardPromotionStatus.className = "status-chip status-standby";
+  }
+  try {
+    const response = await api("/api/promotion/pending?status=pending");
+    renderPromotionQueue(response.items || []);
+    const count = response.count || 0;
+    if (dashboardPromotionStatus) {
+      dashboardPromotionStatus.textContent = `${count} pending`;
+      dashboardPromotionStatus.className = `status-chip ${count ? "status-enabled" : "status-standby"}`;
+    }
+  } catch (error) {
+    dashboardPromotionList.innerHTML = "";
+    dashboardPromotionList.append(
+      emptyState("Could not load promotion queue", error.message),
+    );
+    if (dashboardPromotionStatus) {
+      dashboardPromotionStatus.textContent = "Error";
+      dashboardPromotionStatus.className = "status-chip status-error";
+    }
+  }
+}
+
+function renderPromotionQueue(items = []) {
+  if (!dashboardPromotionList) return;
+  dashboardPromotionList.innerHTML = "";
+  if (!items.length) {
+    dashboardPromotionList.append(
+      emptyState("No pending promotions", "New org projects will appear here for approval."),
+    );
+    return;
+  }
+  items.slice(0, 8).forEach((item) => {
+    const row = document.createElement("div");
+    row.className = "entity-item";
+    const meta = document.createElement("div");
+    meta.innerHTML = `
+      <strong>${escapeHtml(item.seat_slug || "seat")}</strong>
+      <p>${escapeHtml(item.preview || "Pending item")}</p>
+      <p>${escapeHtml(item.reference_reason || item.reference_status || "review")}</p>
+    `;
+    row.append(meta);
+    if (canUse("writer")) {
+      const approve = document.createElement("button");
+      approve.className = "secondary-button compact-button";
+      approve.type = "button";
+      approve.textContent = "Approve";
+      approve.addEventListener("click", () => decidePromotionItem(item.id, "approve"));
+      row.append(approve);
+    } else {
+      const chip = document.createElement("span");
+      chip.className = "status-chip status-standby";
+      chip.textContent = "pending";
+      row.append(chip);
+    }
+    dashboardPromotionList.append(row);
+  });
+}
+
+async function decidePromotionItem(itemId, action) {
+  const label = action === "approve" ? "approve" : "reject";
+  if (!window.confirm(`Confirm: ${label} this promotion item?`)) return;
+  try {
+    await api(`/api/promotion/pending/${encodeURIComponent(itemId)}/${action}`, {
+      method: "POST",
+      body: JSON.stringify({}),
+    });
+    showToast(`Promotion item ${label}d`);
+    loadPromotionQueue();
+  } catch (error) {
+    showToast(error.message || `Could not ${label} promotion`, true);
+  }
+}
+
 async function loadGithubSync() {
   try {
     const status = await api("/api/github-sync");
@@ -2682,8 +2761,9 @@ function renderStorageScopeGuide(seatResponse) {
   container.innerHTML = `
     <p class="storage-scope-explainer">
       This seat's <code>${escapeHtml(nodeDataset)}</code> Node is private agent
-      memory; add tag <code>org-ready</code> or <code>vault-contribution</code> to
-      a write to also promote it into shared Central.
+      memory. Writes stay on the Node; shared Central copies come from the
+      <strong>Promotion Agent</strong> (known org work) or your
+      <strong>Promotion Approval</strong> queue (New Org Project).
     </p>
   `;
 }
@@ -3117,6 +3197,7 @@ loadSession().then(() => {
   setPage(initialPage());
   loadMesh();
   loadGithubSync();
+  loadPromotionQueue();
   loadObsidianSources();
   loadConflicts();
   if (canUse("admin")) {

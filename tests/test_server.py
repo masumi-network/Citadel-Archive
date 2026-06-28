@@ -2401,6 +2401,40 @@ def test_promotion_run_disabled_returns_status_and_audits() -> None:
     assert runs and runs[-1]["success"] is True
 
 
+def test_seat_writer_can_run_own_promotion(tmp_path: Any) -> None:
+    app.state.access_store = AccessStore(tmp_path / "access.json")
+    admin = authed_client()
+    created = admin.post("/api/access/seats", json={"name": "Alice", "slug": "alice"})
+    token = created.json()["token"]
+    seat_client = TestClient(app, base_url="https://testserver")
+
+    response = seat_client.post(
+        "/api/promote/run",
+        json={"dataset": "seat:alice", "dry_run": True},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["dataset"] == "seat:alice"
+
+
+def test_seat_writer_cannot_run_other_seat_promotion(tmp_path: Any) -> None:
+    app.state.access_store = AccessStore(tmp_path / "access.json")
+    admin = authed_client()
+    admin.post("/api/access/seats", json={"name": "Alice", "slug": "alice"})
+    bob = admin.post("/api/access/seats", json={"name": "Bob", "slug": "bob"})
+    bob_token = bob.json()["token"]
+    bob_client = TestClient(app, base_url="https://testserver")
+
+    response = bob_client.post(
+        "/api/promote/run",
+        json={"dataset": "seat:alice", "dry_run": True},
+        headers={"Authorization": f"Bearer {bob_token}"},
+    )
+
+    assert response.status_code == 403
+
+
 def _seat_mcp_client(tmp_path: Any, slug: str) -> tuple[TestClient, str, TrackingCitadel]:
     app.state.access_store = AccessStore(tmp_path / "access.json")
     admin = authed_client()
@@ -2824,3 +2858,37 @@ def test_seat_capture_policy_put_requires_admin(tmp_path: Any) -> None:
     )
 
     assert response.status_code == 403
+
+
+def test_promotion_pending_list_redacts_body(tmp_path: Any) -> None:
+    app.state.access_store = AccessStore(tmp_path / "access.json")
+    admin = authed_client()
+    admin.post("/api/access/seats", json={"name": "Alice", "slug": "alice"})
+    created = admin.post("/api/access/seats", json={"name": "Bob", "slug": "bob"})
+    bob_token = created.json()["token"]
+    bob_client = TestClient(app, base_url="https://testserver")
+
+    from kb.access import now_iso
+    from kb.promotion_queue import build_pending_item
+    from kb.promotion_refs import ReferenceAssessment
+
+    item = build_pending_item(
+        seat_slug="alice",
+        seat_dataset="seat:alice",
+        candidate_text="secret candidate body should not leak",
+        assessment=ReferenceAssessment(status="new_org_project", reason="no_org_or_central_match"),
+        created_at=now_iso(),
+    )
+    app.state.access_store.add_promotion_pending(item)
+
+    own = admin.get("/api/promotion/pending")
+    assert own.status_code == 200
+    assert own.json()["count"] == 1
+    assert "candidate_text" not in own.json()["items"][0]
+
+    other = bob_client.get(
+        "/api/promotion/pending",
+        headers={"Authorization": f"Bearer {bob_token}"},
+    )
+    assert other.status_code == 200
+    assert other.json()["count"] == 0
