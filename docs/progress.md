@@ -1,16 +1,72 @@
 # Citadel Progress
 
-Last updated: 2026-06-27.
+Last updated: 2026-06-29.
 
-## 2026-06-27 — ADR-0007 P5/P6 promotion agent + approval (local → PR)
+## 2026-06-29 — Stable-release pass: PyPI v0.1.3, evolve scheduler, repopulation (cognify-blocked)
+
+Shipped the ADR-0007 promotion CLI to PyPI and built the scheduled evolve path.
+Graph repopulation is blocked on a cognee event-loop bug (below); everything else
+landed.
+
+- **PyPI v0.1.3** — bumped `pyproject` 0.1.2→0.1.3 + CHANGELOG; tag `v0.1.3`
+  pushed → trusted-publish Action green. `pipx install citadel-archive` now lands
+  the `citadel promotion {run,list,approve,reject}` subcommands (install-verified
+  from PyPI). Commits `737bffa` (gitignore the personal workspace ingester),
+  `c435bcc` (release).
+- **Evolve scheduler (subprocess, in web service)** — the 6h evolve pass cannot be
+  a separate Railway service: its promotion + cognify stages need the web
+  service's `/data` volume (Kuzu graph + JSON access store), and Railway volumes
+  attach to a single service. Built an env-gated scheduler in `kb/server.py`
+  lifespan (`CITADEL_EVOLVE_SCHEDULER_ENABLED`, default off;
+  `CITADEL_EVOLVE_INTERVAL_SECONDS=21600`) that runs `python -m scripts.run_railway`
+  mode `evolve` as a **subprocess on the web container** each interval (a worker
+  thread fails — cognee binds async resources to the loop that created them).
+  Deployed (`69e9499`) + enabled on Railway web; boot log confirms
+  `Evolve scheduler enabled`. 510 tests, ruff clean. Subprocess fix `8a52245`.
+- **Live pass result** — `github_sync` ✅, `repo_content_sync` ✅, `self_improve`
+  ✅, `promotion` ✅ (now sees `seat:sarthi`), **`cognify` ❌**: `got Future
+  attached to a different loop`. Root cause: each stage runs its own
+  `asyncio.run()`; cognee caches a global async engine on the first stage's loop,
+  which is closed by the time the cognify stage's loop runs. The web-API cognify
+  path (`POST /api/cognify/run`, one long-lived FastAPI loop) is unaffected and
+  remains the working path. **Graph repopulation is therefore still pending the
+  cognify fix** — org data is re-added to pgvector but the Kuzu graph is not
+  rebuilt (the familiar stranded-data state).
+- **Cron LLM_MODEL drift fixed** — `Citadel-GitHub-Sync` `LLM_MODEL` →
+  `openrouter/deepseek/deepseek-v4-flash` (was prefix-less `openrouter/free`;
+  moot in HTTP-endpoint mode but no longer a landmine).
+- **Linear** — read-only `CITADEL_LINEAR_API_KEY` set on Railway web (the
+  `linear-sync` cron + `GET /api/linear-sync` verify are still pending).
+- **Security** — reading Railway vars surfaced live secrets (admin key, GitHub
+  PAT, OpenRouter key, Postgres password) into the working session: **rotate
+  them.** The Railway MCP token also went stale mid-session (the local CLI still
+  works and was used for deploy/logs/vars).
+- **Docs** — `install_autosync.sh` no longer exists (folded into `citadel
+  onboard`); stale references corrected across `tasks.md` and the phase-2 plan.
+
+## 2026-06-27 — ADR-0007 P5/P6 merged + promotion enabled in prod (PR #19)
+
+- **Merged [PR #19](https://github.com/masumi-network/Citadel-Archive/pull/19)** → `main`
+  (`a9aecbc`): Promotion Agent, approval queue, MCP tools, dashboard panel,
+  `citadel promotion` CLI, grill-aligned docs/skills.
+- **Production env** on Railway **Citadel-Archive**:
+  `CITADEL_PROMOTION_ENABLED=true`, `CITADEL_PROMOTION_DRY_RUN=false`,
+  `CITADEL_PROMOTION_RELEVANCE_THRESHOLD=0.7`, `CITADEL_PROMOTION_MAX_ITEMS=20`
+  (see [`docs/operations.md`](operations.md)).
+- **On demand live:** `POST /api/promote/run`, `/api/promotion/pending`, dashboard
+  queue, MCP `citadel_promotion_*`. **Scheduled 6h pass** still needs a Railway
+  `evolve` cron service.
+- **Remaining:** evolve cron, browser QA, PyPI **v0.1.3** (`citadel promotion` for
+  `pipx` users), production smoke with admin + seat tokens.
+
+## 2026-06-27 — ADR-0007 P5/P6 promotion agent + approval (implemented)
 
 - **Promotion engine** grill parity: masumi-org / Central reference checks, capture
   `org-work` gate, secret scan + LLM always, reject dedupe, promotion metadata tags.
 - **API:** seat-scoped `POST /api/promote/run`, promotion pending approve/reject.
 - **CLI:** `citadel promotion list|approve|reject|run` with `--json`.
 - **MCP:** `citadel_promotion_pending|approve|reject`; dashboard Promotion Queue panel.
-- **503 tests** passing locally; production enablement: `CITADEL_PROMOTION_ENABLED=true`
-  on Railway after merge (see `docs/operations.md`).
+- **503 tests** passing locally before merge.
 
 ## 2026-06-27 — ADR-0007 promotion grill (design locked)
 
@@ -25,8 +81,8 @@ Last updated: 2026-06-27.
   shipping plan P5/P6 checklist, `tasks.md` code-gap list,
   `docs/agent-access-model.md`, proactive-ingest skill (removed stale
   `org-ready` → Central seat writes).
-- **Next:** align local promotion engine + CLI to grill spec; production enable
-  `CITADEL_PROMOTION_ENABLED`.
+- **Next:** ~~align local promotion engine + CLI to grill spec; production enable
+  `CITADEL_PROMOTION_ENABLED`.~~ Done in PR #19; follow-ups: evolve cron, PyPI v0.1.3, browser QA.
 
 ## 2026-06-27 — Published to PyPI + CLI polish (v0.1.0 → v0.1.2)
 

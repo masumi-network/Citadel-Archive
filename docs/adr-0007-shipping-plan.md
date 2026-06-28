@@ -22,9 +22,16 @@ approval; secrets blocked everywhere.
 | P2 MCP security hardening (partial) | 10% | **Done** (local) | 10% |
 | P3 Capture policy server API + admin baseline | 15% | **Done** | 15% |
 | P4 Setup CLI + `citadel capture` + local roots | 20% | **Done** | 20% |
-| P5 Promotion Agent (refs + tags + cron) | 20% | **Done** (local) | 20% |
-| P6 Promotion Approval UI + MCP tool | 10% | **Done** (local) | 10% |
+| P5 Promotion Agent (refs + tags + cron) | 20% | **Done** (prod) | 20% |
+| P6 Promotion Approval UI + MCP tool | 10% | **Done** (prod) | 10% |
 | **Total** | **100%** | | **~98%** |
+
+**Prod ops follow-ups (2026-06-29):** PyPI **v0.1.3 published** (`citadel
+promotion` CLI) + GitHub Release. 6h **evolve scheduler shipped + enabled** —
+in-process subprocess on the web container, NOT a separate Railway service
+(volume isn't shareable); its `cognify` stage has an `asyncio.run` loop bug
+pending fix (graph repopulation blocked on it). Browser QA on Promotion Queue is
+verifiable once a promotion is queued (queue empty at 0 seats with content).
 
 ## P1 — Seat write policy (all channels)
 

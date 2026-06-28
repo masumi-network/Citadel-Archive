@@ -150,7 +150,10 @@ Update the **Contributes** column as checkpoints close. Target: **100%** before 
 | 6.4 | Update `docs/progress.md`, `tasks.md`, README | **100%** | 2026-06-26 pass |
 | 6.5 | Teammate rollout: token + skill + git hook one-pager | **100%** | `teammate-rollout.md` |
 
-**Remaining operator work:** read-only `CITADEL_LINEAR_API_KEY` on web + `linear-sync` cron, verify `GET /api/linear-sync`, per-dev `install_autosync.sh`.
+**Remaining operator work:** `CITADEL_LINEAR_API_KEY` set on web (2026-06-29) —
+still need the `linear-sync` cron + `GET /api/linear-sync` verify; per-dev
+onboarding via `citadel onboard` (replaces the removed `install_autosync.sh`); and
+the evolve `cognify` loop-bug fix so graph repopulation completes.
 
 ---
 

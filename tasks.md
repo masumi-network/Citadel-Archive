@@ -1,6 +1,6 @@
 # Citadel Tasks
 
-## ADR-0007 execution — seat capture, promotion, write policy (~15% overall)
+## ADR-0007 execution — seat capture, promotion, write policy (~98% overall)
 
 **Plan:** [`docs/adr-0007-shipping-plan.md`](docs/adr-0007-shipping-plan.md)  
 **ADR:** [`docs/adr/0007-seat-capture-promotion-write-policy.md`](docs/adr/0007-seat-capture-promotion-write-policy.md)
@@ -9,42 +9,50 @@
 
 - [x] P0 Glossary + ADR-0007 + shipping plan + progress (2026-06-27)
 - [x] **P0b Grill refinements** — promotion decision tree locked; CONTEXT + ADR-0007 refinements section (2026-06-27)
-- [x] P2 MCP seat write guards + secret scan extensions (local, pending deploy)
+- [x] P2 MCP seat write guards + secret scan extensions (2026-06-27, prod via PR #19)
 - [x] **P1 Seat write policy on all HTTP paths** (2026-06-27)
 - [x] P3 Server capture policy API + admin baseline (2026-06-27)
 - [x] P4 `citadel setup` + `citadel capture` + local allowlist (2026-06-27)
 - [x] **CLI shipped** — `citadel onboard`/`status`/`tui`, headless `--json`,
   branded home screen; **published to PyPI** as `citadel-archive` v0.1.2 +
   bootstrap installer (beyond ADR-0007 scope; see progress.md) (2026-06-27)
-- [x] P5 Promotion Agent (GitHub + Central refs, tags, 6h + on demand)
-- [x] P6 Promotion Approval queue (dashboard + MCP, admin delegate + audit)
+- [x] P5 Promotion Agent (GitHub + Central refs, tags, on demand + evolve hook) — **PR #19 → prod** (2026-06-27)
+- [x] P6 Promotion Approval queue (dashboard + MCP, admin delegate + audit) — **PR #19 → prod** (2026-06-27)
 
-### P5 — Promotion Agent (in progress, local)
+### P5 — Promotion Agent ✅ (PR #19, prod 2026-06-27)
 
 - [x] `kb/promotion_refs.py` — GitHub org repo list + Central search reference checks
-- [x] Capture Root Tag gate (`personal` never auto-promotes)
+- [x] Capture Root Tag gate (`personal` never auto-promotes; `org-work` only for capture auto-promote)
 - [x] **New Org Project** → `pending_approval` queue instead of auto-promote
-- [x] Wired into `PromotionEngine.run` (6h evolve cron already calls it via `run_railway.py`)
+- [x] Wired into `PromotionEngine.run` (evolve cron stage in `run_railway.py`)
 - [x] **Grill parity:** masumi-org-only auto-promote (no LLM-only path for `no_reference_signal`)
-- [x] **Grill parity:** require `org-work` tag on capture-root candidates
 - [x] **Grill parity:** no-repo-hint → Central match only, else skip (no queue)
 - [x] **Grill parity:** secret scan + LLM always required on every candidate
 - [x] **Grill parity:** promotion metadata on Central writes (traceability v1)
 - [x] **Grill parity:** reject dedupe / candidate hash — no re-queue unchanged notes
 - [x] Seat-scoped `POST /api/promote/run` (member own seat; admin any)
-- [x] `citadel promotion run|list|approve|reject` CLI + `--json`
-- [ ] Deploy + production verify with `CITADEL_PROMOTION_ENABLED` (PR #TBD)
-- [ ] Add Railway `evolve` cron (`0 */6 * * *`) for scheduled promotion pass
+- [x] `citadel promotion run|list|approve|reject` CLI + `--json` (in repo; PyPI pending v0.1.3)
+- [x] **Production:** `CITADEL_PROMOTION_ENABLED=true` on Railway **Citadel-Archive** ([PR #19](https://github.com/masumi-network/Citadel-Archive/pull/19))
+- [x] **6h evolve scheduler** (2026-06-29) — NOT a separate Railway service (volume
+  isn't shareable; promotion+cognify need the web's `/data` volume). Env-gated
+  in-process scheduler in `kb/server.py` lifespan
+  (`CITADEL_EVOLVE_SCHEDULER_ENABLED`, `CITADEL_EVOLVE_INTERVAL_SECONDS=21600`)
+  spawns `python -m scripts.run_railway` mode `evolve` as a subprocess on the web
+  container. Deployed + enabled. **Caveat:** the `cognify` stage fails under
+  `asyncio.run` (`Future attached to a different loop` — cognee loop binding); see
+  graph-repopulation below.
+- [ ] Production smoke: admin `GET /api/promote` + seat `citadel promotion run --json` (blocked on a valid seat/admin token in-session)
 
-### P6 — Promotion Approval (in progress, local)
+### P6 — Promotion Approval ✅ (PR #19, prod 2026-06-27)
 
 - [x] `GET /api/promotion/pending` + `POST .../approve` + `POST .../reject`
 - [x] Dashboard **Promotion Queue** panel + Access-style approve button
 - [x] MCP: `citadel_promotion_pending`, `citadel_promotion_approve`, `citadel_promotion_reject`
 - [x] Admin delegate audit on approve/reject
-- [x] **Grill parity:** document agent-proposes / member-responds (no manual queue add)
+- [x] **Grill parity:** agent-proposes / member-responds (no manual queue add)
 - [x] `citadel promotion approve|reject` CLI + `--json`
-- [ ] Browser QA on production
+- [ ] Browser QA on production (approve/reject in Operations Dashboard) — queue is empty until a promotion is queued (0 seats had content); panel render is verifiable now
+- [x] **Published PyPI v0.1.3** (2026-06-29) — tag `v0.1.3` → trusted-publish; `pipx install citadel-archive` includes `citadel promotion` (install-verified)
 
 ### P1 — Seat write policy ✅ (2026-06-27)
 
@@ -96,17 +104,22 @@ pending: Linear read-only key, `linear-sync` cron, Central cognify verify, per-d
 - [x] Phase 2 merged to `main` (`5f6c0ed`+)
 - [x] Cognify **Central** unblocked (`LLM_MODEL` fix 2026-06-24; optional
       `POST /api/cognify/run?force=true` for stale graph store)
-- [ ] **Full graph repopulation** — fixes verified (2026-06-26):
-      `/api/mesh/graph` now displays (25 nodes) after a partial re-ingest. The
-      complete GitHub re-sync 502s through the public proxy, so run it via the
-      internal cron (`Citadel-GitHub-Sync`, 2400s timeout) or wait for the next
-      scheduled run, then confirm `/api/mesh/graph` climbs toward the full
-      corpus (~214). (Optional cleanup: remove the `COGNIFY_TEST_MARKER` node.)
+- [ ] **Full graph repopulation** — BLOCKED on a cognify bug (2026-06-29). The
+      evolve scheduler re-syncs org content in-process (no public-proxy 502) and
+      `github_sync`/`repo_content_sync` add the data to pgvector, but the
+      `cognify` stage fails under `asyncio.run` (`Future attached to a different
+      loop` — cognee caches a global async engine on the first stage's loop, dead
+      by cognify time). Fix: route the evolve cognify through the working web-API
+      loop (`POST /api/cognify/run`) or run the chain in a single loop. Until
+      then the Kuzu graph isn't rebuilt (`/api/mesh/graph` stays partial).
+      (Optional cleanup: remove the `COGNIFY_TEST_MARKER` node.)
 - [x] M6.5 teammate one-pager: [`docs/onboarding/teammate-rollout.md`](docs/onboarding/teammate-rollout.md)
-- [ ] Set read-only `CITADEL_LINEAR_API_KEY` (Linear **Read** scope) on Railway web
+- [x] Set read-only `CITADEL_LINEAR_API_KEY` on Railway web (2026-06-29)
 - [ ] Create Railway `linear-sync` cron (`CITADEL_RUN_MODE=linear-sync`)
 - [ ] Verify sync: `GET /api/linear-sync` → `enabled`, `issue_count`, `last_synced_at`
-- [ ] Per-dev `skills/citadel-proactive-ingest/scripts/install_autosync.sh`
+- [ ] Per-dev rollout via `citadel onboard` (installs token + git-push/SessionEnd
+      hooks + MCP + capture roots; replaces the removed `install_autosync.sh`).
+      `seat:sarthi` already onboarded.
 
 ---
 
@@ -349,11 +362,13 @@ pending: Linear read-only key, `linear-sync` cron, Central cognify verify, per-d
   `CITADEL_RUN_MODE=cognify` Railway run to build the graph. Vector search is
   unaffected (works today).
 - **Operational rollout of autonomous sync** (not code): provision a seat per dev
-  via the connect wizard, then each dev exports `CITADEL_MCP_ACCESS_TOKEN` and runs
-  `skills/citadel-proactive-ingest/scripts/install_autosync.sh` per org-repo clone.
+  via the connect wizard, then each dev runs `citadel onboard` (sets the token in
+  their shell rc + installs git-push/SessionEnd hooks + MCP + capture roots —
+  replaces the removed `install_autosync.sh`). `seat:sarthi` already onboarded.
   See [`docs/onboarding/teammate-rollout.md`](docs/onboarding/teammate-rollout.md).
-- **Linear rollout** (operator): set read-only `CITADEL_LINEAR_API_KEY` on Railway
-  web + create `linear-sync` cron; verify `GET /api/linear-sync`.
+- **Linear rollout** (operator): `CITADEL_LINEAR_API_KEY` is set on Railway web
+  (2026-06-29). Remaining: create the `linear-sync` cron and verify
+  `GET /api/linear-sync`.
 - **Rotate `CITADEL_ADMIN_KEY`** — it was used over the wire during the 2026-06-24
   debugging; rotate it (and consider rotating the GitHub PAT + OpenRouter key, which
   live in plaintext Railway env).
@@ -412,10 +427,10 @@ pending: Linear read-only key, `linear-sync` cron, Central cognify verify, per-d
 
 ## Next
 
-Finish **M6 rollout:** set read-only `CITADEL_LINEAR_API_KEY` on Railway web +
-`linear-sync` cron → `POST /api/linear-sync/run` or wait for cron → verify
-`GET /api/linear-sync` → re-cognify **Central** if needed → per-dev
-`install_autosync.sh`. See [`docs/onboarding/teammate-rollout.md`](docs/onboarding/teammate-rollout.md).
+Finish **M6 rollout:** fix the evolve `cognify` stage (loop bug) so graph
+repopulation completes → create the `linear-sync` cron (key already set) → verify
+`GET /api/linear-sync` → per-dev `citadel onboard`. See
+[`docs/onboarding/teammate-rollout.md`](docs/onboarding/teammate-rollout.md).
 
 ## Next: Team Access
 
