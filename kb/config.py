@@ -182,6 +182,8 @@ class CitadelConfig:
     promotion_dry_run: bool = True
     promotion_relevance_threshold: float = 0.7
     promotion_max_items: int = 20
+    evolve_scheduler_enabled: bool = False
+    evolve_interval_seconds: int = 21600
     github_token: str | None = None
     repo_content_sync_enabled: bool = True
     repo_content_sync_dataset: str = "masumi-network"
@@ -331,6 +333,14 @@ class CitadelConfig:
             promotion_max_items=_int(
                 os.getenv("CITADEL_PROMOTION_MAX_ITEMS"),
                 default=20,
+            ),
+            evolve_scheduler_enabled=_bool(
+                os.getenv("CITADEL_EVOLVE_SCHEDULER_ENABLED"),
+                default=False,
+            ),
+            evolve_interval_seconds=_int(
+                os.getenv("CITADEL_EVOLVE_INTERVAL_SECONDS"),
+                default=21600,
             ),
             github_token=os.getenv("CITADEL_GITHUB_TOKEN") or os.getenv("GITHUB_TOKEN") or None,
             repo_content_sync_enabled=_bool(

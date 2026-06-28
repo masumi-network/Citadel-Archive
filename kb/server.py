@@ -71,6 +71,59 @@ mcp_server = create_mcp_server()
 mcp_app = mcp_server.streamable_http_app()
 
 
+async def _evolve_scheduler_loop(interval_seconds: int) -> None:
+    """Run the evolve cycle every ``interval_seconds``, serially and fail-soft.
+
+    The evolve stages call ``asyncio.run()`` internally, so they cannot run on the
+    server's event loop — ``asyncio.to_thread`` gives each pass a clean worker
+    thread. Passes never overlap (the next sleep starts only after a pass returns)
+    and one failed pass never stops the schedule. The first pass waits a full
+    interval so a redeploy never triggers a heavy cycle on every boot.
+    """
+    from scripts.run_railway import run_evolve
+
+    while True:
+        await asyncio.sleep(interval_seconds)
+        logger.info("Evolve scheduler: starting scheduled pass")
+        try:
+            code = await asyncio.to_thread(run_evolve)
+            logger.info("Evolve scheduler: pass finished (exit=%s)", code)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("Evolve scheduler: pass failed")
+
+
+def _start_evolve_scheduler() -> "asyncio.Task[Any] | None":
+    """Launch the in-process 6h evolve cron when enabled.
+
+    A separate Railway service cannot host this: the promotion + cognify stages
+    run in-process against the Kuzu graph and JSON access store on the local
+    ``/data`` volume, and Railway volumes attach to a single service. Running the
+    cycle inside the web process keeps it on the volume + Postgres the API already
+    serves. Off by default (``CITADEL_EVOLVE_SCHEDULER_ENABLED``).
+    """
+    config = get_citadel().config
+    if not config.evolve_scheduler_enabled:
+        return None
+    interval = max(60, config.evolve_interval_seconds)
+    logger.info("Evolve scheduler enabled: interval=%ss", interval)
+    task = asyncio.create_task(_evolve_scheduler_loop(interval))
+    _BACKGROUND_TASKS.add(task)
+    task.add_done_callback(_BACKGROUND_TASKS.discard)
+    return task
+
+
+async def _stop_evolve_scheduler(task: "asyncio.Task[Any] | None") -> None:
+    if task is None:
+        return
+    task.cancel()
+    try:
+        await task
+    except asyncio.CancelledError:
+        pass
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> Any:
     async with mcp_server.session_manager.run():
@@ -84,7 +137,11 @@ async def lifespan(app: FastAPI) -> Any:
             await mesh.rehydrate(get_citadel().config)
         except Exception:
             logger.exception("Mesh rehydrate failed; starting with empty counters")
-        yield
+        evolve_task = _start_evolve_scheduler()
+        try:
+            yield
+        finally:
+            await _stop_evolve_scheduler(evolve_task)
 
 
 app = FastAPI(
