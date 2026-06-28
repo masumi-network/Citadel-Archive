@@ -79,21 +79,32 @@ class _FakeProc:
         pass
 
 
-async def test_evolve_scheduler_loop_spawns_evolve_subprocess(monkeypatch: Any) -> None:
+class _FakeCitadel:
+    def __init__(self, cognify_calls: list[bool]) -> None:
+        self._cognify_calls = cognify_calls
+
+    async def cognify_dataset(self, *, force: bool = False) -> dict[str, Any]:
+        self._cognify_calls.append(force)
+        return {"graph_after": {"nodes": 7, "edges": 4}, "graph_grew": True}
+
+
+async def test_evolve_scheduler_loop_runs_subprocess_then_cognifies(monkeypatch: Any) -> None:
     import kb.server as server
 
-    calls: list[tuple[tuple[Any, ...], dict[str, Any]]] = []
+    sub_envs: list[dict[str, Any]] = []
+    cognify_calls: list[bool] = []
 
     async def fake_exec(*args: Any, **kwargs: Any) -> _FakeProc:
-        calls.append((args, kwargs))
+        sub_envs.append(kwargs.get("env", {}))
         return _FakeProc(0)
 
     monkeypatch.setattr(server.asyncio, "create_subprocess_exec", fake_exec)
+    monkeypatch.setattr(server, "get_citadel", lambda: _FakeCitadel(cognify_calls))
 
     task = asyncio.create_task(server._evolve_scheduler_loop(0.001))
     try:
         for _ in range(300):
-            if len(calls) >= 2:
+            if len(cognify_calls) >= 2:
                 break
             await asyncio.sleep(0.01)
     finally:
@@ -101,30 +112,29 @@ async def test_evolve_scheduler_loop_spawns_evolve_subprocess(monkeypatch: Any) 
         with contextlib.suppress(asyncio.CancelledError):
             await task
 
-    assert len(calls) >= 2
-    # Runs scripts.run_railway in a fresh process, in evolve mode.
-    args, kwargs = calls[0]
-    assert args[1:] == ("-m", "scripts.run_railway")
-    assert kwargs["env"]["CITADEL_RUN_MODE"] == "evolve"
+    assert len(sub_envs) >= 2
+    # Phase 1: heavy stages in a subprocess with cognify disabled (frees the lock).
+    assert sub_envs[0]["CITADEL_RUN_MODE"] == "evolve"
+    assert sub_envs[0]["CITADEL_EVOLVE_COGNIFY_ENABLED"] == "false"
+    # Phase 2: cognify ran in-loop after the subprocess.
+    assert len(cognify_calls) >= 2
 
 
-async def test_evolve_scheduler_loop_survives_a_failed_pass(monkeypatch: Any) -> None:
+async def test_evolve_scheduler_loop_cognifies_even_if_subprocess_fails(monkeypatch: Any) -> None:
     import kb.server as server
 
-    calls: list[int] = []
+    cognify_calls: list[bool] = []
 
-    async def flaky_exec(*args: Any, **kwargs: Any) -> _FakeProc:
-        calls.append(1)
-        if len(calls) == 1:
-            raise RuntimeError("spawn boom")
-        return _FakeProc(0)
+    async def boom_exec(*args: Any, **kwargs: Any) -> _FakeProc:
+        raise RuntimeError("spawn boom")
 
-    monkeypatch.setattr(server.asyncio, "create_subprocess_exec", flaky_exec)
+    monkeypatch.setattr(server.asyncio, "create_subprocess_exec", boom_exec)
+    monkeypatch.setattr(server, "get_citadel", lambda: _FakeCitadel(cognify_calls))
 
     task = asyncio.create_task(server._evolve_scheduler_loop(0.001))
     try:
         for _ in range(300):
-            if len(calls) >= 2:
+            if len(cognify_calls) >= 2:
                 break
             await asyncio.sleep(0.01)
     finally:
@@ -132,5 +142,5 @@ async def test_evolve_scheduler_loop_survives_a_failed_pass(monkeypatch: Any) ->
         with contextlib.suppress(asyncio.CancelledError):
             await task
 
-    # First spawn raised; the loop kept going and spawned a second pass.
-    assert len(calls) >= 2
+    # A failed stages-subprocess (caught) must not skip the in-loop cognify.
+    assert len(cognify_calls) >= 2

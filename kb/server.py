@@ -72,48 +72,77 @@ mcp_app = mcp_server.streamable_http_app()
 
 
 async def _evolve_scheduler_loop(interval_seconds: int) -> None:
-    """Run the evolve cycle every ``interval_seconds`` as an isolated subprocess.
+    """Run the evolve cycle every ``interval_seconds``: heavy stages in a
+    subprocess, then cognify in-loop.
 
-    Each pass runs ``python -m scripts.run_railway`` in mode ``evolve`` on THIS
-    container — same ``/data`` volume + Postgres the API serves, but a fresh
-    interpreter and event loop. A subprocess (not ``asyncio.to_thread``) is
-    required: cognee binds its async DB/graph resources to the loop that
-    initialized them, so running the cognify/promotion stages on a worker-thread
-    loop raises "got Future attached to a different loop". Passes are serial and
-    fail-soft; the first waits one full interval so a redeploy never triggers a
-    heavy cycle on every boot.
+    Two cognee/Kuzu constraints force this split:
+    - cognee binds its async resources to the loop that created them, so cognify
+      must run in the server's long-lived loop — a fresh ``asyncio.run()`` raises
+      "got Future attached to a different loop".
+    - Kuzu (the graph store) is a single-writer embedded DB, so only one process
+      may hold it. The subprocess opens Kuzu during its add stages and releases it
+      when it EXITS; only then can the web process cognify as the sole writer.
+
+    Phase 1 runs github_sync → repo_content_sync → self_improve → promotion as a
+    subprocess (``CITADEL_EVOLVE_COGNIFY_ENABLED=false``) that exits. Phase 2
+    awaits cognify in-loop on the web's own Citadel. Serial and fail-soft; the
+    first pass waits one full interval so a redeploy never triggers a heavy cycle
+    on boot.
     """
     import sys
 
     while True:
         await asyncio.sleep(interval_seconds)
         logger.info("Evolve scheduler: starting scheduled pass")
+        # Phase 1 — heavy stages in a subprocess that frees the Kuzu lock on exit.
         proc = None
         try:
             proc = await asyncio.create_subprocess_exec(
                 sys.executable,
                 "-m",
                 "scripts.run_railway",
-                env={**os.environ, "CITADEL_RUN_MODE": "evolve"},
+                env={
+                    **os.environ,
+                    "CITADEL_RUN_MODE": "evolve",
+                    "CITADEL_EVOLVE_COGNIFY_ENABLED": "false",
+                },
             )
             code = await proc.wait()
-            logger.info("Evolve scheduler: pass finished (exit=%s)", code)
+            logger.info("Evolve scheduler: stages finished (exit=%s)", code)
         except asyncio.CancelledError:
             if proc is not None and proc.returncode is None:
                 proc.terminate()
             raise
         except Exception:
-            logger.exception("Evolve scheduler: pass failed")
+            logger.exception("Evolve scheduler: stages subprocess failed")
+        # Phase 2 — cognify in-loop; the web process is the sole Kuzu writer now.
+        force = os.getenv("CITADEL_EVOLVE_COGNIFY_FORCE", "").strip().lower() in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        }
+        try:
+            result = await get_citadel().cognify_dataset(force=force)
+            logger.info(
+                "Evolve scheduler: cognify finished (graph_after=%s grew=%s)",
+                result.get("graph_after"),
+                result.get("graph_grew"),
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("Evolve scheduler: cognify failed")
 
 
 def _start_evolve_scheduler() -> "asyncio.Task[Any] | None":
-    """Launch the 6h evolve cron (subprocess on this container) when enabled.
+    """Launch the 6h evolve cron when enabled.
 
-    A separate Railway service cannot host this: the promotion + cognify stages
-    work against the Kuzu graph and JSON access store on the local ``/data``
-    volume, and Railway volumes attach to a single service. The scheduler runs
-    each cycle as a subprocess on the web container, so it shares that volume +
-    Postgres while staying out of the server's event loop. Off by default
+    A separate Railway service cannot host this: the stages work against the Kuzu
+    graph + JSON access store on the local ``/data`` volume, and Railway volumes
+    attach to a single service. The scheduler runs the heavy stages as a
+    subprocess on the web container and then cognifies in-loop (see
+    :func:`_evolve_scheduler_loop` for why the split is required). Off by default
     (``CITADEL_EVOLVE_SCHEDULER_ENABLED``).
     """
     config = get_citadel().config
