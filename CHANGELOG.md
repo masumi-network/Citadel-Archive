@@ -4,6 +4,24 @@ All notable changes to `citadel-archive` are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses
 [Semantic Versioning](https://semver.org/).
 
+## [0.1.3] — 2026-06-28
+
+### Added
+
+- **`citadel promotion`** — drive seat → Central promotion from the teammate CLI
+  (zero-dep, like `citadel capture`): `run` triggers an on-demand promotion pass
+  for your seat, `list` shows the pending approval queue, and `approve` / `reject`
+  act on a queued item. All support `--json` for agents and CI.
+
+### Server
+
+- **Promotion Agent + Approval queue** now ship in the `[server]` extra: the
+  capture → Central promotion engine (GitHub-org / Central reference checks,
+  Capture Root Tag gate, secret scan + LLM on every candidate, reject dedupe,
+  promotion-metadata tags), seat-scoped `POST /api/promote/run`,
+  `GET /api/promotion/pending` + approve/reject, the dashboard Promotion Queue
+  panel, and MCP tools `citadel_promotion_pending` / `_approve` / `_reject`.
+
 ## [0.1.2] — 2026-06-27
 
 ### Changed
@@ -65,6 +83,7 @@ self-hosted Organization Vault server.
   references it as `${CITADEL_MCP_ACCESS_TOKEN}` and it is never echoed.
 - The pre-push allowlist fails **closed** on a corrupt config.
 
+[0.1.3]: https://github.com/masumi-network/Citadel-Archive/releases/tag/v0.1.3
 [0.1.2]: https://github.com/masumi-network/Citadel-Archive/releases/tag/v0.1.2
 [0.1.1]: https://github.com/masumi-network/Citadel-Archive/releases/tag/v0.1.1
 [0.1.0]: https://github.com/masumi-network/Citadel-Archive/releases/tag/v0.1.0
