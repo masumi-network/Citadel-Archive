@@ -95,7 +95,9 @@ context, decisions, source facts, implementation notes, or reusable runbooks.
   the MCP client to gate `citadel_ingest`, `citadel_contribute`, and
   `citadel_record_feedback`.
 - Shared **Central** is read-only from seat MCP. It updates via GitHub/Linear
-  cron sync, selective promotion, and curated non-MCP contributions.
+  cron sync, the **Promotion Agent** (Node → Central), and curated non-MCP
+  contributions. **New Org Project** notes require **Promotion Approval**
+  (dashboard, MCP with confirm, or `citadel promotion` CLI).
 
 Use:
 

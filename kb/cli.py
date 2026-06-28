@@ -40,6 +40,14 @@ from kb.onboard import (
     merge_mcp_config,
 )
 from kb.banner import banner, banner_large, paint, supports_color
+from kb.promotion_client import (
+    PromotionClientError,
+    approve_pending,
+    list_pending,
+    node_base_url,
+    reject_pending,
+    run_promotion,
+)
 from kb.status import gather_status, render_text
 
 
@@ -327,6 +335,102 @@ async def _capture(args: argparse.Namespace) -> int:
     return 1 if failures else 0
 
 
+def _promotion_base_url(args: argparse.Namespace) -> str:
+    return node_base_url(getattr(args, "node_url", None))
+
+
+def _promotion_exit(exc: PromotionClientError, *, as_json: bool) -> int:
+    if as_json:
+        _print_json({"ok": False, "error": str(exc), "status": exc.status, "body": exc.body})
+    else:
+        print(f"citadel promotion: {exc}", file=sys.stderr)
+    return 1
+
+
+async def _promotion_list(args: argparse.Namespace) -> int:
+    as_json = args.json
+    try:
+        result = list_pending(
+            base_url=_promotion_base_url(args),
+            status=args.status,
+        )
+    except PromotionClientError as exc:
+        return _promotion_exit(exc, as_json=as_json)
+    if as_json:
+        _print_json(result)
+    else:
+        items = result.get("items") or []
+        print(f"Promotion queue ({result.get('status', args.status)}): {len(items)} item(s)")
+        for item in items:
+            preview = item.get("preview") or "(no preview)"
+            print(
+                f"  {item.get('id')}  seat={item.get('seat_slug')}  "
+                f"ref={item.get('reference_status')}  {preview}"
+            )
+    return 0
+
+
+async def _promotion_approve(args: argparse.Namespace) -> int:
+    as_json = args.json
+    try:
+        result = approve_pending(
+            args.item_id,
+            base_url=_promotion_base_url(args),
+            note=args.note,
+        )
+    except PromotionClientError as exc:
+        return _promotion_exit(exc, as_json=as_json)
+    if as_json:
+        _print_json(result)
+    else:
+        promoted = result.get("promoted")
+        print(f"Approved {args.item_id} (promoted={promoted})")
+    return 0 if result.get("ok") else 1
+
+
+async def _promotion_reject(args: argparse.Namespace) -> int:
+    as_json = args.json
+    try:
+        result = reject_pending(
+            args.item_id,
+            base_url=_promotion_base_url(args),
+            note=args.note,
+        )
+    except PromotionClientError as exc:
+        return _promotion_exit(exc, as_json=as_json)
+    if as_json:
+        _print_json(result)
+    else:
+        print(f"Rejected {args.item_id}")
+    return 0 if result.get("ok") else 1
+
+
+async def _promotion_run(args: argparse.Namespace) -> int:
+    as_json = args.json
+    dry_run = not args.execute
+    try:
+        result = run_promotion(
+            base_url=_promotion_base_url(args),
+            dataset=args.dataset,
+            dry_run=dry_run,
+            max_items=args.max_items,
+        )
+    except PromotionClientError as exc:
+        return _promotion_exit(exc, as_json=as_json)
+    if as_json:
+        _print_json(result)
+    else:
+        mode = "dry-run" if dry_run else "execute"
+        print(
+            f"Promotion {mode} on {result.get('dataset')}: "
+            f"candidates={result.get('candidates')} "
+            f"proposed={result.get('proposed')} "
+            f"promoted={result.get('promoted')} "
+            f"queued={result.get('queued')}"
+        )
+    return 0 if result.get("ok") else 1
+
+
 async def _status(args: argparse.Namespace) -> int:
     repo = Path(args.repo).expanduser() if args.repo else git_root_or_cwd()
     config_path = Path(args.config).expanduser() if args.config else capture_config_path()
@@ -448,6 +552,7 @@ _HOME_MENU = (
     ("Capture", (
         ("setup", "declare Approved Capture Roots (~/.citadel/capture.json)"),
         ("capture", "push summaries of approved roots to your Node"),
+        ("promotion", "list · approve · reject · run the Promotion Agent queue"),
         ("tui", "live terminal dashboard"),
     )),
     ("Knowledge", (
@@ -583,6 +688,55 @@ def build_parser() -> argparse.ArgumentParser:
     capture.add_argument("--json", action="store_true", help="Machine-readable output")
     capture.add_argument("--config", help="Override config path (testing)")
     capture.set_defaults(handler=_capture)
+
+    promotion = subcommands.add_parser(
+        "promotion",
+        help="Promotion Agent queue — list, approve, reject, or run",
+    )
+    promotion_sub = promotion.add_subparsers(dest="promotion_command", required=True)
+
+    promo_list = promotion_sub.add_parser("list", help="List pending promotion items")
+    promo_list.add_argument(
+        "--status",
+        default="pending",
+        choices=("pending", "approved", "rejected"),
+        help="Queue filter (default: pending)",
+    )
+    promo_list.add_argument("--json", action="store_true", help="Machine-readable output")
+    promo_list.add_argument("--node-url", help="Override Node URL")
+    promo_list.set_defaults(handler=_promotion_list)
+
+    promo_approve = promotion_sub.add_parser("approve", help="Approve a pending item")
+    promo_approve.add_argument("item_id", help="Promotion item id (promo_…)")
+    promo_approve.add_argument("--note", help="Optional audit note")
+    promo_approve.add_argument("--json", action="store_true")
+    promo_approve.add_argument("--node-url", help="Override Node URL")
+    promo_approve.set_defaults(handler=_promotion_approve)
+
+    promo_reject = promotion_sub.add_parser("reject", help="Reject a pending item")
+    promo_reject.add_argument("item_id", help="Promotion item id (promo_…)")
+    promo_reject.add_argument("--note", help="Optional audit note")
+    promo_reject.add_argument("--json", action="store_true")
+    promo_reject.add_argument("--node-url", help="Override Node URL")
+    promo_reject.set_defaults(handler=_promotion_reject)
+
+    promo_run = promotion_sub.add_parser(
+        "run",
+        help="Run the Promotion Agent for your seat (dry-run by default)",
+    )
+    promo_run.add_argument(
+        "--execute",
+        action="store_true",
+        help="Actually promote / queue (default is dry-run)",
+    )
+    promo_run.add_argument(
+        "--dataset",
+        help="Seat dataset to scan (default: token's seat)",
+    )
+    promo_run.add_argument("--max-items", type=int, help="Cap candidates per run")
+    promo_run.add_argument("--json", action="store_true")
+    promo_run.add_argument("--node-url", help="Override Node URL")
+    promo_run.set_defaults(handler=_promotion_run)
 
     ingest = subcommands.add_parser("ingest", help="Ingest text or a path through Cognee")
     ingest.add_argument("data")

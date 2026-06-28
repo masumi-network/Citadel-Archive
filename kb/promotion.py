@@ -20,9 +20,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import logging
+from pathlib import Path
 from typing import Any
 
-from kb.access import AccessIdentity, AccessStore, is_seat_dataset
+from kb.access import AccessIdentity, AccessStore, is_seat_dataset, now_iso
 from kb.config import CitadelConfig
 from kb.learning import LearningProcess
 from kb.llm_enrichment import (
@@ -31,12 +32,23 @@ from kb.llm_enrichment import (
     parse_json_payload,
     redacted_preview,
 )
+from kb.promotion_queue import (
+    APPROVED_STATUS,
+    PENDING_STATUS,
+    REJECTED_STATUS,
+    build_pending_item,
+    candidate_hash,
+)
+from kb.promotion_refs import ReferenceAssessment, assess_org_reference, parse_capture_tags_from_text
 from kb.security_scan import SecurityScanEntry, scan_text_entries
 from kb.service import Citadel
 
 logger = logging.getLogger(__name__)
 
 PROMOTION_TAG = "org-ready"
+PERSONAL_CAPTURE_TAG = "personal"
+ORG_WORK_CAPTURE_TAG = "org-work"
+CAPTURE_SUMMARY_MARKER = "# capture summary:"
 
 # Broad seed queries used to enumerate a seat node. cognee.recall is semantic,
 # not an exhaustive listing, so a few complementary seeds widen coverage; the
@@ -73,17 +85,25 @@ class Classification:
 
 
 @dataclass(frozen=True)
+class PromotionCandidate:
+    text: str
+    tags: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
 class ProposedPromotion:
     """One candidate plus the promote/skip decision and why."""
 
     candidate: str
-    decision: str  # "promote" | "skip"
+    decision: str  # "promote" | "skip" | "pending_approval"
     reason: str
     relevant: bool | None = None
     sensitive: bool | None = None
     score: float | None = None
     secret_blocked: bool = False
     promoted: bool = False
+    reference_status: str | None = None
+    capture_tags: tuple[str, ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -95,7 +115,30 @@ class ProposedPromotion:
             "secret_blocked": self.secret_blocked,
             "promoted": self.promoted,
             "preview": redacted_preview(self.candidate),
+            "reference_status": self.reference_status,
+            "capture_tags": list(self.capture_tags),
         }
+
+
+def _candidate_from_result(result: Any) -> PromotionCandidate | None:
+    text = _candidate_text(result)
+    if not text:
+        return None
+    tags: list[str] = []
+    if isinstance(result, dict):
+        raw_tags = result.get("tags")
+        if isinstance(raw_tags, list):
+            tags.extend(str(tag) for tag in raw_tags)
+        metadata = result.get("metadata")
+        if isinstance(metadata, dict):
+            meta_tags = metadata.get("tags")
+            if isinstance(meta_tags, list):
+                tags.extend(str(tag) for tag in meta_tags)
+    tags.extend(parse_capture_tags_from_text(text))
+    normalized_tags = tuple(
+        dict.fromkeys(tag.strip().lower() for tag in tags if tag.strip())
+    )
+    return PromotionCandidate(text=text, tags=normalized_tags)
 
 
 def _candidate_text(result: Any) -> str:
@@ -112,6 +155,26 @@ def _candidate_text(result: Any) -> str:
             if isinstance(value, str) and value.strip():
                 return value.strip()
     return ""
+
+
+def is_capture_root_content(candidate: PromotionCandidate) -> bool:
+    lower = candidate.text.lower()
+    if CAPTURE_SUMMARY_MARKER in lower or "capture root tags:" in lower:
+        return True
+    if "git-push" in candidate.tags or "capture" in candidate.tags:
+        return True
+    return False
+
+
+def capture_auto_promote_block_reason(candidate: PromotionCandidate) -> str | None:
+    """Return a skip reason when capture-root content may not auto-promote."""
+    if not is_capture_root_content(candidate):
+        return None
+    if PERSONAL_CAPTURE_TAG in candidate.tags:
+        return "capture_tag_personal"
+    if ORG_WORK_CAPTURE_TAG in candidate.tags:
+        return None
+    return "capture_tag_not_org_work"
 
 
 def _coerce_classification(parsed: Any) -> Classification | None:
@@ -154,17 +217,11 @@ class PromotionEngine:
         self.access_store = access_store
         self.config = config
 
-    async def enumerate(self, seat_dataset: str, max_items: int) -> list[str]:
-        """Best-effort list of a seat node's promotable text, capped at ``max_items``.
-
-        Uses :meth:`Citadel.search` (cognee.recall) per seed query because that is
-        the only primitive that returns real node body text. recall is semantic,
-        not exhaustive, so this under-samples large nodes by design — documented as
-        a known limitation (ADR-0005 open risk).
-        """
+    async def enumerate(self, seat_dataset: str, max_items: int) -> list[PromotionCandidate]:
+        """Best-effort list of a seat node's promotable content, capped at ``max_items``."""
         cap = max(1, max_items)
         seen: set[str] = set()
-        candidates: list[str] = []
+        candidates: list[PromotionCandidate] = []
         for query in DEFAULT_SEED_QUERIES:
             if len(candidates) >= cap:
                 break
@@ -180,14 +237,14 @@ class PromotionEngine:
                 )
                 continue
             for result in results:
-                text = _candidate_text(result)
-                if not text:
+                parsed = _candidate_from_result(result)
+                if not parsed:
                     continue
-                key = text.lower()
+                key = parsed.text.lower()
                 if key in seen:
                     continue
                 seen.add(key)
-                candidates.append(text)
+                candidates.append(parsed)
                 if len(candidates) >= cap:
                     break
         return candidates[:cap]
@@ -234,46 +291,105 @@ class PromotionEngine:
             return True
         return bool(scan.get("blocked"))
 
-    def decide(self, seat_dataset: str, candidate: str) -> ProposedPromotion:
-        """Apply secret scan, then the LLM classifier + threshold. Default SKIP."""
-        if self._secret_blocked(seat_dataset, candidate):
+    async def decide(
+        self,
+        seat_dataset: str,
+        candidate: PromotionCandidate,
+    ) -> ProposedPromotion:
+        """Apply capture tags, secret scan, org refs, then LLM classifier."""
+        capture_block = capture_auto_promote_block_reason(candidate)
+        if capture_block == "capture_tag_personal":
             return ProposedPromotion(
-                candidate=candidate,
+                candidate=candidate.text,
+                decision="skip",
+                reason="capture_tag_personal",
+                capture_tags=candidate.tags,
+            )
+        if self._secret_blocked(seat_dataset, candidate.text):
+            return ProposedPromotion(
+                candidate=candidate.text,
                 decision="skip",
                 reason="secret_content",
                 secret_blocked=True,
+                capture_tags=candidate.tags,
             )
-        verdict = self.classify(candidate)
+
+        central = self.config.github_sync_dataset or self.config.default_dataset
+        reference = await assess_org_reference(
+            self.citadel,
+            candidate_text=candidate.text,
+            central_dataset=central,
+            github_state_path=Path(self.config.github_sync_state_path),
+            github_org=self.config.github_org,
+        )
+
+        verdict = self.classify(candidate.text)
         if verdict is None:
-            # LLM unavailable or output unusable -> never promote on uncertainty.
             return ProposedPromotion(
-                candidate=candidate,
+                candidate=candidate.text,
                 decision="skip",
                 reason="llm_unavailable",
+                reference_status=reference.status,
+                capture_tags=candidate.tags,
             )
+
         threshold = self.config.promotion_relevance_threshold
         qualifies = (
             verdict.relevant
             and not verdict.sensitive
             and verdict.score >= threshold
         )
-        if qualifies:
-            decision, reason = "promote", verdict.reason
-        else:
-            decision = "skip"
+        base_kwargs = {
+            "candidate": candidate.text,
+            "relevant": verdict.relevant,
+            "sensitive": verdict.sensitive,
+            "score": verdict.score,
+            "reference_status": reference.status,
+            "capture_tags": candidate.tags,
+        }
+
+        if not qualifies:
             if verdict.sensitive:
                 reason = "sensitive"
             elif not verdict.relevant:
                 reason = "not_relevant"
             else:
                 reason = "below_threshold"
+            return ProposedPromotion(decision="skip", reason=reason, **base_kwargs)
+
+        seat_slug = seat_dataset.removeprefix("seat:")
+        content_hash = candidate_hash(candidate.text)
+        if self.access_store.is_promotion_rejected(seat_slug, content_hash):
+            return ProposedPromotion(
+                decision="skip",
+                reason="previously_rejected",
+                **base_kwargs,
+            )
+
+        if reference.status == "new_org_project":
+            return ProposedPromotion(
+                decision="pending_approval",
+                reason="new_org_project",
+                **base_kwargs,
+            )
+
+        if reference.status == "known_org_work":
+            if capture_block == "capture_tag_not_org_work":
+                return ProposedPromotion(
+                    decision="skip",
+                    reason="capture_tag_not_org_work",
+                    **base_kwargs,
+                )
+            return ProposedPromotion(
+                decision="promote",
+                reason=verdict.reason,
+                **base_kwargs,
+            )
+
         return ProposedPromotion(
-            candidate=candidate,
-            decision=decision,
-            reason=reason,
-            relevant=verdict.relevant,
-            sensitive=verdict.sensitive,
-            score=verdict.score,
+            decision="skip",
+            reason="no_org_reference",
+            **base_kwargs,
         )
 
     def _promotion_identity(self, seat_dataset: str) -> AccessIdentity:
@@ -311,10 +427,19 @@ class PromotionEngine:
         from kb.security_scan import SecretContentError
         from kb.server import execute_learning_writes, resolve_write_targets
 
+        seat_slug = seat_dataset.removeprefix("seat:")
+        promotion_tags = [
+            PROMOTION_TAG,
+            "promotion-agent",
+            f"promotion-seat:{seat_slug}",
+        ]
+        if proposal.reference_status:
+            promotion_tags.append(f"promotion-ref:{proposal.reference_status}")
+
         central = None
         try:
             targets = resolve_write_targets(
-                identity, None, [PROMOTION_TAG], self.config
+                identity, None, promotion_tags, self.config
             )
             central = next(
                 (t.dataset for t in targets if t.tier == "full"),
@@ -324,7 +449,7 @@ class PromotionEngine:
                 self.learning,
                 data=proposal.candidate,
                 targets=targets,
-                tags=[PROMOTION_TAG],
+                tags=promotion_tags,
                 session_id=None,
                 operation="promotion",
             )
@@ -373,7 +498,9 @@ class PromotionEngine:
                 "sensitive": proposal.sensitive,
                 "reason": proposal.reason,
                 "accepted": True,
-                "tags": [PROMOTION_TAG],
+                "tags": promotion_tags,
+                "reference_status": proposal.reference_status,
+                "capture_tags": list(proposal.capture_tags),
             },
         )
         return True
@@ -409,13 +536,22 @@ class PromotionEngine:
 
         cap = max_items if max_items and max_items > 0 else self.config.promotion_max_items
         candidates = await self.enumerate(seat_dataset, cap)
-        proposals = [self.decide(seat_dataset, text) for text in candidates]
+        proposals: list[ProposedPromotion] = []
+        for candidate in candidates:
+            proposals.append(await self.decide(seat_dataset, candidate))
 
         promoted = 0
+        queued = 0
+        seat_slug = seat_dataset.removeprefix("seat:")
         if not dry_run:
             identity = self._promotion_identity(seat_dataset)
             settled: list[ProposedPromotion] = []
             for proposal in proposals:
+                if proposal.decision == "pending_approval":
+                    self._enqueue_pending(seat_slug, seat_dataset, proposal)
+                    queued += 1
+                    settled.append(proposal)
+                    continue
                 if proposal.decision != "promote":
                     settled.append(proposal)
                     continue
@@ -431,6 +567,8 @@ class PromotionEngine:
                             sensitive=proposal.sensitive,
                             score=proposal.score,
                             promoted=True,
+                            reference_status=proposal.reference_status,
+                            capture_tags=proposal.capture_tags,
                         )
                     )
                 else:
@@ -443,6 +581,8 @@ class PromotionEngine:
                             sensitive=proposal.sensitive,
                             score=proposal.score,
                             secret_blocked=True,
+                            reference_status=proposal.reference_status,
+                            capture_tags=proposal.capture_tags,
                         )
                     )
             proposals = settled
@@ -455,9 +595,129 @@ class PromotionEngine:
             "max_items": cap,
             "candidates": len(candidates),
             "proposed": sum(1 for p in proposals if p.decision == "promote"),
+            "pending_approval": sum(
+                1 for p in proposals if p.decision == "pending_approval"
+            ),
             "promoted": promoted,
+            "queued": queued,
             "proposals": [p.to_dict() for p in proposals],
         }
+
+    def _enqueue_pending(
+        self,
+        seat_slug: str,
+        seat_dataset: str,
+        proposal: ProposedPromotion,
+    ) -> None:
+        assessment = ReferenceAssessment(
+            status=proposal.reference_status or "new_org_project",
+            reason=proposal.reason,
+        )
+        item = build_pending_item(
+            seat_slug=seat_slug,
+            seat_dataset=seat_dataset,
+            candidate_text=proposal.candidate,
+            assessment=assessment,
+            created_at=now_iso(),
+            score=proposal.score,
+            relevant=proposal.relevant,
+            sensitive=proposal.sensitive,
+        )
+        self.access_store.add_promotion_pending(item)
+        self.access_store.record_event(
+            action="promotion.pending",
+            actor=self._promotion_identity(seat_dataset),
+            success=True,
+            dataset=seat_dataset,
+            detail={
+                "item_id": item.id,
+                "seat_slug": seat_slug,
+                "reference_status": item.reference_status,
+                "preview": item.preview,
+            },
+        )
+
+    async def approve_pending(
+        self,
+        item_id: str,
+        actor: AccessIdentity,
+        *,
+        delegate: bool = False,
+    ) -> dict[str, Any]:
+        item = self.access_store.get_promotion_pending(item_id)
+        if item is None:
+            raise ValueError(f"Promotion item not found: {item_id}")
+        if item.status != PENDING_STATUS:
+            raise ValueError(f"Promotion item is not pending: {item_id}")
+
+        proposal = ProposedPromotion(
+            candidate=item.candidate_text,
+            decision="promote",
+            reason="approved",
+            relevant=item.relevant,
+            sensitive=item.sensitive,
+            score=item.score,
+            reference_status=item.reference_status,
+        )
+        identity = self._promotion_identity(item.seat_dataset)
+        promoted = await self._promote(item.seat_dataset, identity, proposal)
+        decided = self.access_store.decide_promotion_pending(
+            item_id,
+            decision=APPROVED_STATUS,
+            actor_id=actor.actor_id,
+            actor_name=actor.actor_name,
+            delegate=delegate,
+        )
+        self.access_store.record_event(
+            action="promotion.approve",
+            actor=actor,
+            success=promoted,
+            dataset=item.seat_dataset,
+            detail={
+                "item_id": item_id,
+                "seat_slug": item.seat_slug,
+                "delegate": delegate,
+                "promoted": promoted,
+                "reference_status": item.reference_status,
+            },
+        )
+        return {
+            "ok": promoted,
+            "item": decided.to_dict(),
+            "promoted": promoted,
+        }
+
+    async def reject_pending(
+        self,
+        item_id: str,
+        actor: AccessIdentity,
+        *,
+        delegate: bool = False,
+    ) -> dict[str, Any]:
+        item = self.access_store.get_promotion_pending(item_id)
+        if item is None:
+            raise ValueError(f"Promotion item not found: {item_id}")
+        if item.status != PENDING_STATUS:
+            raise ValueError(f"Promotion item is not pending: {item_id}")
+        decided = self.access_store.decide_promotion_pending(
+            item_id,
+            decision=REJECTED_STATUS,
+            actor_id=actor.actor_id,
+            actor_name=actor.actor_name,
+            delegate=delegate,
+        )
+        self.access_store.record_event(
+            action="promotion.reject",
+            actor=actor,
+            success=True,
+            dataset=item.seat_dataset,
+            detail={
+                "item_id": item_id,
+                "seat_slug": item.seat_slug,
+                "delegate": delegate,
+            },
+        )
+        return {"ok": True, "item": decided.to_dict()}
 
     def status(self) -> dict[str, Any]:
         """Read-only config/status snapshot for the GET endpoint."""

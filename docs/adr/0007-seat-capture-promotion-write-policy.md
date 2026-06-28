@@ -23,10 +23,10 @@ ADR-0003 allowed seat HTTP ingest with org-bound tags to reach **Central**.
 This ADR **narrows** that path: all seat-scoped writes land in the **Node**;
 **Central** is updated only through governed upstream jobs.
 
-Partial implementation exists (2026-06-27): MCP seat write guards
-(`guard_mcp_seat_write_policy`), secret scan on all write paths, client approval
-docs. Gaps: HTTP seat org-tag routing, capture CLI wizard, promotion agent
-reference checks, approval queue UI.
+Partial implementation exists (2026-06-27): seat write policy on all HTTP paths,
+capture CLI, capture policy API, MCP guards, promotion engine sketch (local).
+Gaps vs refinements below: full promotion rule parity, `citadel promotion` CLI,
+promotion metadata on Central writes, production enablement.
 
 ## Decision
 
@@ -77,34 +77,58 @@ Each approved root is tagged at setup:
 | Tag | Promotion rule |
 |---|---|
 | `personal` (preset) | Never auto-promote to **Central** |
-| `org-work` (preset) | Eligible for auto-promotion when **Promotion Agent** finds a match |
-| Custom tags | Labels for search/context only |
+| `org-work` (preset) | Only capture-root tag eligible for auto-promote (when agent rules pass) |
+| Custom tags | Labels only — capture from custom-tagged roots **never** auto-promotes |
+
+**Non-capture** writes (MCP ingest, session hooks) are **not** gated by root
+tags — only by **Promotion Agent** reference checks and LLM classification.
 
 ### 5. Promotion Agent (Node → Central)
 
-Runs on **6h Railway cron** and **on demand** (Operations Dashboard or CLI).
+Runs on **6h Railway evolve cron** and **on demand** (Operations Dashboard or
+`citadel promotion run` / API). **On demand:** each **Vault Member** may run for
+their own **Node**; admins may run for any seat.
 
 For each candidate note in a seat **Node**:
 
-1. Cross-reference **GitHub organization repo list** and **Structured Knowledge**
-   already in **Central**.
-2. If content clearly extends known org work → auto-promote (dual-write; original
-   stays in **Node**).
-3. If content introduces a **New Org Project** (no repo/org match and no
-   **Central** representation) → require **Promotion Approval**.
-4. Respect **Capture Root Tags**: `personal` never auto-promotes regardless of
-   match.
+1. **Secret scan** — block on high/critical findings (fail closed).
+2. **Capture Root Tags** — `personal` never auto-promotes; only **`org-work`**
+   capture-root content may auto-promote; custom-tagged capture roots never
+   auto-promote.
+3. **Structured reference check** — compare repo hints against the masumi
+   **GitHub organization repo list** and **Structured Knowledge** in **Central**.
+4. **LLM classification** — relevant, not sensitive, score ≥ threshold (always
+   required, even when structured match succeeds).
+5. **Route:**
+   - Repo in masumi org (or strong **Central** match) + rules pass →
+     **auto-promote** (dual-write; original stays in **Node**).
+   - External repo / **New Org Project** + LLM pass → **Promotion Approval**
+     queue (one-shot per note).
+   - No repo hint → auto-promote **only** on strong **Central** match + LLM pass;
+     otherwise stay on **Node** (no queue).
+   - Otherwise → skip (stay on **Node**).
 
-LLM assists classification; structured lists are authoritative for repo names.
+Structured repo lists decide *whether* content is org work; the LLM decides
+*whether it is safe to share*.
+
+**Traceability:** v1 records audit events plus promotion metadata on the
+**Central** copy (seat, promotion id, approver if any, timestamp). Target:
+full **Source Snapshot** back-link to the seat **Node** original.
 
 ### 6. Promotion Approval surfaces
 
-- **Operations Dashboard:** primary monitoring (health, seats, activity, memory,
-  usage, share knowledge, access) plus pending promotion queue.
-- **MCP:** in-flow yes/no when the **Vault Member** is in an agent session.
+The **Promotion Agent** queues items — **Vault Members do not add them**.
+
+- **Operations Dashboard:** pending promotion queue + approve/reject.
+- **MCP:** list pending; approve/reject only after **explicit user confirmation**
+  in chat (same bar as `citadel_ingest`).
+- **CLI:** `citadel promotion list|approve|reject|run` with headless `--json`.
 - **Visibility:** each **Vault Member** sees their own queue; admins see all
-  seats’ pending items and may approve on a member’s behalf (e.g. out of office)
-  with a full audit record.
+  seats and may approve on a member’s behalf (delegate flagged in audit).
+- **Reject sticks** — the same note is not re-queued on later cron passes unless
+  its content changes.
+- **Approve is one-shot** — promotes that note only; later notes from the same
+  external project still need approval or masumi org repo membership.
 
 ### 7. Operations Dashboard role
 
@@ -134,9 +158,29 @@ Day-to-day capture flows through MCP, approved-root autosync, and CLI.
 5. **Promotion Approval** queue (dashboard + MCP tool) + admin delegate with audit.
 6. Wire 6h evolve cron + on-demand trigger to promotion pass.
 
+## Refinements (2026-06-27 design session)
+
+Design session locked the promotion decision tree before P5/P6 implementation.
+See also `CONTEXT.md` glossary (**Promotion Agent**, **Promotion Approval**,
+**Capture Root Tags**).
+
+| # | Decision |
+|---|----------|
+| 1 | Known org work **auto-promotes**; **New Org Project** → member **Promotion Approval** queue |
+| 2 | **Hybrid tags** — capture roots follow tags; MCP/hooks skip tag gate |
+| 3 | Known work requires **masumi org repo** (or **Central** representation) |
+| 4 | No repo hint → **Central** match only for auto-promote; else stay on **Node** |
+| 5 | **LLM + secret scan** always required (structured match alone is not enough) |
+| 6 | Only **`org-work`** capture roots may auto-promote; custom roots never |
+| 7 | Approval is **one-shot** per note + git-like traceability |
+| 8 | Ship audit + metadata on **Central** copy (v1); target **Source Snapshot** link |
+| 9 | On demand: member own seat, admin any seat |
+| 10 | Surfaces: dashboard + MCP (human confirm) + **`citadel promotion`** CLI |
+| 11 | **Reject sticks** — no re-queue for unchanged content |
+| 12 | **Member queue** — agent proposes; member approves/rejects (does not add items) |
+
 ## Open questions
 
-- Exact CLI command names and local policy file location (e.g. `~/.citadel/`).
-- Whether `citadel capture` runs full tree scan or git-diff / README-only summary
-  (keep payloads small).
 - Additional preset **Capture Root Tags** beyond `personal` / `org-work`.
+- Exact threshold for “strong **Central** match” on no-repo-hint notes.
+- **`citadel promotion`** subcommand naming (`run` vs `promote`).

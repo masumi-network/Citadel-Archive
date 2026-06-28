@@ -6,7 +6,7 @@ from typing import Any
 
 import pytest
 
-from kb.access import AccessStore, seat_dataset
+from kb.access import AccessStore, AccessIdentity, seat_dataset
 from kb.config import CitadelConfig
 from kb.models import IngestResult
 from kb.promotion import PromotionEngine, _coerce_classification
@@ -22,12 +22,17 @@ SECRET_TEXT = "deploy creds " + "AKIA" + "ABCDEFGHIJKLMNOP" + " rotate me"
 
 
 class FakeCitadel:
-    def __init__(self, config: CitadelConfig, nodes: list[str]) -> None:
+    def __init__(self, config: CitadelConfig, nodes: list[str], *, central_hits: bool = False) -> None:
         self.config = config
         self._nodes = nodes
+        self.central_hits = central_hits
 
     async def search(self, query: str, **kwargs: Any) -> list[dict[str, Any]]:
-        # Same nodes for every seed query; the engine dedupes by text.
+        dataset = kwargs.get("dataset")
+        if dataset == CENTRAL:
+            if self.central_hits:
+                return [{"text": f"Central knowledge matching {query[:40]}"}]
+            return []
         return [{"text": node} for node in self._nodes]
 
 
@@ -52,12 +57,39 @@ def _config(**overrides: Any) -> CitadelConfig:
     return CitadelConfig(**base)
 
 
-def _engine(tmp_path: Path, nodes: list[str], config: CitadelConfig | None = None) -> tuple[PromotionEngine, FakeLearning, AccessStore]:
+def _engine(
+    tmp_path: Path,
+    nodes: list[str],
+    config: CitadelConfig | None = None,
+    *,
+    central_hits: bool = False,
+) -> tuple[PromotionEngine, FakeLearning, AccessStore]:
     config = config or _config()
     learning = FakeLearning()
     store = AccessStore(str(tmp_path / "access.json"))
-    engine = PromotionEngine(FakeCitadel(config, nodes), learning, store, config)
+    engine = PromotionEngine(
+        FakeCitadel(config, nodes, central_hits=central_hits),
+        learning,
+        store,
+        config,
+    )
     return engine, learning, store
+
+
+def _org_note(extra: str = "roadmap") -> str:
+    return (
+        f"Org note about the product {extra} — "
+        "https://github.com/masumi-network/Citadel-Archive"
+    )
+
+
+def _github_state(tmp_path: Path) -> CitadelConfig:
+    state_path = tmp_path / "github-state.json"
+    state_path.write_text(
+        '{"repos": {"masumi-network/Citadel-Archive": {}}}',
+        encoding="utf-8",
+    )
+    return _config(github_sync_state_path=str(state_path))
 
 
 def _stub_llm(monkeypatch: pytest.MonkeyPatch, *, relevant: bool = True, sensitive: bool = False, score: float = 0.9, fail: bool = False) -> None:
@@ -78,7 +110,11 @@ def test_coerce_classification_rejects_malformed() -> None:
 
 
 async def test_dry_run_proposes_but_writes_nothing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    engine, learning, store = _engine(tmp_path, ["a useful org note about the product roadmap"])
+    engine, learning, store = _engine(
+        tmp_path,
+        [_org_note()],
+        _github_state(tmp_path),
+    )
     _stub_llm(monkeypatch, relevant=True, sensitive=False, score=0.9)
 
     result = await engine.run(SEAT, dry_run=True)
@@ -93,7 +129,11 @@ async def test_dry_run_proposes_but_writes_nothing(tmp_path: Path, monkeypatch: 
 
 
 async def test_relevant_clean_item_is_promoted_to_central_with_audit(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    engine, learning, store = _engine(tmp_path, ["a useful org note about the product roadmap"])
+    engine, learning, store = _engine(
+        tmp_path,
+        [_org_note()],
+        _github_state(tmp_path),
+    )
     _stub_llm(monkeypatch, relevant=True, sensitive=False, score=0.9)
 
     result = await engine.run(SEAT, dry_run=False)
@@ -102,6 +142,8 @@ async def test_relevant_clean_item_is_promoted_to_central_with_audit(tmp_path: P
     # Promotion routed through the org-ready dual-write -> a real Central write.
     assert len(learning.central_writes) == 1
     assert "org-ready" in learning.central_writes[0]["tags"]
+    assert "promotion-agent" in learning.central_writes[0]["tags"]
+    assert "promotion-seat:alice" in learning.central_writes[0]["tags"]
     promote_events = store.recent_audit_events(action="promotion.promote")
     assert len(promote_events) == 1
     assert promote_events[0]["success"] is True
@@ -136,7 +178,11 @@ async def test_secret_bearing_item_is_not_promoted(tmp_path: Path, monkeypatch: 
 
 
 async def test_llm_failure_falls_back_to_skip(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    engine, learning, _store = _engine(tmp_path, ["a useful org note about the product roadmap"])
+    engine, learning, _store = _engine(
+        tmp_path,
+        [_org_note()],
+        _github_state(tmp_path),
+    )
     _stub_llm(monkeypatch, fail=True)
 
     result = await engine.run(SEAT, dry_run=False)
@@ -148,7 +194,11 @@ async def test_llm_failure_falls_back_to_skip(tmp_path: Path, monkeypatch: pytes
 
 
 async def test_below_threshold_is_not_promoted(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    engine, learning, _store = _engine(tmp_path, ["a marginal note"])
+    engine, learning, _store = _engine(
+        tmp_path,
+        [_org_note("marginal")],
+        _github_state(tmp_path),
+    )
     _stub_llm(monkeypatch, relevant=True, sensitive=False, score=0.5)
 
     result = await engine.run(SEAT, dry_run=False)
@@ -173,3 +223,137 @@ async def test_non_seat_dataset_rejected(tmp_path: Path) -> None:
     engine, _learning, _store = _engine(tmp_path, ["anything"])
     with pytest.raises(ValueError):
         await engine.run(CENTRAL, dry_run=True)
+
+
+async def test_personal_capture_tag_never_promotes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    summary = (
+        "# Capture summary: notes\n"
+        "- Capture Root Tags: personal\n"
+        "- Path: `/tmp/notes`\n"
+    )
+    engine, learning, _store = _engine(tmp_path, [summary])
+    _stub_llm(monkeypatch, relevant=True, sensitive=False, score=0.99)
+
+    result = await engine.run(SEAT, dry_run=False)
+
+    assert result["promoted"] == 0
+    assert learning.central_writes == []
+    assert result["proposals"][0]["decision"] == "skip"
+    assert result["proposals"][0]["reason"] == "capture_tag_personal"
+
+
+async def test_new_org_project_queues_pending_approval(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    summary = (
+        "# Capture summary: side project\n"
+        "- Remote: `https://github.com/other-org/new-app.git`\n"
+        "- Capture Root Tags: org-work\n"
+    )
+    state_path = tmp_path / "github-state.json"
+    state_path.write_text('{"repos": {"masumi-network/Citadel-Archive": {}}}', encoding="utf-8")
+    engine, learning, store = _engine(
+        tmp_path,
+        [summary],
+        config=_config(github_sync_state_path=str(state_path)),
+    )
+    _stub_llm(monkeypatch, relevant=True, sensitive=False, score=0.95)
+
+    result = await engine.run(SEAT, dry_run=False)
+
+    assert result["promoted"] == 0
+    assert result["queued"] == 1
+    assert learning.central_writes == []
+    assert result["proposals"][0]["decision"] == "pending_approval"
+    pending = store.list_promotion_pending(seat_slug="alice")
+    assert len(pending) == 1
+
+
+async def test_unreferenced_note_skips_without_central_match(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    engine, learning, _store = _engine(
+        tmp_path,
+        ["a useful org note about the product roadmap with no repo link"],
+        _github_state(tmp_path),
+    )
+    _stub_llm(monkeypatch, relevant=True, sensitive=False, score=0.9)
+
+    result = await engine.run(SEAT, dry_run=False)
+
+    assert result["promoted"] == 0
+    assert result["proposals"][0]["decision"] == "skip"
+    assert result["proposals"][0]["reason"] == "no_org_reference"
+    assert learning.central_writes == []
+
+
+async def test_unreferenced_note_promotes_on_central_match(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    engine, learning, _store = _engine(
+        tmp_path,
+        ["shared runbook details with no repo link"],
+        _github_state(tmp_path),
+        central_hits=True,
+    )
+    _stub_llm(monkeypatch, relevant=True, sensitive=False, score=0.9)
+
+    result = await engine.run(SEAT, dry_run=False)
+
+    assert result["promoted"] == 1
+    assert learning.central_writes
+
+
+async def test_custom_capture_tag_never_auto_promotes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    summary = (
+        "# Capture summary: side repo\n"
+        "- Remote: `https://github.com/masumi-network/Citadel-Archive.git`\n"
+        "- Capture Root Tags: custom-label\n"
+    )
+    engine, learning, _store = _engine(
+        tmp_path,
+        [summary],
+        _github_state(tmp_path),
+    )
+    _stub_llm(monkeypatch, relevant=True, sensitive=False, score=0.99)
+
+    result = await engine.run(SEAT, dry_run=False)
+
+    assert result["promoted"] == 0
+    assert result["proposals"][0]["reason"] == "capture_tag_not_org_work"
+    assert learning.central_writes == []
+
+
+async def test_rejected_candidate_is_not_requeued(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    summary = (
+        "# Capture summary: side project\n"
+        "- Remote: `https://github.com/other-org/new-app.git`\n"
+        "- Capture Root Tags: org-work\n"
+    )
+    engine, learning, store = _engine(
+        tmp_path,
+        [summary],
+        _github_state(tmp_path),
+    )
+    _stub_llm(monkeypatch, relevant=True, sensitive=False, score=0.95)
+
+    first = await engine.run(SEAT, dry_run=False)
+    assert first["queued"] == 1
+    item = store.list_promotion_pending(seat_slug="alice")[0]
+    actor = AccessIdentity(
+        role="writer",
+        actor_id="alice",
+        actor_kind="user",
+        actor_name="Alice",
+        source="token",
+        default_dataset=SEAT,
+        seat_slug="alice",
+    )
+    await engine.reject_pending(item.id, actor)
+
+    second = await engine.run(SEAT, dry_run=False)
+    assert second["queued"] == 0
+    assert second["proposals"][0]["reason"] == "previously_rejected"
+    assert learning.central_writes == []

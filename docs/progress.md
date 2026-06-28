@@ -2,6 +2,32 @@
 
 Last updated: 2026-06-27.
 
+## 2026-06-27 — ADR-0007 P5/P6 promotion agent + approval (local → PR)
+
+- **Promotion engine** grill parity: masumi-org / Central reference checks, capture
+  `org-work` gate, secret scan + LLM always, reject dedupe, promotion metadata tags.
+- **API:** seat-scoped `POST /api/promote/run`, promotion pending approve/reject.
+- **CLI:** `citadel promotion list|approve|reject|run` with `--json`.
+- **MCP:** `citadel_promotion_pending|approve|reject`; dashboard Promotion Queue panel.
+- **503 tests** passing locally; production enablement: `CITADEL_PROMOTION_ENABLED=true`
+  on Railway after merge (see `docs/operations.md`).
+
+## 2026-06-27 — ADR-0007 promotion grill (design locked)
+
+- **Grill-with-docs session** locked the **Promotion Agent** decision tree and
+  **Promotion Approval** member model before P5/P6 code parity.
+- **Decisions:** known masumi-org work auto-promotes after secret scan + LLM;
+  **New Org Project** → member queue (agent proposes, member approves/rejects);
+  hybrid **Capture Root Tags** (`org-work` only for capture auto-promote);
+  no-repo-hint → **Central** match only; reject sticks; one-shot approval;
+  surfaces = dashboard + MCP (human confirm) + `citadel promotion` CLI.
+- **Docs updated:** `CONTEXT.md` glossary, ADR-0007 refinements section,
+  shipping plan P5/P6 checklist, `tasks.md` code-gap list,
+  `docs/agent-access-model.md`, proactive-ingest skill (removed stale
+  `org-ready` → Central seat writes).
+- **Next:** align local promotion engine + CLI to grill spec; production enable
+  `CITADEL_PROMOTION_ENABLED`.
+
 ## 2026-06-27 — Published to PyPI + CLI polish (v0.1.0 → v0.1.2)
 
 - **Published `citadel-archive` to PyPI** via GitHub Actions **trusted publishing**

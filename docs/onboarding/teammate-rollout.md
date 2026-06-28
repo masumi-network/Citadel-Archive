@@ -178,7 +178,9 @@ auth error, your token isn't in the environment of the client that's running
 - **Always fail-silent.** Every hook ends in `exit 0` / `|| true`. If Citadel is
   down or the token is missing, your session close and your push still succeed.
 - **Always personal.** Auto-sync sends no `dataset`, so it lands in your private
-  node. To share org-wide, ingest mid-session with an `org-ready` tag.
+  **Node**. **Central** copies come from the **Promotion Agent** (known org work)
+  or your **Promotion Approval** when a **New Org Project** is proposed — not
+  from ingest tags.
 - **Allowlist-aware (opt-in).** If you ran `citadel setup`, the push hook only
   captures from Approved Capture Roots; without it, every repo is captured.
 - **No raw content.** Hooks capture metadata + a distilled recap, never raw

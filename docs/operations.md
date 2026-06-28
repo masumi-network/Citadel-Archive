@@ -54,6 +54,27 @@ Enable pgvector before production ingest:
 CREATE EXTENSION IF NOT EXISTS vector;
 ```
 
+### Promotion Agent (ADR-0007 P5/P6)
+
+After the promotion code is deployed, enable the governed Node→Central path on the
+**Citadel-Archive** web service:
+
+```bash
+railway variables --service Citadel-Archive \
+  --set "CITADEL_PROMOTION_ENABLED=true" \
+  --set "CITADEL_PROMOTION_DRY_RUN=false" \
+  --set "CITADEL_PROMOTION_RELEVANCE_THRESHOLD=0.7" \
+  --set "CITADEL_PROMOTION_MAX_ITEMS=20"
+```
+
+- **On demand:** seat writers call `POST /api/promote/run` or `citadel promotion run --execute`.
+- **Approval queue:** `GET /api/promotion/pending`, dashboard **Promotion Queue**, MCP
+  `citadel_promotion_*`, or `citadel promotion list|approve|reject`.
+- **6h cron:** add a Railway cron service with `CITADEL_RUN_MODE=evolve`, the same
+  `/data` volume as the web service, and schedule `0 */6 * * *` (UTC). The evolve
+  pipeline runs GitHub sync → repo-content → self-improve → **promotion** → cognify.
+  Toggle the promotion stage alone with `CITADEL_EVOLVE_PROMOTION_ENABLED=true|false`.
+
 Cron services should also mount `/data` so `github_sync_state.json` and
 `backup_mirror/` persist between runs. Keep app and database in the same
 project/environment so the database stays private to Citadel. The graph store

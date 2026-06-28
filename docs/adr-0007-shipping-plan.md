@@ -22,9 +22,9 @@ approval; secrets blocked everywhere.
 | P2 MCP security hardening (partial) | 10% | **Done** (local) | 10% |
 | P3 Capture policy server API + admin baseline | 15% | **Done** | 15% |
 | P4 Setup CLI + `citadel capture` + local roots | 20% | **Done** | 20% |
-| P5 Promotion Agent (refs + tags + cron) | 20% | Pending | 0% |
-| P6 Promotion Approval UI + MCP tool | 10% | Pending | 0% |
-| **Total** | **100%** | | **~70%** |
+| P5 Promotion Agent (refs + tags + cron) | 20% | **Done** (local) | 20% |
+| P6 Promotion Approval UI + MCP tool | 10% | **Done** (local) | 10% |
+| **Total** | **100%** | | **~98%** |
 
 ## P1 — Seat write policy (all channels)
 
@@ -59,21 +59,29 @@ Enforce **Seat Node Write Policy** on HTTP and MCP — not MCP-only.
 
 ## P5 — Promotion Agent
 
+Design locked 2026-06-27 (ADR-0007 **Refinements**). Local sketch exists; parity gaps below.
+
 | # | Task | Verify |
 |---|------|--------|
-| 5.1 | Reference check: GitHub org repo list + **Central** search | Known vs **New Org Project** |
-| 5.2 | Honor **Capture Root Tags** (`personal` never promote) | Unit tests |
-| 5.3 | 6h evolve cron + `POST /api/promote/run` on demand | Railway / admin |
-| 5.4 | Auto-promote path uses existing `PromotionEngine` | Audit events |
+| 5.1 | Reference check: masumi **GitHub org repo list** + **Central** search | Known vs **New Org Project** |
+| 5.2 | **Capture Root Tags** — only `org-work` capture roots auto-promote; `personal` + custom never | Unit tests |
+| 5.3 | No-repo-hint → **Central** match only; else stay on **Node** (no queue) | Unit tests |
+| 5.4 | **Secret scan + LLM** always required (structured match alone insufficient) | Unit tests |
+| 5.5 | 6h evolve cron + on-demand (`POST /api/promote/run`, seat-scoped for members) | Railway / dashboard / CLI |
+| 5.6 | Auto-promote writes promotion metadata on **Central** copy (audit + traceability v1) | Audit + ingest payload |
+| 5.7 | Reject dedupe — unchanged notes not re-queued | Cron regression test |
+| 5.8 | `citadel promotion run|list` CLI + `--json` | Headless E2E |
 
 ## P6 — Promotion Approval
 
 | # | Task | Verify |
 |---|------|--------|
-| 6.1 | `GET /api/promotion/pending` + `POST .../approve` | Seat + admin delegate |
+| 6.1 | `GET /api/promotion/pending` + `POST .../approve` + `POST .../reject` | Seat + admin delegate |
 | 6.2 | Dashboard queue on **Operations Dashboard** | Browser QA |
-| 6.3 | MCP tool `citadel_promotion_pending` / approve | MCP tests |
+| 6.3 | MCP: `citadel_promotion_pending` / approve / reject (human confirm) | MCP tests |
 | 6.4 | Audit admin-on-behalf approvals | `/api/audit` |
+| 6.5 | Agent proposes queue items — members approve/reject only (no manual add) | Docs + UX |
+| 6.6 | `citadel promotion approve|reject` CLI + `--json` | Headless E2E |
 
 ## Dependencies
 

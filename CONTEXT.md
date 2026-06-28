@@ -89,16 +89,16 @@ A curated copy of content from a seat **Node** into **Central**. Dual-write: the
 _Avoid_: move, delete original, automatic merge, direct seat ingest to Central
 
 **Promotion Agent**:
-The governed job that decides whether seat **Node** content belongs in **Central**. It compares candidate notes against org projects already known from the GitHub organization repo list and against **Structured Knowledge** already in **Central**; content that clearly extends known org work may be promoted automatically; content that introduces a **New Org Project** requires **Promotion Approval** before syncing to **Central**. Runs on a 6h operator cron and on demand from the **Operations Dashboard** or CLI.
+The governed job that decides whether seat **Node** content belongs in **Central**. Every candidate passes **secret scan** (block on high/critical) and **LLM classification** (relevance + sensitivity; always required, even when a structured repo match succeeds). It compares candidate notes against repos in the **GitHub organization repo list** (masumi-network) and against **Structured Knowledge** already in **Central**. Content that clearly extends work whose repo is already in the org (or already represented in **Central**) may be promoted automatically when **Capture Root Tags** allow (`org-work` only for capture-root content; `personal` and custom tags never auto-promote). Content that names a repo or initiative **not** in the masumi org repo list nor in **Central** is a **New Org Project** and requires **Promotion Approval** before syncing to **Central**. Notes with **no repo reference** auto-promote only when **Central** already contains a strong match; otherwise they stay on the **Node** (no approval queue). Runs on a 6h operator cron. **On demand:** each **Vault Member** may trigger a pass for their own **Node**; admins may trigger for any seat — via the **Operations Dashboard** or CLI.
 _Avoid_: magic merge, silent upload, MCP self-promote, GitHub-only matching, promote-only-on-daily-sync
 
 **New Org Project**:
-A project, repo, product, or initiative named in a seat **Node** that is not yet represented in the GitHub organization repo list nor in **Central** org context. Promotion to **Central** waits for **Promotion Approval**.
-_Avoid_: personal side project auto-share, new folder name, any novel string
+A project, repo, product, or initiative named in a seat **Node** whose repository is **not** in the masumi **GitHub organization repo list** and is **not** yet represented in **Central** org context. Promotion to **Central** waits for **Promotion Approval**. Known org work must tie to a repo already in the masumi org (or existing **Central** representation) — not an external or personal remote.
+_Avoid_: personal side project auto-share, new folder name, any novel string, external-org repo auto-promote
 
 **Promotion Approval**:
-The **Vault Member** decision to sync **New Org Project** content from their **Node** into **Central**. Offered in the Citadel dashboard (monitoring queue) and via MCP when the **Vault Member** is in an agent session. Each **Vault Member** sees their own pending queue; admins see all seats’ pending items and may approve on a **Vault Member**’s behalf when covered (e.g. out of office), with a full audit record.
-_Avoid_: auto-approve novel work, silent admin override, chat-only approval
+The **Vault Member** response when the **Promotion Agent** automatically proposes promoting a **New Org Project** note from their **Node** into **Central**. **Vault Members do not add items to the queue** — autonomous capture (hooks, `citadel capture`, MCP) fills the **Node**; the agent queues pending items when rules match. **Approve** = allow this one note into **Central**. **Reject** = keep it on the **Node** only; rejection **sticks** — the same note is not re-queued on later cron passes unless its content changes. Each approval is **one-shot**; later notes from the same external project still need approval or masumi org repo membership. Every promote and approve/reject is **source-linked and auditable** (actor, seat, timestamp, repo hints, preview). v1: audit events plus promotion metadata on the **Central** copy; target: full **Source Snapshot** back-link. Surfaces: **Operations Dashboard**, MCP (approve/reject only after explicit user confirmation), and CLI (`citadel promotion …`, `--json`). Each **Vault Member** sees their own queue; admins see all seats and may approve on a member’s behalf (delegate flagged in audit).
+_Avoid_: auto-approve novel work, silent admin override, chat-only approval, standing bypass for external repos
 
 **Operations Dashboard**:
 The Citadel web UI for operators and **Vault Members** to monitor vault health, seat activity, memory and usage, **Promotion Approval**, and **Access** — not the primary dev write surface (MCP and autonomous capture feed the **Node**).
@@ -109,7 +109,7 @@ A **Seat** or its **Agent Identities** may write only to that seat's **Node**. *
 _Avoid_: tag your way into Central, shared personal dump, MCP bypass
 
 **Capture Root Tags**:
-Labels assigned to each **Approved Capture Root** during setup. Preset tags carry hard promotion rules: `personal` never auto-promotes to **Central**; `org-work` may auto-promote when the **Promotion Agent** finds a GitHub org or **Central** match. Custom tags are labels for search and context only unless the org adds more presets later.
+Labels assigned to each **Approved Capture Root** during setup. Preset tags carry hard promotion rules for **capture-root** content (git push / `citadel capture`): `personal` never auto-promotes to **Central**; only `org-work` roots may auto-promote, and only when the **Promotion Agent** finds a masumi org repo or **Central** match plus LLM safety checks. Custom tags are labels for search and context only — capture from custom-tagged roots never auto-promotes. **Non-capture** writes (MCP ingest, session hooks) are not gated by root tags — only by **Promotion Agent** reference checks and relevance classification.
 _Avoid_: tag into Central, org-ready on capture, silent promotion override
 
 **Capture Policy**:
@@ -176,7 +176,9 @@ _Avoid_: merge, overwrite, silent correction
 - A **Seat** is one human **Principal** that may hold several **Tokens**; **Agent Identities** acting for that human are separate principals that may be granted access to the seat's **Node**.
 - A caller is treated as holding a **Node** when a seat **Node** is in its access scope — **Seat Node Write Policy** applies: writes land in that **Node** only; **Central** is read-only for that caller.
 - **Central** gains new **Structured Knowledge** from org source sync, **Promotion** (cron + **Promotion Agent**), service-account **Vault Contributions**, and operator jobs — not from direct seat-scoped writes.
-- When **Promotion** finds content that extends known org work, it may copy to **Central** without **Vault Member** action; when it detects a **New Org Project**, it must obtain **Promotion Approval** via the **Operations Dashboard** and MCP before syncing to **Central**.
+- When **Promotion** finds content that extends known org work (repo in the masumi org list or strong **Central** match), it may copy to **Central** without **Vault Member** action only after secret scan and LLM relevance checks pass; structured repo lists decide *whether* something is org work, not whether it is safe to share.
+- When **Promotion** detects a **New Org Project**, it must obtain **Promotion Approval** (dashboard, MCP with user confirm, or CLI) before syncing to **Central**; **Vault Members** respond to agent-proposed queue items — they do not add items manually.
+- **CLI** (`citadel onboard`, `setup`, `capture`, `status`) handles setup and Node capture over HTTP; **MCP** handles in-session search, deliberate ingest, and promotion approve/reject — hooks do not use MCP.
 - Integration sources (e.g. Linear) sync org-wide into **Central**; **Seat-Scoped Mirrors** copy assignee-relevant subsets into each seat's **Node** (e.g. John's assigned Linear issues appear in John's **Node** and in **Central**).
 
 ## Autonomous sync (Phase 2)
@@ -190,10 +192,12 @@ push, session close, or agent work.
 | Git pre-push hook | every `git push` in an **Approved Capture Root** | seat **Node** | dev (once per clone) |
 | Manual CLI capture | **Vault Member** runs `citadel capture` on approved roots | seat **Node** | dev (on demand) |
 | SessionEnd hook (Claude Code) | session close | seat **Node** | dev (optional) |
-| Explicit MCP / agent ingest | user-approved write outside auto-capture | seat **Node** | **Vault Member** + agent |
+| Explicit MCP / agent ingest | user-approved write outside auto-capture | seat **Node** | **Vault Member** + agent (MCP; not hooks) |
 | Railway `learning-agent` cron | daily schedule | **Central** | operator |
 | Railway `linear-sync` cron | scheduled | **Central** + **Seat-Scoped Mirror** | operator |
-| Railway **Promotion Agent** cron | every 6h + on demand | seat **Node** → **Central** (governed) | operator; **Vault Member** trigger from **Operations Dashboard** or CLI |
+| Railway **Promotion Agent** cron | every 6h + on demand | seat **Node** → **Central** (governed) | cron: operator; on demand: **Vault Member** (own seat) or admin (any seat) via dashboard or CLI |
+
+**Member day-to-day:** update the **Node** only (hooks, `citadel capture`, optional MCP ingest). **Central** updates automatically when the **Promotion Agent** rules pass, or when the member **approves** a **New Org Project** proposal in their queue.
 
 Install dev-side hooks once: `citadel onboard` (idempotent; writes a self-contained git pre-push hook running `python -m kb.hooks.sync_push` and a SessionEnd hook running `python -m kb.hooks.sync_session`).
 Register **Approved Capture Roots** locally, assign **Capture Root Tags**, and merge the server **Capture Policy** template during seat setup (Citadel CLI wizard).
@@ -255,6 +259,12 @@ All/My Node/Central scope toggle — org memory is one connected view.
 >
 > **Dev:** "What if a note disagrees with a newer repository change?"
 > **Domain expert:** "Prefer the newer source-linked repository truth for code behavior, but keep a visible **Knowledge Conflict**."
+>
+> **Dev:** "Do members approve what goes into their Node?"
+> **Domain expert:** "No. Hooks, `citadel capture`, and approved MCP ingest write the **Node** automatically. Members only interact with **Promotion Approval** when the **Promotion Agent** proposes moving a **New Org Project** note to **Central**."
+>
+> **Dev:** "Can a member reject something they never added?"
+> **Domain expert:** "Yes — **Reject** means 'do not promote this agent-proposed note to **Central**.' The note stays on their **Node**. Rejection sticks; the same note is not re-queued unless its content changes."
 
 ## Flagged Ambiguities
 
@@ -276,3 +286,6 @@ All/My Node/Central scope toggle — org memory is one connected view.
 - "secret reporting" was initially mixed into the update digest; resolved: potential secrets and high-risk issues are **Security Findings**, redacted and handled separately from daily digests.
 - "conflicting knowledge" was unresolved; resolved: prefer newer source-linked repository truth for code behavior, while marking **Knowledge Conflicts** visibly.
 - "is a caller a Seat?" was conflated with principal identity; resolved: for **Central** curation the test is whether a seat **Node** is in the caller's access scope, which covers both the human's **Tokens** and their **Agent Identities** — agents are not the human **Principal** and so carry no seat marker of their own.
+- "member adds then rejects promotion items" was confused with queue ownership; resolved: the **Promotion Agent** queues **New Org Project** proposals automatically; **Promotion Approval** is the member's approve/reject response.
+- "org-ready tag promotes seat MCP writes to Central" (ADR-0003 era); resolved: **Seat Node Write Policy** — seat writes stay on the **Node**; **Central** only via **Promotion Agent**, org sync, or service accounts (ADR-0007).
+- "who gates promotion to Central?" (2026-06-27 grill); resolved: known masumi-org work auto-promotes after secret scan + LLM; **New Org Project** requires **Vault Member** **Promotion Approval** (admin may delegate with audit); admin governs org repos and operator cron, not every member note.

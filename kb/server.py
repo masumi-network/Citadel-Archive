@@ -47,6 +47,7 @@ from kb.mesh import MeshState
 from kb.models import FeedbackRequest
 from kb.obsidian_sync import ObsidianSyncStore, SyncPushDocument, normalize_path
 from kb.promotion import PromotionEngine
+from kb.promotion_queue import APPROVED_STATUS, PENDING_STATUS, REJECTED_STATUS
 from kb.repo_content_sync import RepoContentSyncer
 from kb.security_scan import SecretContentError
 from kb.self_improve import SelfImprovement
@@ -239,6 +240,10 @@ class PromoteRunBody(BaseModel):
     dataset: str = Field(min_length=1)
     dry_run: bool = True
     max_items: int | None = Field(default=None, ge=1, le=200)
+
+
+class PromotionDecisionBody(BaseModel):
+    note: str | None = Field(default=None, max_length=400)
 
 
 class CognifyRunBody(BaseModel):
@@ -592,6 +597,48 @@ def seat_capture_policy_response(slug: str) -> dict[str, Any]:
         baseline=baseline,
         env_exclude_patterns=env_exclude_patterns(),
     )
+
+
+def can_run_promotion(identity: AccessIdentity, seat_dataset: str) -> bool:
+    if not is_seat_dataset(seat_dataset):
+        return False
+    seat_slug = seat_dataset.removeprefix("seat:")
+    if identity.role == "admin" or "sources:sync" in effective_scopes(identity):
+        return True
+    if identity.role == "writer" and identity.seat_slug == seat_slug:
+        return True
+    return False
+
+
+def can_decide_promotion_item(
+    identity: AccessIdentity,
+    item_seat_slug: str,
+) -> tuple[bool, bool]:
+    if identity.role == "admin" or "access:manage" in effective_scopes(identity):
+        delegate = identity.seat_slug is not None and identity.seat_slug != item_seat_slug
+        if identity.seat_slug is None:
+            delegate = True
+        return True, delegate
+    if identity.seat_slug == item_seat_slug:
+        return True, False
+    return False, False
+
+
+def promotion_pending_filter_seat(identity: AccessIdentity) -> str | None:
+    if identity.role == "admin" or "access:manage" in effective_scopes(identity):
+        return None
+    if identity.seat_slug:
+        return identity.seat_slug
+    raise HTTPException(
+        status_code=403,
+        detail="Promotion queue is only available to seat holders and admins.",
+    )
+
+
+def redact_pending_item(item: dict[str, Any]) -> dict[str, Any]:
+    redacted = dict(item)
+    redacted.pop("candidate_text", None)
+    return redacted
 
 
 def enforce_dataset_allowlist(identity: AccessIdentity, dataset: str) -> None:
@@ -2464,11 +2511,16 @@ async def promotion_status(request: Request) -> Any:
 
 @app.post("/api/promote/run")
 async def run_promotion(body: PromoteRunBody, request: Request) -> Any:
-    actor = require_access(request, "admin", "sources:sync")
+    actor = require_access(request, "writer", "kb:ingest")
     if not is_seat_dataset(body.dataset):
         raise HTTPException(
             status_code=400,
             detail="dataset must be a seat node (seat:<slug>) to promote from.",
+        )
+    if not can_run_promotion(actor, body.dataset):
+        raise HTTPException(
+            status_code=403,
+            detail="Not allowed to run promotion for this seat dataset.",
         )
     try:
         result = await get_promotion_engine().run(
@@ -2512,9 +2564,93 @@ async def run_promotion(body: PromoteRunBody, request: Request) -> Any:
             "candidates": result.get("candidates"),
             "proposed": result.get("proposed"),
             "promoted": result.get("promoted"),
+            "pending_approval": result.get("pending_approval"),
+            "queued": result.get("queued"),
             "max_items": result.get("max_items"),
         },
     )
+    return jsonable_encoder(result)
+
+
+@app.get("/api/promotion/pending")
+async def list_promotion_pending(
+    request: Request,
+    status: str = PENDING_STATUS,
+) -> dict[str, Any]:
+    identity = require_access(request, "reader", "kb:read")
+    seat_slug = promotion_pending_filter_seat(identity)
+    if status not in {PENDING_STATUS, REJECTED_STATUS, APPROVED_STATUS}:
+        raise HTTPException(status_code=422, detail=f"Unsupported status filter: {status}")
+    items = get_access_store().list_promotion_pending(seat_slug=seat_slug, status=status)
+    return {
+        "ok": True,
+        "status": status,
+        "items": [redact_pending_item(item.to_dict()) for item in items],
+        "count": len(items),
+    }
+
+
+@app.post("/api/promotion/pending/{item_id}/approve")
+async def approve_promotion_pending(
+    item_id: str,
+    request: Request,
+    body: PromotionDecisionBody | None = None,
+) -> dict[str, Any]:
+    identity = require_access(request, "writer", "kb:ingest")
+    item = get_access_store().get_promotion_pending(item_id)
+    if item is None:
+        raise HTTPException(status_code=404, detail=f"Promotion item not found: {item_id}")
+    allowed, delegate = can_decide_promotion_item(identity, item.seat_slug)
+    if not allowed:
+        raise HTTPException(status_code=403, detail="Not allowed to approve this promotion item.")
+    try:
+        result = await get_promotion_engine().approve_pending(
+            item_id,
+            identity,
+            delegate=delegate,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    if body and body.note:
+        get_access_store().record_event(
+            action="promotion.approve.note",
+            actor=identity,
+            success=True,
+            dataset=item.seat_dataset,
+            detail={"item_id": item_id, "note": body.note[:400]},
+        )
+    return jsonable_encoder(result)
+
+
+@app.post("/api/promotion/pending/{item_id}/reject")
+async def reject_promotion_pending(
+    item_id: str,
+    request: Request,
+    body: PromotionDecisionBody | None = None,
+) -> dict[str, Any]:
+    identity = require_access(request, "writer", "kb:ingest")
+    item = get_access_store().get_promotion_pending(item_id)
+    if item is None:
+        raise HTTPException(status_code=404, detail=f"Promotion item not found: {item_id}")
+    allowed, delegate = can_decide_promotion_item(identity, item.seat_slug)
+    if not allowed:
+        raise HTTPException(status_code=403, detail="Not allowed to reject this promotion item.")
+    try:
+        result = await get_promotion_engine().reject_pending(
+            item_id,
+            identity,
+            delegate=delegate,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    if body and body.note:
+        get_access_store().record_event(
+            action="promotion.reject.note",
+            actor=identity,
+            success=True,
+            dataset=item.seat_dataset,
+            detail={"item_id": item_id, "note": body.note[:400]},
+        )
     return jsonable_encoder(result)
 
 
