@@ -2,6 +2,32 @@
 
 Last updated: 2026-06-29.
 
+## 2026-06-29 (continued) — Cognee 1.2.2, Linear live, smoke verified, release closed
+
+The remaining release tasks are done (verified via the live admin key through
+`railway run`, since the Citadel MCP token was stale).
+
+- **Cognee 1.2.1 → 1.2.2** (`7041563`) — patch bump (truth-subspace/retrieval,
+  all opt-in, `DEFAULT_FEEDBACK_INFLUENCE=0.0`, no breaking changes). pyproject +
+  `requirements.txt` (Railway installs from it) + uv.lock; 514 tests pass.
+  **Deployed + boots healthy** (`/healthz` 200, scheduler re-armed, no cognee
+  import/init errors).
+- **Linear sync live** — `CITADEL_LINEAR_API_KEY` set; a forced sync ingested
+  **200 issues → Central** (`central_ingested:true`, `last_synced_at` set).
+  Recurring sync added as an **evolve stage** (`a77355f`, `_linear_sync_stage`
+  before cognify) rather than a separate Railway service — it lands in shared
+  pgvector and the in-loop cognify folds it into the graph. (`mirror_count:0` —
+  no seat mirrors until Linear users are mapped to seats.)
+- **Promotion smoke verified** — admin `GET /api/promote` (enabled), `POST
+  /api/promote/run` dry-run for `seat:sarthi` (**HTTP 200**, engine evaluated
+  candidates end-to-end → all `skip/not_relevant`), `GET /api/promotion/pending`
+  (200, empty). The dashboard approve/reject click-through is data-blocked (queue
+  empty — nothing queued to approve).
+- **Graph served** — `/api/mesh/graph` returns **200 nodes / 369 edges**,
+  `fallback:false` (200 = the `mesh_graph_max_nodes` display cap; actual 280).
+- **Security reminder still open:** rotate `CITADEL_ADMIN_KEY`, the GitHub PAT,
+  the OpenRouter key, and the Postgres password (surfaced in-session during ops).
+
 ## 2026-06-29 — Stable-release pass: PyPI v0.1.3, evolve scheduler, repopulation (cognify-blocked)
 
 Shipped the ADR-0007 promotion CLI to PyPI and built the scheduled evolve path.

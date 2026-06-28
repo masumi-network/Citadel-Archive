@@ -146,10 +146,13 @@ so explain the intended action before calling them. Use `dry_run=true` first
 when testing learning-agent or backup-mirror runs. If the client asks for
 approval, present the exact tool and expected effect.
 
-**Do not trigger admin sync proactively.** Railway cron handles GitHub org sync
-(`learning-agent`), Linear sync (`linear-sync`), and the full pipeline on
-schedule. Only call `citadel_run_learning_agent`, `POST /api/linear-sync/run`,
-or related admin tools when the user explicitly asks for an immediate refresh.
+**Do not trigger admin sync proactively.** The daily Railway `learning-agent`
+cron handles GitHub org sync, and an **in-process 6h evolve scheduler** (in the
+web service) runs the self-evolving cycle — github sync → repo-content → self
+improve → promotion → Linear sync → cognify — keeping **Central**, the graph, and
+promotions current on its own. Only call `citadel_run_learning_agent`,
+`POST /api/linear-sync/run`, `POST /api/promote/run`, or related admin tools when
+the user explicitly asks for an immediate refresh.
 
 ## Autonomous sync (read path)
 
@@ -161,7 +164,7 @@ no per-capture dev steps:
 | Git pre-push hook | every `git push` | seat **Node** | none — automatic |
 | SessionEnd hook (Claude Code) | session close | seat **Node** | none — automatic |
 | Railway `learning-agent` cron | daily schedule | **Central** | read via `citadel_search` |
-| Railway `linear-sync` cron | scheduled | **Central** + **Seat-Scoped Mirror** | `citadel_linear_my_issues`, `citadel_linear_search` |
+| In-process evolve scheduler (web) | every 6h | **Central** graph + promotion + Linear | `citadel_search`, `citadel_get_mesh`, `citadel_linear_search` |
 
 Install dev-side hooks once: `citadel onboard` (writes the git pre-push and
 SessionEnd hooks that run `python -m kb.hooks.sync_push` / `python -m kb.hooks.sync_session`).

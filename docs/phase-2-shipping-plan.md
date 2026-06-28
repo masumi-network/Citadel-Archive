@@ -140,20 +140,20 @@ Update the **Contributes** column as checkpoints close. Target: **100%** before 
 
 ---
 
-## M6 — QA, merge, deploy (60% → target 100%)
+## M6 — QA, merge, deploy (100%)
 
 | # | Task | % | Checkpoint / verify |
 |---|------|---|---------------------|
 | 6.1 | Merge Phase 2 → `main` | **100%** | `5f6c0ed`+ on `main` |
-| 6.2 | Full pytest suite | **100%** | 346 passing |
-| 6.3 | Prod: cognify **Central** healthy; Linear key + cron set | **40%** | LLM fix done; Linear key + cron pending |
-| 6.4 | Update `docs/progress.md`, `tasks.md`, README | **100%** | 2026-06-26 pass |
+| 6.2 | Full pytest suite | **100%** | 514 passing (cognee 1.2.2) |
+| 6.3 | Prod: cognify **Central** healthy; Linear synced | **100%** | graph 280 nodes; Linear 200 issues; recurring via evolve scheduler |
+| 6.4 | Update `docs/progress.md`, `tasks.md`, README | **100%** | 2026-06-29 pass |
 | 6.5 | Teammate rollout: token + skill + git hook one-pager | **100%** | `teammate-rollout.md` |
 
-**Remaining operator work:** `CITADEL_LINEAR_API_KEY` set on web (2026-06-29) —
-still need the `linear-sync` cron + `GET /api/linear-sync` verify; per-dev
-onboarding via `citadel onboard` (replaces the removed `install_autosync.sh`).
-Graph repopulation is **done** (280 nodes; evolve cognify fixed via the
+**Remaining operator work:** only `citadel onboard` per dev + secret rotation.
+`CITADEL_LINEAR_API_KEY` set + 200 issues synced (recurring via the evolve
+scheduler's `linear_sync` stage — no separate Railway cron needed). Graph
+repopulation **done** (280 nodes; evolve cognify fixed via the
 subprocess-then-in-loop split).
 
 ---

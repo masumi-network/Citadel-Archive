@@ -189,11 +189,13 @@ org-wide source material.
 | `learning-agent` (or `github-sync`) | GitHub org digest → Central | Daily (`0 8 * * *` UTC) |
 | `linear-sync` | Linear workspace → Central; assignee issues **Seat-Scoped Mirror** → each **Node** | Daily or hourly (operator choice) |
 | `pipeline` (also `all`/`cron`) | GitHub sync + skills refresh + self-improve + backup mirror (each stage env-toggleable) | Daily |
+| `evolve` | Self-evolving cycle: github sync → repo-content → self-improve → promotion → Linear sync → cognify (each `CITADEL_EVOLVE_*`-toggleable) | Every 6h via the in-process scheduler in the web service (`CITADEL_EVOLVE_SCHEDULER_ENABLED`) — not a separate Railway service (promotion/cognify need the web's single-writer Kuzu volume) |
 | `backup-mirror` | Vault Backup Mirror manifest export | Daily |
 
-Key env vars (Railway cron service only — not dev shells):
+Key env vars (Railway cron service / web service — not dev shells):
 
-- `CITADEL_LINEAR_API_KEY` — required for `linear-sync`
+- `CITADEL_LINEAR_API_KEY` — required for `linear-sync` (and the evolve Linear stage)
+- `CITADEL_EVOLVE_SCHEDULER_ENABLED` / `CITADEL_EVOLVE_INTERVAL_SECONDS` — the 6h in-process evolve scheduler (web service)
 - `CITADEL_LINEAR_USER_MAP` — optional JSON map Linear user id → seat slug
 - `CITADEL_GITHUB_ORG`, `CITADEL_GITHUB_SYNC_*` — GitHub org sync scope
 - `CITADEL_PIPELINE_*_ENABLED` — toggle individual pipeline stages

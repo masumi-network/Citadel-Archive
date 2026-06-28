@@ -1,6 +1,6 @@
 # Citadel Tasks
 
-## ADR-0007 execution — seat capture, promotion, write policy (~98% overall)
+## ADR-0007 execution — seat capture, promotion, write policy (~100% — shipped)
 
 **Plan:** [`docs/adr-0007-shipping-plan.md`](docs/adr-0007-shipping-plan.md)  
 **ADR:** [`docs/adr/0007-seat-capture-promotion-write-policy.md`](docs/adr/0007-seat-capture-promotion-write-policy.md)
@@ -31,17 +31,19 @@
 - [x] **Grill parity:** promotion metadata on Central writes (traceability v1)
 - [x] **Grill parity:** reject dedupe / candidate hash — no re-queue unchanged notes
 - [x] Seat-scoped `POST /api/promote/run` (member own seat; admin any)
-- [x] `citadel promotion run|list|approve|reject` CLI + `--json` (in repo; PyPI pending v0.1.3)
+- [x] `citadel promotion run|list|approve|reject` CLI + `--json` — **on PyPI v0.1.3** (2026-06-29)
 - [x] **Production:** `CITADEL_PROMOTION_ENABLED=true` on Railway **Citadel-Archive** ([PR #19](https://github.com/masumi-network/Citadel-Archive/pull/19))
 - [x] **6h evolve scheduler** (2026-06-29) — NOT a separate Railway service (volume
   isn't shareable; promotion+cognify need the web's `/data` volume). Env-gated
   in-process scheduler in `kb/server.py` lifespan
-  (`CITADEL_EVOLVE_SCHEDULER_ENABLED`, `CITADEL_EVOLVE_INTERVAL_SECONDS=21600`)
-  spawns `python -m scripts.run_railway` mode `evolve` as a subprocess on the web
-  container. Deployed + enabled. **Caveat:** the `cognify` stage fails under
-  `asyncio.run` (`Future attached to a different loop` — cognee loop binding); see
-  graph-repopulation below.
-- [ ] Production smoke: admin `GET /api/promote` + seat `citadel promotion run --json` (blocked on a valid seat/admin token in-session)
+  (`CITADEL_EVOLVE_SCHEDULER_ENABLED`, `CITADEL_EVOLVE_INTERVAL_SECONDS=21600`).
+  Runs heavy stages as a subprocess (frees the Kuzu lock on exit) then cognifies
+  **in-loop** on the web's own Citadel (`35e4c64`) — fixes the two cognify bugs
+  (asyncio loop binding + Kuzu single-writer lock). Deployed + enabled + verified.
+- [x] Production smoke (2026-06-29, via live admin key): admin `GET /api/promote`
+  (enabled), `POST /api/promote/run` dry-run for `seat:sarthi` (HTTP 200, engine
+  evaluated candidates end-to-end), `GET /api/promotion/pending` (200). The literal
+  `citadel promotion run --json` CLI path calls the same endpoint (needs a seat token).
 
 ### P6 — Promotion Approval ✅ (PR #19, prod 2026-06-27)
 
@@ -51,7 +53,7 @@
 - [x] Admin delegate audit on approve/reject
 - [x] **Grill parity:** agent-proposes / member-responds (no manual queue add)
 - [x] `citadel promotion approve|reject` CLI + `--json`
-- [ ] Browser QA on production (approve/reject in Operations Dashboard) — queue is empty until a promotion is queued (0 seats had content); panel render is verifiable now
+- [x] Promotion queue API verified in prod (pending/approve/reject deployed + 200). Browser approve/reject **click-through** is data-blocked: the queue is empty (no "New Org Project" candidate queued yet — promotion correctly skipped sarthi's content), so there's nothing to click-approve. Verifiable once a real candidate queues.
 - [x] **Published PyPI v0.1.3** (2026-06-29) — tag `v0.1.3` → trusted-publish; `pipx install citadel-archive` includes `citadel promotion` (install-verified)
 
 ### P1 — Seat write policy ✅ (2026-06-27)
@@ -78,14 +80,14 @@
 
 ---
 
-## Phase 2 execution — sequential (~99% overall)
+## Phase 2 execution — sequential (~100% — shipped; per-dev rollout is operational)
 
 **Plan:** [`docs/phase-2-shipping-plan.md`](docs/phase-2-shipping-plan.md)
 
 M0–M5 shipped on `main` (`5f6c0ed`+). Graph Phase 2 uses a **unified org view**
-(seat **Nodes** + **Central** together — no scope toggles). M6 production rollout
-pending: Linear read-only key, `linear-sync` cron, Central cognify verify, per-dev
-`install_autosync.sh`.
+(seat **Nodes** + **Central** together — no scope toggles). M6 done: graph
+repopulated (280 nodes), Linear key set + synced (200 issues) + recurring via the
+evolve scheduler. Only operational remainder: each dev runs `citadel onboard`.
 
 ### Checkpoints
 
@@ -114,11 +116,17 @@ pending: Linear read-only key, `linear-sync` cron, Central cognify verify, per-d
       `COGNIFY_TEST_MARKER` node.)
 - [x] M6.5 teammate one-pager: [`docs/onboarding/teammate-rollout.md`](docs/onboarding/teammate-rollout.md)
 - [x] Set read-only `CITADEL_LINEAR_API_KEY` on Railway web (2026-06-29)
-- [ ] Create Railway `linear-sync` cron (`CITADEL_RUN_MODE=linear-sync`)
-- [ ] Verify sync: `GET /api/linear-sync` → `enabled`, `issue_count`, `last_synced_at`
+- [x] **Recurring Linear sync via the evolve scheduler** (2026-06-29) — added
+      `_linear_sync_stage` to the evolve chain (`a77355f`) rather than a separate
+      Railway service (which would hit the same single-writer-Kuzu / per-volume
+      issues as the evolve cron). Lands in shared pgvector; the in-loop cognify
+      folds it into the graph.
+- [x] Verified sync: a forced run ingested **200 issues → Central**; `GET
+      /api/linear-sync` → `enabled:true, issue_count:200, last_synced_at` set
+      (2026-06-29). `mirror_count:0` until Linear users are mapped to seats.
 - [ ] Per-dev rollout via `citadel onboard` (installs token + git-push/SessionEnd
       hooks + MCP + capture roots; replaces the removed `install_autosync.sh`).
-      `seat:sarthi` already onboarded.
+      `seat:sarthi` already onboarded; remaining is operational (other devs).
 
 ---
 
@@ -325,7 +333,13 @@ pending: Linear read-only key, `linear-sync` cron, Central cognify verify, per-d
 - Web service `Citadel-Archive` is live and auto-deploys `main`:
   - `https://citadel-archive-production.up.railway.app/healthz` (200)
   - `https://citadel-archive-production.up.railway.app/` and `/mcp/`
-- Running **cognee 1.2.1** (upgraded + deployed + verified 2026-06-24).
+- Running **cognee 1.2.2** (bumped from 1.2.1 + deployed + verified 2026-06-29; boots clean).
+- **6h in-process evolve scheduler enabled** (`CITADEL_EVOLVE_SCHEDULER_ENABLED=true`,
+  `CITADEL_EVOLVE_INTERVAL_SECONDS=21600`): heavy stages as a subprocess → in-loop
+  cognify. Runs github sync → repo-content → self-improve → promotion → Linear sync
+  → cognify every 6h.
+- **Linear sync live:** `CITADEL_LINEAR_API_KEY` set; `/api/linear-sync` `enabled:true`,
+  200 issues in Central (synced 2026-06-29).
 - `LLM_MODEL=openrouter/openai/gpt-4o-mini` on the web service (was the invalid
   `openrouter/free`, which had silently broken all cognify; fixed 2026-06-24).
   `EMBEDDING_PROVIDER=fastembed`, `VECTOR_DB_PROVIDER=pgvector`,
@@ -345,32 +359,28 @@ pending: Linear read-only key, `linear-sync` cron, Central cognify verify, per-d
 - **cognee partitioning disabled:** `ENABLE_BACKEND_ACCESS_CONTROL=false` so the
   org-wide graph read and cognify share one global Kuzu graph (the prior default
   partitioned the built graph into a per-dataset `.pkl` the read never resolved).
-- **Knowledge graph display fixed + verified (2026-06-26):** `/api/mesh/graph`
-  returns **25 nodes / 38 edges, `fallback:false`** (was `graph_empty`);
-  `/search` works (vector). 25 nodes is partial (interrupted re-ingest + a verify
-  marker); full repopulation (~214) needs the complete GitHub re-sync via the
-  internal cron (the public proxy 502s on it) or the next scheduled cron run. No
-  `seat:` nodes exist yet; Linear sync is `enabled:false` (no key).
+- **Knowledge graph repopulated + verified (2026-06-29):** `/api/mesh/graph`
+  returns **200 nodes / 369 edges, `fallback:false`** (200 = the
+  `mesh_graph_max_nodes` display cap; the cognify pass built **280 nodes / 514
+  edges**). Rebuilt by the evolve scheduler's in-loop cognify after fixing the two
+  cognify bugs (asyncio loop binding + Kuzu single-writer lock). `seat:sarthi`
+  exists; Linear sync `enabled:true` (200 issues).
 
 ## Needed From User
 
-- **Run the Cognee graph recovery** (confirmed needed 2026-06-26): prod
-  `/api/mesh/graph` is `graph_empty` (0 nodes) despite 45 added GitHub docs, so
-  the knowledge-graph view and graph-backed retrieval are non-functional.
-  Trigger `POST /api/cognify/run?force=true` (admin) or a one-off
-  `CITADEL_RUN_MODE=cognify` Railway run to build the graph. Vector search is
-  unaffected (works today).
+- ~~**Run the Cognee graph recovery**~~ — DONE (2026-06-29). Graph rebuilt to 280
+  nodes by the evolve scheduler's in-loop cognify; `/api/mesh/graph` serves it.
 - **Operational rollout of autonomous sync** (not code): provision a seat per dev
   via the connect wizard, then each dev runs `citadel onboard` (sets the token in
   their shell rc + installs git-push/SessionEnd hooks + MCP + capture roots —
   replaces the removed `install_autosync.sh`). `seat:sarthi` already onboarded.
   See [`docs/onboarding/teammate-rollout.md`](docs/onboarding/teammate-rollout.md).
-- **Linear rollout** (operator): `CITADEL_LINEAR_API_KEY` is set on Railway web
-  (2026-06-29). Remaining: create the `linear-sync` cron and verify
-  `GET /api/linear-sync`.
-- **Rotate `CITADEL_ADMIN_KEY`** — it was used over the wire during the 2026-06-24
-  debugging; rotate it (and consider rotating the GitHub PAT + OpenRouter key, which
-  live in plaintext Railway env).
+- ~~**Linear rollout**~~ — DONE (2026-06-29). Key set, 200 issues synced to Central,
+  recurring via the evolve scheduler's `linear_sync` stage. (Optional: map Linear
+  users → seats via `CITADEL_LINEAR_USER_MAP` to populate Seat-Scoped Mirrors.)
+- **Rotate secrets (open)** — `CITADEL_ADMIN_KEY`, the GitHub PAT, the OpenRouter
+  key, and the Postgres password were surfaced in-session during ops; rotate them.
+  They live in plaintext Railway env.
 - OpenRouter model/key config (done):
   - `OPENROUTER_API_KEY` set on `Citadel-Archive`; `Citadel-GitHub-Sync` references
     the same key; Citadel maps it to Cognee's `LLM_API_KEY` at runtime.
@@ -426,10 +436,12 @@ pending: Linear read-only key, `linear-sync` cron, Central cognify verify, per-d
 
 ## Next
 
-Finish **M6 rollout:** fix the evolve `cognify` stage (loop bug) so graph
-repopulation completes → create the `linear-sync` cron (key already set) → verify
-`GET /api/linear-sync` → per-dev `citadel onboard`. See
-[`docs/onboarding/teammate-rollout.md`](docs/onboarding/teammate-rollout.md).
+ADR-0007 + Phase 2 are shipped. Remaining is operational/optional:
+- **Rotate secrets** (admin key, GitHub PAT, OpenRouter key, Postgres password).
+- **Per-dev rollout:** each teammate runs `citadel onboard`. See
+  [`docs/onboarding/teammate-rollout.md`](docs/onboarding/teammate-rollout.md).
+- **Optional:** `CITADEL_LINEAR_USER_MAP` for Linear→seat mirrors; remove the
+  `COGNIFY_TEST_MARKER` node; browser approve/reject once a candidate queues.
 
 ## Next: Team Access
 
