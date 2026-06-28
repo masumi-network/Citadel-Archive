@@ -296,14 +296,47 @@ def pipeline_stages() -> list[tuple[str, bool, Callable[[], int]]]:
     ]
 
 
+def _linear_sync_stage() -> int:
+    """Sync the Linear workspace into Central (+ seat mirrors) for the evolve cron.
+
+    No-op (exit 0) when ``CITADEL_LINEAR_API_KEY`` is unset, so the stage is safe
+    to leave enabled. The Central write lands in shared Postgres/pgvector; the
+    evolve cognify stage then folds it into the graph. Incremental (``force=False``)
+    — the explicit ``CITADEL_RUN_MODE=linear-sync`` job stays a forced full sync.
+    """
+    from kb.access import AccessStore
+    from kb.linear_sync import LinearSyncer
+    from kb.service import Citadel
+
+    async def _run() -> int:
+        citadel = Citadel.from_env()
+        if not citadel.config.linear_api_key:
+            logger.info("Linear sync stage skipped: CITADEL_LINEAR_API_KEY not set")
+            return 0
+        access_store = AccessStore(citadel.config.access_store_path)
+        result = await LinearSyncer(citadel, access_store=access_store).run(force=False)
+        if not result.get("ok"):
+            logger.error("Linear sync stage failed: %s", result.get("reason"))
+            return 1
+        logger.info(
+            "Linear sync stage finished: issues=%s mirrored=%s",
+            result.get("issue_count"),
+            result.get("mirrored_count"),
+        )
+        return 0
+
+    return asyncio.run(_run())
+
+
 def evolve_stages() -> list[tuple[str, bool, Callable[[], int]]]:
     """(name, enabled, runner) for the 6h evolve cron, in execution order.
 
     Mirrors :func:`pipeline_stages` (per-stage env toggles) but chains the
     self-evolving cycle: github sync -> repo-content sync -> self-improve ->
-    promotion -> cognify. The 6h cadence is an operator Railway-cron step, not
-    code. Each stage carries its own ``CITADEL_EVOLVE_*`` toggle so an operator
-    can disable any link without touching the others.
+    promotion -> linear sync -> cognify. The 6h cadence is an operator
+    Railway-cron / in-process scheduler step, not code. Each stage carries its own
+    ``CITADEL_EVOLVE_*`` toggle so an operator can disable any link without
+    touching the others.
     """
     return [
         (
@@ -325,6 +358,11 @@ def evolve_stages() -> list[tuple[str, bool, Callable[[], int]]]:
             "promotion",
             _bool(os.getenv("CITADEL_EVOLVE_PROMOTION_ENABLED"), default=True),
             _promotion_stage,
+        ),
+        (
+            "linear_sync",
+            _bool(os.getenv("CITADEL_EVOLVE_LINEAR_SYNC_ENABLED"), default=True),
+            _linear_sync_stage,
         ),
         (
             "cognify",

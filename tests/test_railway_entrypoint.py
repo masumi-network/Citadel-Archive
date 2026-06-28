@@ -243,6 +243,7 @@ _EVOLVE_STAGE_ATTRS = [
     ("repo_content_sync", "_repo_content_sync_stage"),
     ("self_improve", "_self_improve_stage"),
     ("promotion", "_promotion_stage"),
+    ("linear_sync", "_linear_sync_stage"),
     ("cognify", "_cognify_stage"),
 ]
 
@@ -275,6 +276,7 @@ def _clear_evolve_env(monkeypatch: Any) -> None:
         "CITADEL_EVOLVE_REPO_CONTENT_SYNC_ENABLED",
         "CITADEL_EVOLVE_SELF_IMPROVE_ENABLED",
         "CITADEL_EVOLVE_PROMOTION_ENABLED",
+        "CITADEL_EVOLVE_LINEAR_SYNC_ENABLED",
         "CITADEL_EVOLVE_COGNIFY_ENABLED",
     ):
         monkeypatch.delenv(name, raising=False)
@@ -291,6 +293,7 @@ def test_evolve_runs_all_stages_in_chain_order(monkeypatch: Any) -> None:
         "repo_content_sync",
         "self_improve",
         "promotion",
+        "linear_sync",
         "cognify",
     ]
 
@@ -299,6 +302,7 @@ def test_evolve_stage_toggles_disable_individual_stages(monkeypatch: Any) -> Non
     _clear_evolve_env(monkeypatch)
     monkeypatch.setenv("CITADEL_EVOLVE_SELF_IMPROVE_ENABLED", "false")
     monkeypatch.setenv("CITADEL_EVOLVE_PROMOTION_ENABLED", "false")
+    monkeypatch.setenv("CITADEL_EVOLVE_LINEAR_SYNC_ENABLED", "false")
     calls: list[str] = []
     _patch_evolve_stages(monkeypatch, calls)
 
@@ -317,6 +321,7 @@ def test_evolve_continues_past_a_failed_stage(monkeypatch: Any) -> None:
         "repo_content_sync",
         "self_improve",
         "promotion",
+        "linear_sync",
         "cognify",
     ]
 
@@ -327,6 +332,7 @@ def test_evolve_exits_nonzero_only_when_all_enabled_stages_fail(monkeypatch: Any
         "CITADEL_EVOLVE_REPO_CONTENT_SYNC_ENABLED",
         "CITADEL_EVOLVE_SELF_IMPROVE_ENABLED",
         "CITADEL_EVOLVE_PROMOTION_ENABLED",
+        "CITADEL_EVOLVE_LINEAR_SYNC_ENABLED",
         "CITADEL_EVOLVE_COGNIFY_ENABLED",
     ):
         monkeypatch.setenv(name, "false")
