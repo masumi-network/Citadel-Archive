@@ -1,4 +1,4 @@
-cognee[fastembed,postgres-binary]>=1.2.1,<2.0.0
+cognee[fastembed,postgres-binary]>=1.2.2,<2.0.0
 fastapi>=0.116.2,<1.0.0
 google-auth>=2.40.0,<3.0.0
 mcp>=1.23.0,<2.0.0

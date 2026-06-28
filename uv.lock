@@ -781,7 +781,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "cognee", extras = ["fastembed", "postgres-binary"], marker = "extra == 'server'", specifier = ">=1.2.1,<2.0.0" },
+    { name = "cognee", extras = ["fastembed", "postgres-binary"], marker = "extra == 'server'", specifier = ">=1.2.2,<2.0.0" },
     { name = "fastapi", marker = "extra == 'server'", specifier = ">=0.116.2,<1.0.0" },
     { name = "google-auth", marker = "extra == 'server'", specifier = ">=2.40.0,<3.0.0" },
     { name = "mcp", marker = "extra == 'server'", specifier = ">=1.23.0,<2.0.0" },
@@ -815,7 +815,7 @@ wheels = [
 
 [[package]]
 name = "cognee"
-version = "1.2.1"
+version = "1.2.2"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "aiofiles" },
@@ -864,9 +864,9 @@ dependencies = [
     { name = "uvicorn" },
     { name = "websockets" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/64/f1/7eca21f6bb468a86d0f57cefcae642382b614b3af3da8b7c83f90a3f1aa4/cognee-1.2.1.tar.gz", hash = "sha256:c527d3b58978759a73079fbb7e081620499f2bd8d80dc01dd4466971123b9a81", size = 19272567, upload-time = "2026-06-21T18:30:04.128Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/f4/ca/e882e11d4bce182fb3b92113122591d160538c79e11b0694d6957a9ab394/cognee-1.2.2.tar.gz", hash = "sha256:bacc561d211c820423480448bb23113f43142de6d58c2ae0284d0804574910c6", size = 19307003, upload-time = "2026-06-26T13:38:07.408Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/1f/4a/ccdb4b5a6256559cf8bcdb13b483cade9a5c7432a2a65d01dd13c1ccb56d/cognee-1.2.1-py3-none-any.whl", hash = "sha256:4d3248d7551ae07b5248dd82ca2756e75e2c8891404e8823e524c0d00cf718d1", size = 2830094, upload-time = "2026-06-21T18:30:00.918Z" },
+    { url = "https://files.pythonhosted.org/packages/e5/77/7c9ae3c3beee84c4e35515e39e90e95bf1c87e092f6b6ae060ed3aa2ccd7/cognee-1.2.2-py3-none-any.whl", hash = "sha256:3b1e4b5eaf9facb914c6c5644ee4d7933d77258c717b47dd06334ec51876caee", size = 2874576, upload-time = "2026-06-26T13:38:05.023Z" },
 ]
 
 [package.optional-dependencies]
