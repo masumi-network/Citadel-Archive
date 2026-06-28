@@ -335,3 +335,78 @@ def test_evolve_exits_nonzero_only_when_all_enabled_stages_fail(monkeypatch: Any
 
     assert run_railway.run("evolve") == 1
     assert calls == ["github_sync"]
+
+
+# --- Evolve cognify stage routing (web-API vs in-process) ------------------
+
+
+def test_cognify_stage_routes_to_api_when_target_url_set(monkeypatch: Any) -> None:
+    monkeypatch.setenv("CITADEL_COGNIFY_TARGET_URL", "http://localhost:8080")
+    monkeypatch.delenv("CITADEL_EVOLVE_COGNIFY_FORCE", raising=False)
+
+    api_calls: list[tuple[str, bool]] = []
+
+    def fake_api(url: str, *, force: bool) -> int:
+        api_calls.append((url, force))
+        return 0
+
+    def fail_mode(*, verify: bool) -> int:
+        raise AssertionError("cognify must go through the API, not asyncio.run")
+
+    monkeypatch.setattr(run_railway, "_cognify_via_api", fake_api)
+    monkeypatch.setattr(run_railway, "_cognify_mode", fail_mode)
+
+    assert run_railway._cognify_stage() == 0
+    assert api_calls == [("http://localhost:8080", False)]
+
+
+def test_cognify_stage_runs_in_process_without_target_url(monkeypatch: Any) -> None:
+    monkeypatch.delenv("CITADEL_COGNIFY_TARGET_URL", raising=False)
+
+    mode_calls: list[bool] = []
+
+    def fake_mode(*, verify: bool) -> int:
+        mode_calls.append(verify)
+        return 0
+
+    monkeypatch.setattr(run_railway, "_cognify_mode", fake_mode)
+
+    assert run_railway._cognify_stage() == 0
+    assert mode_calls == [False]
+
+
+def test_cognify_via_api_posts_to_endpoint(monkeypatch: Any) -> None:
+    import json
+    import urllib.request
+
+    captured: dict[str, Any] = {}
+
+    class _FakeResp:
+        def __enter__(self) -> "_FakeResp":
+            return self
+
+        def __exit__(self, *exc: Any) -> bool:
+            return False
+
+        def read(self) -> bytes:
+            return b'{"graph_before": 1, "graph_after": 9, "graph_grew": true}'
+
+    def fake_urlopen(request: Any, timeout: Any = None) -> "_FakeResp":
+        captured["url"] = request.full_url
+        captured["data"] = request.data
+        captured["auth"] = request.headers.get("Authorization")
+        return _FakeResp()
+
+    monkeypatch.setenv("CITADEL_ADMIN_KEY", "test-admin-key")
+    monkeypatch.delenv("CITADEL_COGNIFY_DATASET", raising=False)
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+
+    assert run_railway._cognify_via_api("http://localhost:8080", force=True) == 0
+    assert captured["url"] == "http://localhost:8080/api/cognify/run"
+    assert json.loads(captured["data"]) == {"force": True, "verify": False}
+    assert captured["auth"] == "Bearer test-admin-key"
+
+
+def test_cognify_via_api_fails_without_admin_key(monkeypatch: Any) -> None:
+    monkeypatch.delenv("CITADEL_ADMIN_KEY", raising=False)
+    assert run_railway._cognify_via_api("http://localhost:8080", force=False) == 1

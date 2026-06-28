@@ -124,7 +124,79 @@ def _cognify_mode(*, verify: bool) -> int:
     return 0
 
 
+def _cognify_timeout() -> int:
+    raw = os.getenv("CITADEL_COGNIFY_TIMEOUT_SECONDS")
+    if not raw:
+        return 1800
+    try:
+        return int(raw)
+    except ValueError:
+        return 1800
+
+
+def _cognify_via_api(url: str, *, force: bool) -> int:
+    """Drive cognify through the running web service's ``/api/cognify/run``.
+
+    Cognee binds its async DB/graph resources to the event loop that created
+    them, so cognify only runs cleanly inside the web server's long-lived loop — a
+    fresh ``asyncio.run()`` in a script/subprocess raises "got Future attached to
+    a different loop". The evolve scheduler runs on the web container and sets
+    ``CITADEL_COGNIFY_TARGET_URL`` (e.g. ``http://localhost:8080``) so its cognify
+    stage POSTs to the local API instead of cognifying in-process.
+    """
+    import json
+    from urllib.error import HTTPError, URLError
+    from urllib.request import Request, urlopen
+
+    access_key = os.getenv("CITADEL_ADMIN_KEY")
+    if not access_key:
+        logger.error("CITADEL_COGNIFY_TARGET_URL is set but CITADEL_ADMIN_KEY is missing")
+        return 1
+
+    endpoint = url.rstrip("/")
+    if not endpoint.endswith("/api/cognify/run"):
+        endpoint = f"{endpoint}/api/cognify/run"
+
+    payload = {"force": force, "verify": False}
+    dataset = os.getenv("CITADEL_COGNIFY_DATASET")
+    if dataset:
+        payload["dataset"] = dataset
+
+    request = Request(
+        endpoint,
+        data=json.dumps(payload).encode("utf-8"),
+        headers={
+            "Authorization": f"Bearer {access_key}",
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+            "User-Agent": "citadel-evolve-cognify",
+        },
+        method="POST",
+    )
+    try:
+        with urlopen(request, timeout=_cognify_timeout()) as response:
+            result = json.loads(response.read().decode("utf-8") or "{}")
+    except HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="replace")
+        logger.error("Cognify API failed: HTTP %s: %s", exc.code, detail[:500])
+        return 1
+    except URLError as exc:
+        logger.error("Cognify API unreachable at %s: %s", endpoint, exc.reason)
+        return 1
+
+    logger.info(
+        "Cognify (API) finished: graph_before=%s graph_after=%s grew=%s",
+        result.get("graph_before"),
+        result.get("graph_after"),
+        result.get("graph_grew"),
+    )
+    return 0
+
+
 def _cognify_stage() -> int:
+    url = os.getenv("CITADEL_COGNIFY_TARGET_URL")
+    if url:
+        return _cognify_via_api(url, force=_bool(os.getenv("CITADEL_EVOLVE_COGNIFY_FORCE")))
     return _cognify_mode(verify=False)
 
 
