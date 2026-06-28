@@ -72,36 +72,49 @@ mcp_app = mcp_server.streamable_http_app()
 
 
 async def _evolve_scheduler_loop(interval_seconds: int) -> None:
-    """Run the evolve cycle every ``interval_seconds``, serially and fail-soft.
+    """Run the evolve cycle every ``interval_seconds`` as an isolated subprocess.
 
-    The evolve stages call ``asyncio.run()`` internally, so they cannot run on the
-    server's event loop — ``asyncio.to_thread`` gives each pass a clean worker
-    thread. Passes never overlap (the next sleep starts only after a pass returns)
-    and one failed pass never stops the schedule. The first pass waits a full
-    interval so a redeploy never triggers a heavy cycle on every boot.
+    Each pass runs ``python -m scripts.run_railway`` in mode ``evolve`` on THIS
+    container — same ``/data`` volume + Postgres the API serves, but a fresh
+    interpreter and event loop. A subprocess (not ``asyncio.to_thread``) is
+    required: cognee binds its async DB/graph resources to the loop that
+    initialized them, so running the cognify/promotion stages on a worker-thread
+    loop raises "got Future attached to a different loop". Passes are serial and
+    fail-soft; the first waits one full interval so a redeploy never triggers a
+    heavy cycle on every boot.
     """
-    from scripts.run_railway import run_evolve
+    import sys
 
     while True:
         await asyncio.sleep(interval_seconds)
         logger.info("Evolve scheduler: starting scheduled pass")
+        proc = None
         try:
-            code = await asyncio.to_thread(run_evolve)
+            proc = await asyncio.create_subprocess_exec(
+                sys.executable,
+                "-m",
+                "scripts.run_railway",
+                env={**os.environ, "CITADEL_RUN_MODE": "evolve"},
+            )
+            code = await proc.wait()
             logger.info("Evolve scheduler: pass finished (exit=%s)", code)
         except asyncio.CancelledError:
+            if proc is not None and proc.returncode is None:
+                proc.terminate()
             raise
         except Exception:
             logger.exception("Evolve scheduler: pass failed")
 
 
 def _start_evolve_scheduler() -> "asyncio.Task[Any] | None":
-    """Launch the in-process 6h evolve cron when enabled.
+    """Launch the 6h evolve cron (subprocess on this container) when enabled.
 
     A separate Railway service cannot host this: the promotion + cognify stages
-    run in-process against the Kuzu graph and JSON access store on the local
-    ``/data`` volume, and Railway volumes attach to a single service. Running the
-    cycle inside the web process keeps it on the volume + Postgres the API already
-    serves. Off by default (``CITADEL_EVOLVE_SCHEDULER_ENABLED``).
+    work against the Kuzu graph and JSON access store on the local ``/data``
+    volume, and Railway volumes attach to a single service. The scheduler runs
+    each cycle as a subprocess on the web container, so it shares that volume +
+    Postgres while staying out of the server's event loop. Off by default
+    (``CITADEL_EVOLVE_SCHEDULER_ENABLED``).
     """
     config = get_citadel().config
     if not config.evolve_scheduler_enabled:

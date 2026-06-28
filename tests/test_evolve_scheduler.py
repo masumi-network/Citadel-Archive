@@ -68,17 +68,27 @@ async def test_stop_evolve_scheduler_handles_none() -> None:
     await server._stop_evolve_scheduler(None)
 
 
-async def test_evolve_scheduler_loop_runs_evolve_repeatedly(monkeypatch: Any) -> None:
+class _FakeProc:
+    def __init__(self, returncode: int = 0) -> None:
+        self.returncode = returncode
+
+    async def wait(self) -> int:
+        return self.returncode
+
+    def terminate(self) -> None:  # pragma: no cover - only on cancel
+        pass
+
+
+async def test_evolve_scheduler_loop_spawns_evolve_subprocess(monkeypatch: Any) -> None:
     import kb.server as server
-    import scripts.run_railway as run_railway
 
-    calls: list[int] = []
+    calls: list[tuple[tuple[Any, ...], dict[str, Any]]] = []
 
-    def fake_run_evolve() -> int:
-        calls.append(1)
-        return 0
+    async def fake_exec(*args: Any, **kwargs: Any) -> _FakeProc:
+        calls.append((args, kwargs))
+        return _FakeProc(0)
 
-    monkeypatch.setattr(run_railway, "run_evolve", fake_run_evolve)
+    monkeypatch.setattr(server.asyncio, "create_subprocess_exec", fake_exec)
 
     task = asyncio.create_task(server._evolve_scheduler_loop(0.001))
     try:
@@ -92,21 +102,24 @@ async def test_evolve_scheduler_loop_runs_evolve_repeatedly(monkeypatch: Any) ->
             await task
 
     assert len(calls) >= 2
+    # Runs scripts.run_railway in a fresh process, in evolve mode.
+    args, kwargs = calls[0]
+    assert args[1:] == ("-m", "scripts.run_railway")
+    assert kwargs["env"]["CITADEL_RUN_MODE"] == "evolve"
 
 
 async def test_evolve_scheduler_loop_survives_a_failed_pass(monkeypatch: Any) -> None:
     import kb.server as server
-    import scripts.run_railway as run_railway
 
     calls: list[int] = []
 
-    def flaky_run_evolve() -> int:
+    async def flaky_exec(*args: Any, **kwargs: Any) -> _FakeProc:
         calls.append(1)
         if len(calls) == 1:
-            raise RuntimeError("boom")
-        return 0
+            raise RuntimeError("spawn boom")
+        return _FakeProc(0)
 
-    monkeypatch.setattr(run_railway, "run_evolve", flaky_run_evolve)
+    monkeypatch.setattr(server.asyncio, "create_subprocess_exec", flaky_exec)
 
     task = asyncio.create_task(server._evolve_scheduler_loop(0.001))
     try:
@@ -119,5 +132,5 @@ async def test_evolve_scheduler_loop_survives_a_failed_pass(monkeypatch: Any) ->
         with contextlib.suppress(asyncio.CancelledError):
             await task
 
-    # First pass raised; the loop kept going and ran a second pass.
+    # First spawn raised; the loop kept going and spawned a second pass.
     assert len(calls) >= 2
