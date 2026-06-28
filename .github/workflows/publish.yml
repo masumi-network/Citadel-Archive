@@ -38,6 +38,7 @@ jobs:
     environment: pypi
     permissions:
       id-token: write # required for Trusted Publishing
+      contents: write # required to create the GitHub Release
     steps:
       - uses: actions/download-artifact@v4
         with:
@@ -45,3 +46,12 @@ jobs:
           path: dist/
       - name: Publish
         uses: pypa/gh-action-pypi-publish@release/v1
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >
+          gh release create "${GITHUB_REF_NAME}"
+          dist/*
+          --repo "${GITHUB_REPOSITORY}"
+          --title "citadel-archive ${GITHUB_REF_NAME}"
+          --generate-notes
