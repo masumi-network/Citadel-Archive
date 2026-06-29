@@ -19,11 +19,12 @@
   /* Text */
   --text: #eaf1ee;
   --muted: #a3b3ab;
-  --quiet: #6b7a73;
+  --quiet: #7d8b82;
 
   /* Accent — Masumi brand magenta (#FA008C) */
   --primary: #fa008c;
   --primary-strong: #ff5cb0;
+  --primary-deep: #cc0073;
   --primary-soft: rgba(250, 0, 140, 0.16);
   --primary-border: rgba(250, 0, 140, 0.45);
   --primary-text: #ffffff;
@@ -823,8 +824,8 @@ pre {
   justify-content: space-between;
   gap: 12px;
   padding: 12px 14px;
-  border-bottom: 1px solid rgba(232, 97, 95, 0.32);
-  background: rgba(232, 97, 95, 0.08);
+  border-bottom: 1px solid rgba(250, 20, 10, 0.32);
+  background: rgba(250, 20, 10, 0.08);
 }
 
 .inline-alert p {
@@ -1325,8 +1326,8 @@ pre {
 .dashboard-event-card.issue-card,
 .event-item.issue-card,
 .issue-card {
-  border-color: rgba(232, 97, 95, 0.42);
-  background: rgba(232, 97, 95, 0.07);
+  border-color: rgba(250, 20, 10, 0.42);
+  background: rgba(250, 20, 10, 0.07);
 }
 
 /* ---------- Conflicts ---------- */
@@ -1462,9 +1463,9 @@ pre {
   flex-direction: column;
   gap: 4px;
   padding: 10px 12px;
-  border: 1px solid rgba(110, 203, 141, 0.3);
+  border: 1px solid rgba(52, 211, 153, 0.3);
   border-radius: var(--radius);
-  background: rgba(110, 203, 141, 0.06);
+  background: rgba(52, 211, 153, 0.06);
   color: var(--muted);
   font-size: 12px;
 }
@@ -1637,7 +1638,7 @@ textarea[aria-invalid="true"] {
 }
 
 .primary-button:hover {
-  background: var(--primary-strong);
+  background: var(--primary-deep);
 }
 
 .primary-button:disabled,
@@ -1688,20 +1689,20 @@ textarea[aria-invalid="true"] {
 .status-active,
 .status-enabled,
 .status-synced {
-  border-color: rgba(110, 203, 141, 0.36);
-  background: rgba(110, 203, 141, 0.08);
+  border-color: rgba(52, 211, 153, 0.36);
+  background: rgba(52, 211, 153, 0.08);
   color: var(--success);
 }
 
 .status-standby {
-  border-color: rgba(214, 184, 109, 0.35);
-  background: rgba(214, 184, 109, 0.08);
+  border-color: rgba(251, 191, 36, 0.35);
+  background: rgba(251, 191, 36, 0.08);
   color: var(--warning);
 }
 
 .status-error {
-  border-color: rgba(232, 97, 95, 0.4);
-  background: rgba(232, 97, 95, 0.08);
+  border-color: rgba(250, 20, 10, 0.4);
+  background: rgba(250, 20, 10, 0.08);
   color: var(--danger);
 }
 
@@ -2053,13 +2054,13 @@ textarea[aria-invalid="true"] {
 }
 
 .toast-error {
-  border-color: rgba(232, 97, 95, 0.5);
-  background: rgba(232, 97, 95, 0.12);
+  border-color: rgba(250, 20, 10, 0.5);
+  background: rgba(250, 20, 10, 0.12);
 }
 
 .toast-success {
-  border-color: rgba(110, 203, 141, 0.45);
-  background: rgba(110, 203, 141, 0.1);
+  border-color: rgba(52, 211, 153, 0.45);
+  background: rgba(52, 211, 153, 0.1);
 }
 
 .toast-leaving {
