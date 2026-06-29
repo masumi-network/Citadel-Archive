@@ -30,7 +30,7 @@ the MCP server (`.mcp.json`), and the capture roots. No vendored skill directory
 is needed.
 
 ```bash
-pipx install citadel-archive   # lightweight `citadel` CLI (extras: [tui], [server])
+pipx install citadel-archive   # lightweight `citadel` CLI (zero-dep client; extra: [server])
 citadel onboard                # idempotent — safe to re-run
 ```
 

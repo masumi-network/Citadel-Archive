@@ -42,8 +42,7 @@ Pushing the `v*` tag triggers the workflow: it builds the sdist + wheel, runs
 ```bash
 pipx install citadel-archive          # the lightweight client CLI
 citadel --help
-# extras:
-pipx install "citadel-archive[tui]"    # + live `citadel tui` dashboard
+# extra:
 pip  install "citadel-archive[server]" # + run the Node/MCP server
 ```
 
@@ -59,5 +58,6 @@ uv pip install --system twine && python -m twine check dist/*
 - **Version is the source of truth in `pyproject.toml`** — the tag must match
   (`v0.1.1` → `version = "0.1.1"`). PyPI rejects re-uploading an existing
   version, so always bump before tagging.
-- The base package depends only on `python-dotenv`; `[server]` and `[tui]` pull
-  the heavy stacks on demand. Keep that split when adding dependencies.
+- The base package has zero third-party dependencies (pure stdlib); the
+  `[server]` extra pulls the heavy stack on demand. Keep that split when adding
+  dependencies.

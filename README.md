@@ -49,6 +49,7 @@ evolves only through governed promotion and org sync.
 
 ```bash
 pipx install citadel-archive          # the `citadel` command (zero-dep client)
+# upgrade: pipx install --force citadel-archive --pip-args=--no-cache-dir
 
 citadel onboard                       # token + hooks + MCP + capture roots (idempotent)
 citadel status                        # connection · identity · local setup  (--json for agents)
@@ -108,10 +109,13 @@ decisions live in [`docs/adr/`](docs/adr/).
 
 ```bash
 citadel onboard                       # one-command setup
-citadel status [--json]               # health + identity + local setup
+citadel doctor [--fix]                # diagnose (and repair) your local setup
+citadel status [--json]               # health + identity + local setup + knowledge mesh
 citadel capture [--dry-run] [--json]  # push summaries of Approved Capture Roots
-citadel search "what did we decide about the vault?"
-citadel ingest "A durable note" --tag decision
+citadel search "what did we decide about the vault?"   # HTTP-backed via your seat (--json)
+citadel ingest "A durable note" --tag decision         # → your seat Node, cognified inline
+citadel mcp add cursor                # wire another coding tool to the hosted MCP
+citadel seat create "Jane Dev" jane   # admin: mint a seat + its seat-scoped writer token
 ```
 
 ### MCP (hosted)
