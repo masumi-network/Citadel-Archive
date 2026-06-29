@@ -189,35 +189,32 @@ def ingest_node(
     token: str,
     data: str,
     tags: list[str] | tuple[str, ...] = (),
+    cognify: bool = False,
     *,
-    timeout: float = _INGEST_TIMEOUT,
+    timeout: float | None = None,
 ) -> dict[str, Any]:
     """POST a note to the Node's /ingest (same endpoint MCP citadel_ingest uses).
 
     Sends no dataset, so the seat token routes the write to the dev's private
-    node (personal-by-default), mirroring the SessionEnd hook. Returns the
-    response (``accepted``, ``reason``, ``dataset``, …).
+    node (personal-by-default), mirroring the SessionEnd hook. With cognify=True
+    the Node builds the graph inline and blocks until done (so the note is
+    immediately searchable). Returns the response (``accepted``, ``reason``,
+    ``dataset``, and ``cognified`` when cognify was requested).
     """
+    payload: dict[str, Any] = {"data": data, "tags": list(tags)}
+    if cognify:
+        payload["cognify"] = True
+    resolved = timeout if timeout is not None else (_COGNIFY_TIMEOUT if cognify else _INGEST_TIMEOUT)
     return _request(
         "POST",
         f"{base_url.rstrip('/')}/ingest",
         token=token,
-        payload={"data": data, "tags": list(tags)},
-        timeout=timeout,
+        payload=payload,
+        timeout=resolved,
     )
 
 
-_COGNIFY_TIMEOUT = 180.0  # building the graph is slow; give it room
-
-
-def cognify_node(
-    base_url: str, token: str, dataset: str | None = None, *, timeout: float = _COGNIFY_TIMEOUT
-) -> dict[str, Any]:
-    """POST /api/cognify/run to materialize ingested data into the graph."""
-    payload: dict[str, Any] = {"dataset": dataset} if dataset else {}
-    return _request(
-        "POST", f"{base_url.rstrip('/')}/api/cognify/run", token=token, payload=payload, timeout=timeout
-    )
+_COGNIFY_TIMEOUT = 180.0  # /ingest cognifies inline; give the combined call room
 
 
 def fetch_mesh(base_url: str, token: str | None, *, timeout: float = _TIMEOUT) -> dict[str, Any]:

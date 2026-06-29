@@ -503,6 +503,18 @@ def test_reader_access_can_view_and_search_but_not_mutate() -> None:
     assert sync_run.status_code == 403
 
 
+def test_ingest_inline_cognify_flag() -> None:
+    client = authed_client()
+    # Default: no inline cognify, no `cognified` in the response.
+    plain = client.post("/ingest", json={"data": "note one", "tags": []})
+    assert plain.status_code == 200
+    assert "cognified" not in plain.json()
+    # cognify=True → the Node cognifies inline (server-side) and reports it.
+    with_cognify = client.post("/ingest", json={"data": "note two", "tags": [], "cognify": True})
+    assert with_cognify.status_code == 200
+    assert with_cognify.json()["cognified"] is True
+
+
 def test_writer_access_can_ingest_and_feedback_but_not_admin_actions() -> None:
     client = authed_client("test-writer")
 
