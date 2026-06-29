@@ -41,7 +41,7 @@ evolves only through governed promotion and org sync.
 - **Live knowledge graph** — Central + all seat Nodes on one canvas, plus a
   real-time activity timeline in the web UI.
 - **Zero-dependency client** — `pip install citadel-archive` is pure stdlib; the
-  server stack and TUI are opt-in extras.
+  server stack is an opt-in extra.
 
 ## Quick start
 
@@ -49,7 +49,6 @@ evolves only through governed promotion and org sync.
 
 ```bash
 pipx install citadel-archive          # the `citadel` command (zero-dep client)
-pipx install "citadel-archive[tui]"   # + the live `citadel tui` dashboard
 
 citadel onboard                       # token + hooks + MCP + capture roots (idempotent)
 citadel status                        # connection · identity · local setup  (--json for agents)

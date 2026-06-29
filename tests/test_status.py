@@ -203,4 +203,4 @@ def test_status_command_unhealthy_exits_one(tmp_path: Path, monkeypatch, capsys)
     )
     rc = asyncio.run(_status(args))
     assert rc == 1
-    assert "Not fully connected" in capsys.readouterr().out
+    assert "Not connected" in capsys.readouterr().out

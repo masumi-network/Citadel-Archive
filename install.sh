@@ -97,7 +97,10 @@ else
 fi
 
 say "Installing ${PKG}…"
-run "$PIPX install $PKG"
+# --force so re-running the installer UPGRADES an existing install (plain
+# `pipx install` is a no-op if present); --no-cache-dir so pip can't resolve a
+# stale cached wheel and pin the user to an old version.
+run "$PIPX install --force --pip-args='--no-cache-dir' $PKG"
 
 if [ "$DRY_RUN" = 1 ]; then
   say ""
@@ -109,6 +112,7 @@ CITADEL_BIN="$(command -v citadel 2>/dev/null || true)"
 if [ -z "$CITADEL_BIN" ] && [ -x "$HOME/.local/bin/citadel" ]; then
   CITADEL_BIN="$HOME/.local/bin/citadel"
 fi
+[ -n "$CITADEL_BIN" ] && say "Installed: $("$CITADEL_BIN" --version 2>/dev/null || echo "$PKG")"
 
 say ""
 if [ -z "$CITADEL_BIN" ]; then

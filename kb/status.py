@@ -1,9 +1,8 @@
 """Citadel connectivity + setup status — the shared core.
 
 One stdlib-only place that gathers "am I connected and set up?" so it can be
-surfaced three ways:
+surfaced two ways:
   * `citadel status` / `citadel status --json`  (humans + AI agents via Bash)
-  * the `citadel tui` textual dashboard          (humans, live)
   * any agent/script parsing the JSON.
 
 All network calls are HTTPS-only and never follow redirects (the seat token is
@@ -15,6 +14,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import time
 import urllib.request
 from dataclasses import asdict, dataclass, field
@@ -28,6 +28,7 @@ MCP_SERVER_NAME = "citadel"
 SESSION_HOOK_MARKER = "kb.hooks.sync_session"
 _TIMEOUT = 8.0
 _SEARCH_TIMEOUT = 15.0  # cognee searches are slow when cold; non-gating anyway
+_INGEST_TIMEOUT = 60.0  # /ingest does real write work (and cold nodes are slow)
 _SMOKE_QUERY = "citadel status connectivity smoke"
 
 
@@ -110,12 +111,14 @@ def check_node_health(base_url: str, *, timeout: float = _TIMEOUT) -> Check:
 def check_auth(base_url: str, token: str | None, *, timeout: float = _TIMEOUT) -> Check:
     if not token:
         return Check("auth", ok=False, detail="no token (CITADEL_MCP_ACCESS_TOKEN unset)")
+    started = time.monotonic()
     try:
         data = _request(
             "GET", f"{base_url.rstrip('/')}/api/session", token=token, timeout=timeout
         )
     except Exception as exc:
         return Check("auth", ok=False, detail=str(exc))
+    latency = int((time.monotonic() - started) * 1000)
     identity = {
         "seat_slug": data.get("seat_slug"),
         "node_label": data.get("node_label"),
@@ -123,12 +126,13 @@ def check_auth(base_url: str, token: str | None, *, timeout: float = _TIMEOUT) -
         "capabilities": data.get("capabilities", {}),
         "actor": (data.get("actor") or {}).get("name"),
     }
-    return Check("auth", ok=bool(data.get("ok")), detail="valid", data=identity)
+    return Check("auth", ok=bool(data.get("ok")), detail="valid", latency_ms=latency, data=identity)
 
 
 def check_search(base_url: str, token: str | None, *, timeout: float = _SEARCH_TIMEOUT) -> Check:
     if not token:
         return Check("search", ok=False, detail="skipped (no token)")
+    started = time.monotonic()
     try:
         data = _request(
             "POST",
@@ -138,14 +142,19 @@ def check_search(base_url: str, token: str | None, *, timeout: float = _SEARCH_T
             timeout=timeout,
         )
     except TimeoutError:
-        return Check("search", ok=False, detail=f"timed out (>{int(timeout)}s, node warming up)")
+        return Check(
+            "search", ok=False,
+            detail=f"timed out (>{int(timeout)}s, node warming up)",
+            data={"timed_out": True},
+        )
     except Exception as exc:
         return Check("search", ok=False, detail=str(exc))
+    latency = int((time.monotonic() - started) * 1000)
     results = data.get("results")
     if results is None:
         results = data.get("matches")
     count = len(results) if isinstance(results, list) else 0
-    return Check("search", ok=True, detail=f"{count} result(s)", data={"count": count})
+    return Check("search", ok=True, detail=f"{count} result(s)", latency_ms=latency, data={"count": count})
 
 
 def search_node(
@@ -173,6 +182,53 @@ def search_node(
     if results is None:
         results = data.get("matches")
     return results if isinstance(results, list) else []
+
+
+def ingest_node(
+    base_url: str,
+    token: str,
+    data: str,
+    tags: list[str] | tuple[str, ...] = (),
+    *,
+    timeout: float = _INGEST_TIMEOUT,
+) -> dict[str, Any]:
+    """POST a note to the Node's /ingest (same endpoint MCP citadel_ingest uses).
+
+    Sends no dataset, so the seat token routes the write to the dev's private
+    node (personal-by-default), mirroring the SessionEnd hook. Returns the
+    response (``accepted``, ``reason``, ``dataset``, …).
+    """
+    return _request(
+        "POST",
+        f"{base_url.rstrip('/')}/ingest",
+        token=token,
+        payload={"data": data, "tags": list(tags)},
+        timeout=timeout,
+    )
+
+
+_COGNIFY_TIMEOUT = 180.0  # building the graph is slow; give it room
+
+
+def cognify_node(
+    base_url: str, token: str, dataset: str | None = None, *, timeout: float = _COGNIFY_TIMEOUT
+) -> dict[str, Any]:
+    """POST /api/cognify/run to materialize ingested data into the graph."""
+    payload: dict[str, Any] = {"dataset": dataset} if dataset else {}
+    return _request(
+        "POST", f"{base_url.rstrip('/')}/api/cognify/run", token=token, payload=payload, timeout=timeout
+    )
+
+
+def fetch_mesh(base_url: str, token: str | None, *, timeout: float = _TIMEOUT) -> dict[str, Any]:
+    """Best-effort GET /api/mesh snapshot (knowledge-graph stats). {} on any error."""
+    if not token:
+        return {}
+    try:
+        data = _request("GET", f"{base_url.rstrip('/')}/api/mesh", token=token, timeout=timeout)
+    except Exception:
+        return {}
+    return data if isinstance(data, dict) else {}
 
 
 def check_local_setup(repo: Path, config_path: Path | None = None) -> list[Check]:
@@ -296,10 +352,16 @@ def render_text(report: StatusReport, *, color: bool = False) -> str:
         "",
     ]
 
+    cols = shutil.get_terminal_size((80, 24)).columns
+
     def _row(check: Check) -> str:
         label = _CHECK_LABELS.get(check.name, check.name)
         latency = f"  ({check.latency_ms}ms)" if check.latency_ms is not None else ""
-        return f"  {mark(check.ok, enable=color)} {label:<16} {check.detail}{latency}"
+        detail = check.detail
+        budget = cols - 21 - len(latency)  # 2 indent + glyph + space + 16 label + space
+        if budget > 8 and len(detail) > budget:
+            detail = detail[: budget - 1] + "…"
+        return f"  {mark(check.ok, enable=color)} {label:<16} {detail}{latency}"
 
     conn = [c for c in report.checks if c.name in _CONNECTIVITY]
     local = [c for c in report.checks if c.name not in _CONNECTIVITY]
@@ -320,22 +382,38 @@ def render_text(report: StatusReport, *, color: bool = False) -> str:
             lines.append(f"  · {str(when)[:19]}  {label}")
 
     lines.append("")
-    total = len(report.checks)
-    ok_count = sum(1 for c in report.checks if c.ok)
-    failing = [_CHECK_LABELS.get(c.name, c.name) for c in report.checks if not c.ok]
-    if report.healthy and not failing:
+    conn_fail = [c for c in conn if not c.ok]
+    local_fail = [c for c in local if not c.ok]
+    # A cold-node Search TIMEOUT is non-gating noise; a hard Search error is not.
+    search_fail = [c for c in conn if c.name == "search" and not c.ok]
+    search_warming = any((c.data or {}).get("timed_out") for c in search_fail)
+    search_degraded = any(not (c.data or {}).get("timed_out") for c in search_fail)
+
+    if report.healthy and not conn_fail and not local_fail:
         lines.append(paint("All systems go.", "green", enable=color))
     elif report.healthy:
-        # Connected to the Node, but some local setup is still incomplete.
-        lines.append(paint("All systems go.", "green", enable=color))
-        lines.append(
-            paint(f"  setup incomplete ({ok_count}/{total}) — {', '.join(failing)}", "yellow", enable=color)
-        )
+        # node + auth are OK — say so plainly, then call out only real gaps.
+        lines.append(paint("Connected to the Node.", "green", enable=color))
+        if local_fail:
+            labels = ", ".join(_CHECK_LABELS.get(c.name, c.name) for c in local_fail)
+            lines.append(
+                paint(
+                    f"  Local setup incomplete ({len(local) - len(local_fail)}/{len(local)}) — {labels}.",
+                    "yellow",
+                    enable=color,
+                )
+            )
+            lines.append(paint("  Run `citadel doctor --fix` to repair.", "dim", enable=color))
+        if search_warming:
+            lines.append(paint("  Search: node warming up (non-gating).", "dim", enable=color))
+        elif search_degraded:
+            detail = next((c.detail for c in search_fail), "")
+            lines.append(paint(f"  Search degraded — {detail} (non-gating).", "yellow", enable=color))
     else:
+        labels = ", ".join(_CHECK_LABELS.get(c.name, c.name) for c in conn_fail) or "Node/Auth"
         lines.append(
             paint(
-                f"Not fully connected ({ok_count}/{total} ok) — check: "
-                f"{', '.join(failing)}.  Try `citadel onboard`.",
+                f"Not connected — {labels} failing. Check the Node URL / token, or run `citadel onboard`.",
                 "yellow",
                 enable=color,
             )

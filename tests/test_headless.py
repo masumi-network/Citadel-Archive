@@ -64,6 +64,16 @@ def test_unknown_command_no_match_is_clean(capsys) -> None:
     assert "see all commands" in err
 
 
+def test_bad_flag_choice_not_labeled_unknown_subcommand(capsys) -> None:
+    # A bad value to a --flag with choices= must fall through to argparse,
+    # NOT be relabeled as an unknown subcommand.
+    with pytest.raises(SystemExit):
+        build_parser().parse_args(["feedback", "qa1", "--score", "5"])
+    err = capsys.readouterr().err
+    assert "unknown subcommand" not in err
+    assert "--score" in err
+
+
 def test_setup_json_never_prompts_even_on_tty(tmp_path: Path, monkeypatch, capsys) -> None:
     # --json implies non-interactive: must not call input() even with a TTY.
     monkeypatch.setattr("sys.stdin.isatty", lambda: True)

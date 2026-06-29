@@ -10,28 +10,34 @@ command**. Install the CLI and run it from your repo — the autosync hooks are
 **bundled in the package** (`kb.hooks.*`), so no vendored skill directory is needed.
 
 ```bash
-pipx install citadel-archive    # the `citadel` command (or [tui]/[server] extras)
-citadel onboard
+pipx install citadel-archive    # the zero-dep `citadel` base client
+# upgrade: pipx install --force citadel-archive --pip-args=--no-cache-dir
+#          (plain `pipx upgrade` can land a stale cached build)
+citadel onboard                 # or just run `citadel` on a fresh terminal — it auto-onboards
 ```
 
 On a terminal you'll see the Citadel castle banner (cyan walls, bold wordmark);
-`--json`/piped output is always plain. It walks these steps, merging into
+`--json`/piped output is always plain. A bare `citadel` on a fresh interactive
+terminal auto-enters this wizard (then shows the home screen); skip with
+`--no-onboard` or `CITADEL_NO_ONBOARD=1`. It walks these steps, merging into
 existing config (never clobbering) and safe to re-run:
 
 | Step | What it does | Required? |
 |---|---|---|
 | **Token** | Prompts for your `ctdl_…` seat token, writes `export CITADEL_MCP_ACCESS_TOKEN=…` to your shell rc (once) | yes |
 | **Git pre-push hook** | Installs `.git/hooks/pre-push` → commit snapshots to your **Node** | yes |
-| **SessionEnd hook** | Merges the Claude Code `SessionEnd` hook into `.claude/settings.json` | yes |
+| **Session hooks** | Merges the Claude Code `SessionEnd` + `SessionStart` hooks into `.claude/settings.json` | yes |
 | **MCP server** | Adds the `citadel` HTTP MCP server to `.mcp.json` (in-session `citadel_search` + `citadel_ingest`) | optional, default on (`--no-mcp` to skip) |
 | **Capture roots** | Optional `citadel setup` wizard → `~/.citadel/capture.json` | optional, prompted |
 
 ## Where to get the token
 
-A Citadel admin mints a **seat-writer** token from the connect wizard
+A Citadel admin mints a **seat-writer** token — from the connect wizard
 (`https://citadel-archive-production.up.railway.app/skills/connect` → Create
-seat → role: writer). Paste it when `citadel onboard` asks. It is a secret —
-share it over a private channel only.
+seat → role: writer) or from the terminal with `citadel seat create` (admin,
+needs `CITADEL_ADMIN_KEY`). This one `ctdl_` seat token is the teammate's API
+key. Paste it when `citadel onboard` asks. It is a secret — share it over a
+private channel only.
 
 ## Security
 
@@ -50,7 +56,12 @@ share it over a private channel only.
   `citadel_ingest`) are MCP tools. Enable MCP (default) if you want your IDE
   agent to ground answers in the vault; skip with `--no-mcp` for capture-only.
 - Manual ingest/search always works via the CLI (`citadel ingest`,
-  `citadel search`, `citadel capture`).
+  `citadel search`, `citadel capture`) — both HTTP-backed against the Node by
+  default (`--local` runs the in-process server stack instead).
+- Onboard writes `.mcp.json` for Claude Code. To add the Citadel MCP server to
+  another client, run `citadel mcp add <tool>` (auto-configures Cursor, Codex,
+  Gemini, Windsurf; prints a snippet for the rest — `citadel mcp list` shows
+  targets).
 
 ## Non-interactive / scripted
 
@@ -59,16 +70,16 @@ citadel onboard --non-interactive --token "ctdl_…" \
   --repo /path/to/repo --shell-rc ~/.zshrc --no-capture
 ```
 
-Flags: `--token`, `--repo`, `--shell-rc`, `--no-mcp`, `--no-capture`,
-`--non-interactive`. Exits non-zero if no token is available.
+Flags: `--token`, `--node-url`, `--repo`, `--shell-rc`, `--no-mcp`,
+`--no-capture`, `--non-interactive`. Exits non-zero if no token is available.
 
 ## Check status (the dashboard replacement)
 
 Teammates have no web dashboard — the CLI is the window into Citadel.
 
 ```bash
-citadel status      # one-shot: connection, identity (seat/role), local setup, recent activity
-citadel tui         # live terminal dashboard (needs the [tui] extra)
+citadel status      # one-shot: connection, identity (seat/role), local setup, recent activity, knowledge-mesh stats
+citadel doctor      # diagnose setup; `citadel doctor --fix` repairs common issues
 ```
 
 `citadel status` checks the Node (`/healthz`), your token (`/api/session` →

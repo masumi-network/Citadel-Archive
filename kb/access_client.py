@@ -120,6 +120,20 @@ def create_seat(
     return _request("POST", "/api/access/seats", base_url=base_url, key=key or admin_key(), payload=payload)
 
 
+def issue_seat_token(
+    slug: str, *, base_url: str, token_name: str | None = None, key: str | None = None
+) -> dict[str, Any]:
+    """Mint a fresh token for an existing seat (POST /api/access/seats/<slug>/tokens)."""
+    payload = {"token_name": token_name} if token_name else {}
+    return _request(
+        "POST",
+        f"/api/access/seats/{slug}/tokens",
+        base_url=base_url,
+        key=key or admin_key(),
+        payload=payload,
+    )
+
+
 def create_token(
     *,
     base_url: str,
