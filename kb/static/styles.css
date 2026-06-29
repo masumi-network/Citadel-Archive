@@ -4,36 +4,36 @@
 :root {
   color-scheme: dark;
 
-  /* Surfaces */
-  --bg: #1e1e1e;
-  --chrome: #202020;
-  --surface: #242424;
-  --surface-raised: #262626;
-  --surface-hover: #2a2a2a;
-  --field: #1c1c1c;
+  /* Surfaces — Masumi-aligned dark with a faint emerald-neutral tint */
+  --bg: #0b0f0e;
+  --chrome: #0e1311;
+  --surface: #131b18;
+  --surface-raised: #16201b;
+  --surface-hover: #18241f;
+  --field: #0e1512;
 
   /* Borders */
-  --border: #333333;
-  --border-strong: #3f3f3f;
+  --border: #1e2a25;
+  --border-strong: #294039;
 
   /* Text */
-  --text: #dadada;
-  --muted: #b3b3b3;
-  --quiet: #999999;
+  --text: #eaf1ee;
+  --muted: #a3b3ab;
+  --quiet: #6b7a73;
 
-  /* Accent (Obsidian purple) */
-  --primary: #a882ff;
-  --primary-strong: #c4b1ff;
-  --primary-soft: rgba(168, 130, 255, 0.14);
-  --primary-border: rgba(168, 130, 255, 0.42);
-  --primary-text: #161221;
-  --focus: #c4b1ff;
+  /* Accent — Masumi brand magenta (#FA008C) */
+  --primary: #fa008c;
+  --primary-strong: #ff5cb0;
+  --primary-soft: rgba(250, 0, 140, 0.16);
+  --primary-border: rgba(250, 0, 140, 0.45);
+  --primary-text: #ffffff;
+  --focus: #ff5cb0;
 
-  /* Semantic status */
-  --danger: #e8615f;
-  --warning: #d6b86d;
-  --success: #6ecb8d;
-  --info: #7dd4c0;
+  /* Semantic status — emerald success, cyan info (Citadel CLI heritage), Masumi red */
+  --danger: #fa140a;
+  --warning: #fbbf24;
+  --success: #34d399;
+  --info: #22d3ee;
 
   /* Shape, motion, type */
   --radius: 6px;
@@ -384,6 +384,38 @@ pre {
   padding: 16px;
   overflow-y: auto;
   background: var(--bg);
+}
+
+.subtab-bar {
+  display: flex;
+  gap: 2px;
+  width: 100%;
+  max-width: 1320px;
+  margin: 0 auto 14px;
+  border-bottom: 1px solid var(--border);
+}
+
+.subtab {
+  padding: 8px 14px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+  background: transparent;
+  color: var(--muted);
+  font-family: var(--font);
+  font-size: 13px;
+  font-weight: 550;
+  cursor: pointer;
+  transition: color var(--speed) ease-out, border-color var(--speed) ease-out;
+}
+
+.subtab:hover {
+  color: var(--text);
+}
+
+.subtab.active {
+  color: var(--primary-strong);
+  border-bottom-color: var(--primary);
 }
 
 .page {
@@ -1074,6 +1106,18 @@ pre {
 .event-details {
   margin-top: 2px;
   overflow-wrap: anywhere;
+  font-family: var(--mono);
+  font-size: 11px;
+}
+
+.event-reason {
+  display: inline-block;
+  align-self: start;
+  margin-top: 5px;
+  padding: 2px 8px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  color: var(--warning);
   font-family: var(--mono);
   font-size: 11px;
 }
@@ -2027,7 +2071,7 @@ textarea[aria-invalid="true"] {
 
 .skeleton {
   border-radius: var(--radius);
-  background: linear-gradient(90deg, #242424 0%, #2d2d2d 50%, #242424 100%);
+  background: linear-gradient(90deg, #131b18 0%, #1d2a24 50%, #131b18 100%);
   background-size: 220% 100%;
 }
 
