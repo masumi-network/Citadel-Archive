@@ -25,8 +25,10 @@ TOKEN_ENV = "CITADEL_MCP_ACCESS_TOKEN"
 MCP_SERVER_NAME = "citadel"
 PUSH_MODULE = "kb.hooks.sync_push"
 SESSION_MODULE = "kb.hooks.sync_session"
-# Used both to install the SessionEnd hook and to detect it on re-run.
+START_MODULE = "kb.hooks.sync_start"
+# Used both to install the hooks and to detect them on re-run.
 _SESSION_HOOK_MARKER = SESSION_MODULE
+_START_HOOK_MARKER = START_MODULE
 
 
 def _hook_python() -> str:
@@ -86,6 +88,28 @@ def _session_hook(python: str | None = None) -> dict[str, Any]:
         "timeout": 20,
         "allowedEnvVars": [TOKEN_ENV],
     }
+
+
+def _session_start_hook(python: str | None = None) -> dict[str, Any]:
+    py = python or _hook_python()
+    return {
+        "type": "command",
+        "command": f'"{py}" -m {START_MODULE}',
+        "timeout": 10,
+        "allowedEnvVars": [TOKEN_ENV],
+    }
+
+
+def _event_has_marker(event_list: list[Any], marker: str) -> bool:
+    """True if any hook group in the event list runs a command containing marker."""
+    return any(
+        isinstance(group, dict)
+        and any(
+            isinstance(hook, dict) and marker in str(hook.get("command", ""))
+            for hook in group.get("hooks", [])
+        )
+        for group in event_list
+    )
 
 
 def pre_push_hook_script(python: str | None = None) -> str:
@@ -157,7 +181,12 @@ def merge_mcp_config(path: Path, base_url: str = DEFAULT_NODE_URL) -> str:
 
 
 def merge_claude_settings(path: Path, python: str | None = None) -> str:
-    """Merge the SessionEnd hook into .claude/settings.json without duplicating it."""
+    """Merge the SessionEnd + SessionStart hooks into .claude/settings.json.
+
+    SessionEnd distills the closing session to the dev's node; SessionStart
+    injects a recent-activity digest. Both are idempotent (detected by module
+    marker) so the merge never duplicates them on re-run.
+    """
     data = _load_json_object(path)
     hooks = data.setdefault("hooks", {})
     if not isinstance(hooks, dict):
@@ -165,18 +194,16 @@ def merge_claude_settings(path: Path, python: str | None = None) -> str:
     session_end = hooks.setdefault("SessionEnd", [])
     if not isinstance(session_end, list):
         raise ValueError(f"corrupt {path}: hooks.SessionEnd must be an array")
+    session_start = hooks.setdefault("SessionStart", [])
+    if not isinstance(session_start, list):
+        raise ValueError(f"corrupt {path}: hooks.SessionStart must be an array")
 
-    has_marker = any(
-        isinstance(group, dict)
-        and any(
-            isinstance(hook, dict) and _SESSION_HOOK_MARKER in str(hook.get("command", ""))
-            for hook in group.get("hooks", [])
-        )
-        for group in session_end
-    )
     changed = False
-    if not has_marker:
+    if not _event_has_marker(session_end, _SESSION_HOOK_MARKER):
         session_end.append({"hooks": [_session_hook(python)]})
+        changed = True
+    if not _event_has_marker(session_start, _START_HOOK_MARKER):
+        session_start.append({"matcher": "startup|resume", "hooks": [_session_start_hook(python)]})
         changed = True
     allowed = data.setdefault("httpHookAllowedEnvVars", [])
     if not isinstance(allowed, list):

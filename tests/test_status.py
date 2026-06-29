@@ -161,7 +161,7 @@ def test_render_text_smoke() -> None:
     out = render_text(report)
     assert "seat: sarthi" in out
     assert "All systems go." in out
-    assert "●" in out
+    assert "✓" in out
 
 
 def test_status_command_json_and_exit(tmp_path: Path, monkeypatch, capsys) -> None:

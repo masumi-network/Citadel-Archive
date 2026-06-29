@@ -31,7 +31,7 @@ def test_markup_helpers() -> None:
     report = _report()
     assert "sarthi" in status_tui._identity_markup(report)
     assert "connected" in status_tui._identity_markup(report)
-    assert "node" in status_tui._checks_markup(report)
+    assert "Node" in status_tui._checks_markup(report)
     assert "feat: x" in status_tui._recent_markup(report)
 
 

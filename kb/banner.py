@@ -51,14 +51,30 @@ _ANSI = {
     "yellow": "\033[33m",
 }
 
+# Semantic status glyphs — one shared vocabulary across home/status/onboard so
+# the surfaces read like one product. Shape (not just color) carries pass/fail,
+# so the signal survives NO_COLOR and low-DPI terminals where a filled vs hollow
+# dot is indistinguishable.
+OK = "✓"
+FAIL = "✗"
+WARN = "!"
+SKIP = "⊘"
+BULLET = "•"
+
 
 def supports_color(stream: IO[str] | None = None) -> bool:
-    """True only on a real TTY that hasn't opted out (NO_COLOR / dumb term)."""
+    """True on a real TTY (or when forced) that hasn't opted out.
+
+    Opt-outs (NO_COLOR / TERM=dumb) win over force flags. FORCE_COLOR /
+    CLICOLOR_FORCE then enable color even when piped (e.g. `… | less -R`).
+    """
     stream = stream if stream is not None else sys.stdout
     if os.getenv("NO_COLOR"):
         return False
     if os.getenv("TERM") == "dumb":
         return False
+    if os.getenv("FORCE_COLOR") or os.getenv("CLICOLOR_FORCE"):
+        return True
     try:
         return bool(stream.isatty())
     except (AttributeError, ValueError):
@@ -71,6 +87,16 @@ def paint(text: str, *styles: str, enable: bool = True) -> str:
         return text
     codes = "".join(_ANSI.get(style, "") for style in styles)
     return f"{codes}{text}{_ANSI['reset']}" if codes else text
+
+
+def glyph(ok: bool) -> str:
+    """The bare pass/fail glyph (✓ / ✗) — shape carries the signal sans color."""
+    return OK if ok else FAIL
+
+
+def mark(ok: bool, *, enable: bool = True) -> str:
+    """The status glyph painted green (pass) or red (fail)."""
+    return paint(glyph(ok), "green" if ok else "red", enable=enable)
 
 
 def banner_large(*, color: bool = True) -> str:

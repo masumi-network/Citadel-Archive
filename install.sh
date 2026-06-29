@@ -101,23 +101,28 @@ run "$PIPX install $PKG"
 
 if [ "$DRY_RUN" = 1 ]; then
   say ""
-  say "  [dry-run] would show the citadel home screen here"
+  say "  [dry-run] would launch: citadel onboard   (guided setup)"
   exit 0
 fi
 
-# End on the brand: show the home screen if `citadel` is reachable this session.
 CITADEL_BIN="$(command -v citadel 2>/dev/null || true)"
 if [ -z "$CITADEL_BIN" ] && [ -x "$HOME/.local/bin/citadel" ]; then
   CITADEL_BIN="$HOME/.local/bin/citadel"
 fi
 
 say ""
-if [ -n "$CITADEL_BIN" ]; then
-  "$CITADEL_BIN" || true
-  say ""
-  say "Next:  citadel onboard     # set up this repo (token · hooks · MCP · capture)"
-else
+if [ -z "$CITADEL_BIN" ]; then
   say "Done. Open a new shell so your PATH updates, then run:"
   say "  citadel             # the home screen"
   say "  citadel onboard     # set up this repo"
+# Land directly in guided onboarding when a controlling terminal is reachable
+# (even under `curl | sh`, where this script's stdin is the pipe). The
+# `< /dev/tty` redirect hands the wizard the user's keyboard. With -y or no tty
+# (CI), fall back to printing the home screen + a next-step hint instead.
+elif [ "$ASSUME_YES" != 1 ] && { : > /dev/tty; } 2>/dev/null; then
+  "$CITADEL_BIN" onboard < /dev/tty || true
+else
+  "$CITADEL_BIN" --no-onboard || true
+  say ""
+  say "Next:  citadel onboard     # set up this repo (token · hooks · MCP · capture)"
 fi
