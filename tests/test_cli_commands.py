@@ -134,10 +134,14 @@ def test_ingest_no_token_exits_one(monkeypatch, capsys) -> None:
 
 def test_ingest_cognifies_by_default(monkeypatch, capsys) -> None:
     monkeypatch.setattr("kb.cli.capture_token", lambda: "ctdl_x")
-    monkeypatch.setattr("kb.status.ingest_node", lambda *a, **k: {"accepted": True, "dataset": "seat:alice"})
-    calls: list = []
-    monkeypatch.setattr("kb.status.cognify_node", lambda *a, **k: calls.append(a) or {"ok": True})
+    seen: dict = {}
+
+    def fake_ingest(base_url, token, data, tags, cognify=False, **k):
+        seen["cognify"] = cognify  # the Node is asked to cognify inline
+        return {"accepted": True, "dataset": "seat:alice", "cognified": True}
+
+    monkeypatch.setattr("kb.status.ingest_node", fake_ingest)
     rc = asyncio.run(_ingest(_ingest_args(no_cognify=False)))
     assert rc == 0
-    assert calls  # cognify was triggered after a successful ingest
+    assert seen["cognify"] is True
     assert json.loads(capsys.readouterr().out)["cognified"] is True

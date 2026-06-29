@@ -280,6 +280,10 @@ class IngestBody(BaseModel):
     dataset: str | None = None
     tags: list[str] = Field(default_factory=list)
     session_id: str | None = None
+    # When true, cognify the written dataset inline (server-side, where it holds
+    # the single Kuzu writer) and block until done — so a writer's ingest is
+    # immediately searchable without needing the admin-only cognify endpoint.
+    cognify: bool = False
 
 
 class SearchBody(BaseModel):
@@ -3113,7 +3117,17 @@ async def ingest(body: IngestBody, request: Request) -> Any:
             ),
         },
     )
-    return jsonable_encoder(result)
+    payload = jsonable_encoder(result)
+    # Inline cognify (opt-in) so the just-written data is immediately searchable.
+    # The write already succeeded; a cognify failure must NOT fail the ingest.
+    if body.cognify and result.accepted:
+        try:
+            await citadel.cognify_dataset(dataset=outcome.dataset)
+            payload["cognified"] = True
+        except Exception as exc:  # pragma: no cover - depends on runtime Cognee state
+            logger.error("inline cognify after ingest failed: %s", exc.__class__.__name__)
+            payload["cognified"] = False
+    return payload
 
 
 @app.get("/api/contributions/recent")

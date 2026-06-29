@@ -174,17 +174,22 @@ async def _ingest(args: argparse.Namespace) -> int:
         return 1
     from kb.status import ingest_node
 
+    # Cognify inline (server-side) by default so the note is immediately
+    # searchable; the one request blocks until cognify finishes (--no-cognify skips).
+    cognify = not getattr(args, "no_cognify", False)
+    as_json = getattr(args, "json", False)
+    spinner_msg = "Ingesting + building the graph…" if cognify else "Ingesting to your Node…"
     try:
-        with _Spinner("Ingesting to your Node…"):
-            result = await asyncio.to_thread(ingest_node, base_url, token, args.data, args.tag)
+        with _Spinner(spinner_msg):
+            result = await asyncio.to_thread(ingest_node, base_url, token, args.data, args.tag, cognify)
     except urllib.error.HTTPError as exc:
         detail = exc.read().decode(errors="replace")[:200] if exc.fp else exc.reason
         print(f"citadel ingest: HTTP {exc.code} {detail}", file=sys.stderr)
         return 1
     except TimeoutError:
         print(
-            "citadel ingest: timed out waiting for the Node (it may still be ingesting — "
-            "check with `citadel search` shortly).",
+            "citadel ingest: the Node is still working (cognify can be slow). Your note is "
+            "saved — it'll be searchable shortly; check `citadel search`.",
             file=sys.stderr,
         )
         return 1
@@ -196,44 +201,27 @@ async def _ingest(args: argparse.Namespace) -> int:
     accepted = result.get("accepted", True)
     # A duplicate is a benign, idempotent no-op — not a failure.
     duplicate = (not accepted) and "duplicate" in str(result.get("reason") or "")
-    as_json = getattr(args, "json", False)
+    cognified = result.get("cognified")  # True/False from the Node, or None (not requested / old Node)
     color = supports_color()
     dataset = result.get("dataset") or "your node"
     scope = "your private seat" if str(dataset).startswith("seat:") else "shared org vault"
 
-    # Confirm the write (and WHERE it went) before the slower cognify step.
-    if accepted and not as_json:
-        print(
-            f"  {mark(True, enable=color)} ingested to {paint(dataset, 'cyan', enable=color)}  "
-            f"{paint('(' + scope + ')', 'dim', enable=color)}"
-        )
-
-    # Every ingest cognifies by default so it's immediately searchable (--no-cognify to skip).
-    cognified: bool | None = None
-    if accepted and not getattr(args, "no_cognify", False):
-        from kb.status import cognify_node
-
-        try:
-            with _Spinner("Cognifying (building the graph)…"):
-                await asyncio.to_thread(cognify_node, base_url, token, result.get("dataset"))
-            cognified = True
-        except (
-            TimeoutError, urllib.error.URLError, urllib.error.HTTPError,
-            OSError, ValueError, http.client.HTTPException,
-        ):
-            cognified = False
-
     if as_json:
-        if cognified is not None:
-            result["cognified"] = cognified
         _print_json(result)
         return 0 if (accepted or duplicate) else 1
 
     if accepted:
+        print(
+            f"  {mark(True, enable=color)} ingested to {paint(dataset, 'cyan', enable=color)}  "
+            f"{paint('(' + scope + ')', 'dim', enable=color)}"
+        )
         if cognified is True:
             print(f"  {mark(True, enable=color)} cognified — now searchable")
         elif cognified is False:
-            print(f"  {paint(SKIP, 'yellow', enable=color)} cognify still running on the Node (will finish shortly)")
+            print(f"  {paint(SKIP, 'yellow', enable=color)} ingested, but cognify didn't finish — the next Node sync will pick it up")
+        elif cognify:
+            # Requested cognify but the Node didn't report it (older Node, pre inline-cognify).
+            print(paint("  (graph update will happen on the next Node sync)", "dim", enable=color))
     elif duplicate:
         print(
             f"  {paint(SKIP, 'yellow', enable=color)} already in your vault (duplicate) — nothing new to add"
@@ -670,13 +658,19 @@ def _access_exit(exc: AccessClientError, *, as_json: bool) -> int:
 
 
 def _print_minted_token(token: str, api_token: dict[str, Any], *, color: bool) -> None:
-    """Print a freshly minted token once, with a store-it-now warning."""
+    """Print a freshly minted token once, with its write-scope + adopt steps."""
     print()
     print(paint("  Token (shown once — copy it now, it cannot be retrieved later):", "yellow", enable=color))
     print("    " + paint(token, "bold", enable=color))
-    meta = f"  id={api_token.get('id')}  role={api_token.get('role')}"
-    print(paint(meta, "dim", enable=color))
-    print(paint("  Share over a private channel; the teammate pastes it into `citadel onboard`.", "dim", enable=color))
+    dataset = api_token.get("default_dataset")
+    if dataset and str(dataset).startswith("seat:"):
+        scope = f"ingests go to {dataset} (their private seat) only"
+    elif dataset:
+        scope = f"ingests go to {dataset}"
+    else:
+        scope = "ingests go to the org default dataset — NOT a private seat"
+    print(paint(f"  scope: {scope}  ·  role={api_token.get('role')}", "dim", enable=color))
+    print(paint("  Adopt:  citadel onboard --token <token-above>   ·   share over a private channel", "dim", enable=color))
 
 
 async def _seat_list(args: argparse.Namespace) -> int:
@@ -754,7 +748,6 @@ async def _seat_token(args: argparse.Namespace) -> int:
     )
     if result.get("token"):
         _print_minted_token(result["token"], result.get("api_token", {}), color=color)
-        print(paint("  Adopt it with:  citadel onboard --token <token-above>", "dim", enable=color))
     return 0
 
 
@@ -778,6 +771,17 @@ async def _token_create(args: argparse.Namespace) -> int:
     print(paint(f"Token created  (principal {result.get('principal', {}).get('id')})", "green", enable=color))
     if result.get("token"):
         _print_minted_token(result["token"], result.get("api_token", {}), color=color)
+    # Standalone tokens are NOT seat-scoped — steer teammate tokens to seats.
+    api_token = result.get("api_token", {})
+    if not str(api_token.get("default_dataset") or "").startswith("seat:"):
+        print(
+            paint(
+                "  Note: this is a standalone token (not a private seat). For a teammate, use "
+                "`citadel seat create \"Name\" slug` so their writes land in their own seat.",
+                "yellow",
+                enable=color,
+            )
+        )
     return 0
 
 
@@ -1084,6 +1088,44 @@ def _humanize_status(status: str) -> tuple[str, bool, bool]:
     return status, True, False
 
 
+def _print_banner_animated(text: str, color: bool) -> None:
+    """Reveal the banner line-by-line for a little ceremony (TTY + color only)."""
+    if not (color and sys.stdout.isatty()):
+        print(text)
+        return
+    import time
+
+    for line in text.split("\n"):
+        sys.stdout.write(line + "\n")
+        sys.stdout.flush()
+        time.sleep(0.035)
+
+
+def _render_onboard_identity(auth: Any, node_url: str, color: bool) -> str:
+    """Who this token belongs to — seat, role, access — shown on onboard."""
+    if not getattr(auth, "ok", False):
+        detail = getattr(auth, "detail", "could not verify")
+        return (
+            f"  {mark(False, enable=color)} "
+            + paint(f"token not verified ({detail}) — saved anyway; run `citadel status` to recheck.", "yellow", enable=color)
+        )
+    ident = getattr(auth, "data", None) or {}
+    seat = ident.get("seat_slug") or ident.get("actor") or "—"
+    caps = ident.get("capabilities") or {}
+    access = " · ".join(
+        flag for flag, on in (("read", caps.get("read")), ("write", caps.get("write")), ("admin", caps.get("admin"))) if on
+    ) or "—"
+    writes = f"seat:{seat}" if ident.get("seat_slug") else "shared org dataset"
+    return "\n".join([
+        paint(f"  {mark(True, enable=color)} authenticated", "green", enable=color),
+        f"      seat     {paint(str(seat), 'cyan', enable=color)}",
+        f"      role     {ident.get('role') or '—'}",
+        f"      access   {access}",
+        f"      writes   {writes}",
+        paint(f"      node     {node_url}", "dim", enable=color),
+    ])
+
+
 async def _onboard(args: argparse.Namespace) -> int:
     repo = Path(args.repo).expanduser() if args.repo else git_root_or_cwd()
     as_json = getattr(args, "json", False)
@@ -1092,7 +1134,7 @@ async def _onboard(args: argparse.Namespace) -> int:
     node_url = (getattr(args, "node_url", None) or DEFAULT_NODE_URL).rstrip("/")
 
     if interactive:
-        print(banner(color=color))
+        _print_banner_animated(banner(color=color), color)
 
     token = (args.token or os.environ.get(TOKEN_ENV) or "").strip()
     if not token and interactive:
@@ -1113,6 +1155,15 @@ async def _onboard(args: argparse.Namespace) -> int:
             file=sys.stderr,
         )
         return 1
+
+    # Verify the token + resolve its identity (seat / role / access) to show the
+    # user who they're onboarding as. Interactive-only: keeps scripts/CI offline.
+    auth = None
+    if interactive:
+        from kb.status import check_auth
+
+        with _Spinner("Verifying your token…"):
+            auth = await asyncio.to_thread(check_auth, node_url, token)
 
     rc_path = Path(args.shell_rc).expanduser() if args.shell_rc else detect_shell_rc()
     steps: list[tuple[str, str]] = []
@@ -1170,6 +1221,9 @@ async def _onboard(args: argparse.Namespace) -> int:
 
     if not interactive:
         print(banner(color=color))
+    if auth is not None:
+        print()
+        print(_render_onboard_identity(auth, node_url, color))
     print(f"\nCitadel onboarding for {repo}  (token {mask_token(token)}):")
     for label, status in steps:
         text, ok, skipped = _humanize_status(status)
