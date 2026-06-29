@@ -2,6 +2,59 @@
 
 Last updated: 2026-06-29.
 
+## 2026-06-29 — v0.2.0 + v0.2.1: CLI DX overhaul shipped (PyPI + Railway)
+
+The client got a top-to-bottom UX pass and shipped as `citadel-archive` 0.2.0
+then 0.2.1 — **published to PyPI, deployed to Railway, cut as a GitHub release.**
+What changed for users:
+
+- **Seat-scoped ingest that actually works, with inline cognify.** `citadel
+  ingest` (and `citadel search`) are now HTTP-backed by default — they route to
+  your seat via the token, no `[server]` extra needed (`--local` still runs the
+  in-process stack). `ingest` cognifies **inline server-side** so the note is
+  searchable immediately (`--no-cognify` to skip), and prints its destination +
+  scope (private seat vs shared org dataset). `--json` on both.
+- **Richer `citadel status`.** Absorbed the old TUI's data into a "Knowledge
+  mesh" section (documents / nodes / edges / searches) — no separate command to
+  launch.
+- **`citadel doctor` (+ `--fix`).** Diagnoses setup drift — token-in-rc-not-env,
+  MCP/capture Node mismatch, missing hooks/`.mcp.json`, Node-rejected token — and
+  repairs the safe ones.
+- **Seat / token minting.** `citadel seat create "Name" slug` mints a seat + a
+  seat-scoped writer token (a teammate ingests ONLY into their `seat:slug`);
+  `citadel seat token <slug>` mints a FRESH token for an EXISTING seat (re-link a
+  lost token); `citadel token create` is for standalone/service-account tokens
+  (warns it is NOT seat-scoped); `citadel token revoke <id>`. Every mint prints
+  its write-scope; the seat token is the per-user "API key". Admin commands need
+  `CITADEL_ADMIN_KEY`.
+- **First-run onboarding.** Bare `citadel` on an interactive TTY auto-enters
+  onboarding once, then shows the home screen (`--no-onboard` /
+  `CITADEL_NO_ONBOARD` to skip; `install.sh` runs it via `/dev/tty`). `citadel
+  onboard` verifies the pasted token, shows seat/role/access, and installs
+  token→shell rc + git pre-push hook + Claude SessionEnd **and** SessionStart
+  hooks + `.mcp.json` (+ optional capture roots); `--node-url` targets a custom
+  Node.
+- **Multi-tool MCP.** `citadel mcp add <tool>` / `citadel mcp list` auto-write
+  Cursor, Codex, Gemini, Windsurf (token stays in the shell rc via an env
+  reference); print a paste-in snippet for Claude user-scope, Cline, Zed (those
+  store the token in plaintext). Pi has no native MCP (info note only).
+- **Friendlier UX.** Shared ✓/✗ glyphs, animated cyan spinner + banner reveal,
+  narrow-terminal truncation, friendly errors for bare subcommand groups / typos
+  / missing args, clean Ctrl-C (exit 130), `--version`.
+- **TUI removed entirely.** No more `citadel tui`, no `[tui]`/textual extra. The
+  zero-dep stdlib client install is just `pipx install citadel-archive`. Upgrade
+  with `pipx install --force citadel-archive --pip-args=--no-cache-dir` (plain
+  `pipx upgrade` can pull a stale cached wheel).
+- **One server change.** The Node's evolve auto-sync interval was shortened
+  **6h → 1h** (`CITADEL_EVOLVE_INTERVAL_SECONDS=3600`), and the `/ingest` endpoint
+  gained the inline `cognify` flag that the new CLI ingest relies on. Autonomous
+  ingestion stays: SessionEnd hook (session → seat) + git pre-push hook (commit
+  metadata → seat) + the hourly evolve cycle (GitHub/Linear/repo sync + cognify);
+  personal-by-default → seat, promote to shared via `citadel promotion`.
+
+**Deferred NEXT project:** event-driven sync — GitHub/Linear webhooks +
+incremental cognify (replace the hourly poll with push-triggered ingest).
+
 ## 2026-06-29 (continued) — Cognee 1.2.2, Linear live, smoke verified, release closed
 
 The remaining release tasks are done (verified via the live admin key through

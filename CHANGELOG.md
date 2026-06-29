@@ -4,6 +4,76 @@ All notable changes to `citadel-archive` are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses
 [Semantic Versioning](https://semver.org/).
 
+## [0.2.1] — 2026-06-29
+
+### Added
+
+- **`citadel ingest` cognifies inline by default** — server-side cognify on the
+  ingest path so the note is immediately searchable. `--no-cognify` skips it
+  (faster; data appears in search later). Ingest prints the destination + scope
+  (private seat vs shared org dataset).
+- **`citadel seat token <slug>`** — mint a fresh seat-scoped token for an
+  **existing** seat (re-link a lost/rotated token), distinct from `seat create`.
+- **Write-scope clarity on every mint** — `seat create`, `seat token`, and
+  `token create` each print the token's write-scope; `token create` warns that
+  standalone tokens are **not** seat-scoped.
+- **`citadel doctor` (+`--fix`)** — diagnoses setup drift (token-in-rc-not-env,
+  MCP/capture Node mismatch, missing hooks/`.mcp.json`, Node-rejected token);
+  `--fix` repairs the safe ones.
+- **`citadel onboard` token verify + identity panel** — verifies the pasted
+  token against the Node and shows seat / role / access before wiring anything.
+
+### Changed
+
+- **`citadel ingest` / `citadel search` are HTTP-backed by default** — they
+  route to your seat via the token (no `[server]` extra needed). `--local` runs
+  the in-process server stack instead (needs `[server]`). Both keep `--json`.
+- **Friendlier failure modes** — narrow-terminal truncation, friendly errors for
+  bare subcommand groups / typos / missing args, and clean Ctrl-C (exit 130).
+- **`install.sh` upgrade path** uses `pipx install --force … --pip-args=--no-cache-dir`
+  so upgrades never pull a stale cached wheel.
+
+### Removed
+
+- **TUI removed entirely** — there is no `citadel tui` command and the `[tui]`
+  (textual) extra is dropped. Its data moved into `citadel status` as a
+  "Knowledge mesh" section (documents / nodes / edges / searches).
+
+### Server
+
+- **`/ingest` gained an inline `cognify` flag** so the Node can cognify on the
+  ingest request (backing `citadel ingest`'s default).
+- **Evolve auto-sync interval shortened 6h → 1h** (`CITADEL_EVOLVE_INTERVAL_SECONDS=3600`):
+  GitHub / Linear / repo sync + cognify now run hourly.
+
+## [0.2.0] — 2026-06-29
+
+### Added
+
+- **Guided first-run onboarding** — bare `citadel` on an interactive TTY
+  auto-enters onboarding once, then shows the home screen on later runs. Skip
+  with `--no-onboard` / `CITADEL_NO_ONBOARD`; `install.sh` runs onboarding via
+  `/dev/tty`.
+- **Multi-tool MCP wiring** — `citadel mcp add <tool>` / `citadel mcp list`.
+  Auto-writes Cursor, Codex, Gemini, and Windsurf (token stays in the shell rc
+  via an env reference) and prints a paste-in snippet for Claude user-scope,
+  Cline, and Zed (which store the token in plaintext). Pi has no native MCP
+  (info note only).
+- **Admin `seat` / `token` commands** (need `CITADEL_ADMIN_KEY`) —
+  `citadel seat create "Name" slug` mints a seat + a seat-scoped writer token
+  (a teammate ingests only into their `seat:slug`); `citadel seat list`;
+  `citadel token create` mints standalone/service-account tokens and
+  `citadel token revoke <id>` revokes by id.
+- **`citadel onboard --node-url`** — target a custom Node during onboarding. The
+  onboard now also installs the Claude `SessionStart` hook alongside the
+  existing `SessionEnd` hook, the git pre-push hook, and `.mcp.json`.
+- **`citadel --version` / `citadel version`**.
+
+### Changed
+
+- **Stdlib CLI UX overhaul** — shared ✓/✗ glyphs, an animated cyan spinner +
+  banner reveal, and hardened argparse error/exit handling across the CLI.
+
 ## [0.1.3] — 2026-06-28
 
 ### Added
@@ -83,6 +153,8 @@ self-hosted Organization Vault server.
   references it as `${CITADEL_MCP_ACCESS_TOKEN}` and it is never echoed.
 - The pre-push allowlist fails **closed** on a corrupt config.
 
+[0.2.1]: https://github.com/masumi-network/Citadel-Archive/releases/tag/v0.2.1
+[0.2.0]: https://github.com/masumi-network/Citadel-Archive/releases/tag/v0.2.0
 [0.1.3]: https://github.com/masumi-network/Citadel-Archive/releases/tag/v0.1.3
 [0.1.2]: https://github.com/masumi-network/Citadel-Archive/releases/tag/v0.1.2
 [0.1.1]: https://github.com/masumi-network/Citadel-Archive/releases/tag/v0.1.1

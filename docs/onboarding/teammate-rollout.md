@@ -17,10 +17,17 @@ Mint a **seat-writer** token for the teammate. Seat-writer tokens route every
 capture to that teammate's private node (`seat:{slug}`) — they cannot read or
 write anyone else's node, and they get no admin powers.
 
+```bash
+# Admin (CITADEL_ADMIN_KEY set): mint the seat + its seat-scoped writer token
+citadel seat create "Jane Dev" jane    # prints a ctdl_… token scoped to seat:jane
+
+# Lost the token later? Re-mint a fresh one for the existing seat:
+citadel seat token jane
 ```
-Open:  https://citadel-archive-production.up.railway.app/skills/connect
-       (admin → "Create seat" → role: writer → copy the ctdl_… token)
-```
+
+(The web Access page —
+`https://citadel-archive-production.up.railway.app/skills/connect` — does the
+same thing if you'd rather click.)
 
 Hand the token to the teammate over a private channel. It is a secret — treat
 it like a password.
@@ -33,6 +40,7 @@ Install the CLI, then run onboard from the repo:
 
 ```bash
 pipx install citadel-archive     # the `citadel` command (lightweight, zero-dep client)
+# upgrade: pipx install --force citadel-archive --pip-args=--no-cache-dir
 citadel onboard
 ```
 
@@ -147,8 +155,8 @@ in scripts/CI.
 ## Verify (30 seconds)
 
 ```bash
-citadel status        # connection + identity + local setup (expect all ●); --json for agents
-# or:  citadel tui    # live dashboard (needs the [tui] extra)
+citadel status        # connection + identity + local setup + knowledge mesh (expect all ●); --json for agents
+# or:  citadel doctor # diagnose setup issues; --fix repairs the safe ones
 
 # Token works + MCP search returns results:
 #   in Claude Code, ask: "use citadel_search to find what we decided about the vault"
