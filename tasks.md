@@ -1,5 +1,24 @@
 # Citadel Tasks
 
+## Web dashboard rebrand + nav consolidation ✅ (PR #24, prod 2026-06-29)
+
+- [x] Masumi brand palette (magenta `#FA008C` + emerald/cyan) via `:root` tokens; all status/toast/alert tints migrated; `brand.md` set (was "deferred")
+- [x] Sidebar 14 → 6 (Overview·Search·Knowledge·Activity·Write·Admin) with content sub-tab groups driving `setPage()`; role-gating + loaders unchanged
+- [x] Surface ingest reject `details.reason` on timeline cards
+- [x] Adversarial pre-ship review (wiring·role-gating·CSS·regression) → CLEAN_TO_SHIP; a11y follow-ups (button-hover contrast, `--quiet` AA) fixed
+- [x] **Merged PR #24 → prod**; Railway deploy verified live + healthy
+- [ ] Polish follow-ups (low): remove orphaned `.nav-section-label` CSS; migrate 2 modal/overlay grey literals to tokens; fix sub-tab bar stacking + tiny permanent scroll
+
+## Dispute / poisoned-material removal — designed, queued (not built)
+
+**Plan:** [`docs/dispute-quarantine-plan.md`](docs/dispute-quarantine-plan.md) · branch `feat/dispute-quarantine`
+
+- [x] Codebase audit + adversarial risk pass; v1 scope + defaults locked (2026-06-29)
+- [ ] **v1 — Quarantine (A):** `kb/dispute_queue.py` + JSON quarantine store; recall post-filter + `_guard_content` re-ingest blocklist; capture cognee `data_id` at ingest
+- [ ] **v1 — Dispute queue (C):** `kb/dispute.py` DisputeEngine (writer flag → admin uphold/dismiss), cloning promotion; HTTP + MCP + web Disputes sub-tab; `knowledge:remove` scope; audit
+- [ ] Tests mirroring `tests/test_promotion.py`
+- [ ] **Deferred — Hard erase (B):** wire `cognee.forget` behind admin approval; needs `data_id` backfill + re-grounded reversibility (cognee soft-delete API doesn't exist as first specced)
+
 ## ADR-0007 execution — seat capture, promotion, write policy (~100% — shipped)
 
 **Plan:** [`docs/adr-0007-shipping-plan.md`](docs/adr-0007-shipping-plan.md)  

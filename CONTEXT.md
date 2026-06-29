@@ -40,6 +40,18 @@ _Avoid_: self-learning, magic sync, auto-truth
 Org-bound syncs receive full processing (security review, enrichment, and structuring); raw seat-**Node** agent memory receives lighter indexing only.
 _Avoid_: same pipeline for all content, skip processing, full enrichment everywhere
 
+**Poisoned Material**:
+**Source Material** or **Structured Knowledge** that is false, malicious, or carries injected instructions and must be contained or removed. Always "Poisoned Material" — never "poisoned node", since **Node** already means a seat's private store.
+_Avoid_: bad data, spam, poisoned node
+
+**Quarantine**:
+A reversible suppression that hides **Poisoned Material** from retrieval and blocks its re-ingest, without deleting the underlying **Structured Knowledge**.
+_Avoid_: delete, ban, archive
+
+**Dispute**:
+A **Vault Member**-raised flag that an item is **Poisoned Material**, routed through review (flag → admin approval) before removal.
+_Avoid_: report, complaint, conflict
+
 **Vault Member**:
 A human participant who has permission to access an **Organization Vault**.
 _Avoid_: user, teammate, account

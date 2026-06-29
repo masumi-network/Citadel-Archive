@@ -2,6 +2,43 @@
 
 Last updated: 2026-06-29.
 
+## 2026-06-29 (continued) — Web dashboard rebranded to Masumi + nav 14→6 (shipped)
+
+The **Organization Vault** web dashboard got a brand + IA pass and shipped to prod
+([PR #24](https://github.com/masumi-network/Citadel-Archive/pull/24), `faf731a`).
+
+- **Masumi brand palette.** The web UI was on a placeholder violet (`brand.md` had
+  the web palette "deferred"). Now Masumi's declared **magenta `#FA008C`** on a dark
+  emerald-neutral base — emerald `#34D399` = indexed/healthy, cyan `#22D3EE` = info
+  (nod to the CLI's cyan), Masumi red `#FA140A` = failure. All status/toast/alert
+  tints migrated off the old literals; `brand.md` set (was "deferred").
+- **Sidebar 14 → 6** — Overview · Search · Knowledge · Activity · Write · Admin.
+  Merged groups (Knowledge+Sources, Activity+Conflicts, Write=Note+Feedback,
+  Admin=Agents/Access/Audit/Settings) exposed via a content sub-tab bar driving the
+  existing `setPage()`; role-gating + per-page loaders unchanged.
+- **Reject reason surfaced** on timeline cards (`details.reason`, e.g.
+  `duplicate_in_process`) — the Node already recorded it; the UI was dropping it.
+- **Verified** by a 4-dimension adversarial pre-ship review (wiring · role-gating ·
+  CSS · regression) → CLEAN_TO_SHIP; a11y follow-ups (button-hover contrast,
+  `--quiet` AA) fixed before merge. Live + healthy on Railway.
+- Low polish remaining: orphaned `.nav-section-label` CSS, 2 modal greys on old
+  literals, sub-tab bar stacking above page headings.
+
+## 2026-06-29 (continued) — Dispute / poisoned-material removal: designed + planned
+
+Designed a corrupt/**poisoned-material** removal capability (7-agent codebase audit
++ adversarial risk pass). Plan on `feat/dispute-quarantine`
+([`docs/dispute-quarantine-plan.md`](dispute-quarantine-plan.md)); **no code yet.**
+
+- **Finding:** Citadel is append-only — no delete path today. cognee 1.2.2 *can*
+  `forget` (smallest unit = a whole **Source Material** document, NOT a single graph
+  entity), but it's unwired and the cognee `data_id` needed to target a doc is never
+  persisted.
+- **Approved v1:** **Quarantine** (reversible suppress-from-retrieval + re-ingest
+  blocklist) + a **Dispute** queue (writer flags → admin approves), both cloning the
+  promotion pipeline. **Hard erase deferred** behind admin approval, pending
+  `data_id` capture + a re-grounded reversibility story.
+
 ## 2026-06-29 — v0.2.0 + v0.2.1: CLI DX overhaul shipped (PyPI + Railway)
 
 The client got a top-to-bottom UX pass and shipped as `citadel-archive` 0.2.0
