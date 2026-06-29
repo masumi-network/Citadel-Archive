@@ -4,13 +4,18 @@ import argparse
 import asyncio
 import difflib
 import functools
+import getpass
+import http.client
 import json
 import os
 import re
 import sys
+import threading
 import urllib.error
 from collections.abc import Awaitable, Callable
 from datetime import datetime, timezone
+from importlib.metadata import PackageNotFoundError
+from importlib.metadata import version as _pkg_version
 from pathlib import Path
 from typing import Any, NoReturn
 
@@ -39,7 +44,14 @@ from kb.onboard import (
     merge_claude_settings,
     merge_mcp_config,
 )
-from kb.banner import banner, banner_large, paint, supports_color
+from kb.banner import SKIP, banner, banner_large, mark, paint, supports_color
+from kb.access_client import (
+    AccessClientError,
+    create_seat,
+    create_token,
+    list_seats,
+    revoke_token,
+)
 from kb.promotion_client import (
     PromotionClientError,
     approve_pending,
@@ -55,6 +67,44 @@ def _print_json(value: Any) -> None:
     print(json.dumps(value, default=str, indent=2))
 
 
+class _Spinner:
+    """A minimal stdlib spinner on stderr (so stdout stays clean/parseable).
+
+    Active only when stderr is a real TTY; a no-op otherwise (CI, pipes, --json),
+    so it never pollutes captured output.
+    """
+
+    _FRAMES = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+
+    def __init__(self, message: str) -> None:
+        self.message = message
+        self.enable = sys.stderr.isatty()
+        self._stop = threading.Event()
+        self._thread: threading.Thread | None = None
+
+    def _run(self) -> None:
+        i = 0
+        while not self._stop.is_set():
+            frame = self._FRAMES[i % len(self._FRAMES)]
+            sys.stderr.write(f"\r{frame} {self.message}")
+            sys.stderr.flush()
+            i += 1
+            self._stop.wait(0.1)
+
+    def __enter__(self) -> "_Spinner":
+        if self.enable:
+            self._thread = threading.Thread(target=self._run, daemon=True)
+            self._thread.start()
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        self._stop.set()
+        if self._thread:
+            self._thread.join(timeout=0.5)
+            sys.stderr.write("\r\033[K")  # erase the spinner line
+            sys.stderr.flush()
+
+
 def _needs_server(
     fn: Callable[[argparse.Namespace], Awaitable[Any]],
 ) -> Callable[[argparse.Namespace], Awaitable[Any]]:
@@ -62,19 +112,36 @@ def _needs_server(
 
     @functools.wraps(fn)
     async def wrapper(args: argparse.Namespace) -> Any:
+        cmd = getattr(args, "command", "") or ""
         try:
             return await fn(args)
         except ImportError as exc:
             missing = getattr(exc, "name", None) or str(exc)
             print(
-                f"`citadel {getattr(args, 'command', '')}` needs the server extra:\n"
-                "  pip install 'citadel-archive[server]'\n"
+                f"`citadel {cmd}` needs the server extra:\n"
+                "  pip install 'citadel-archive[server]'"
+                "    (pipx: pipx install --force 'citadel-archive[server]')\n"
                 f"  (missing dependency: {missing})",
                 file=sys.stderr,
             )
             return 2
+        except Exception as exc:
+            # Operational failure (network, cognee, bad dataset): a clean stderr
+            # line and a nonzero exit — never a raw traceback dumped at the user.
+            print(f"citadel {cmd}: {exc}", file=sys.stderr)
+            return 1
 
     return wrapper
+
+
+def _result_exit(value: Any) -> int:
+    """Exit 1 when a result payload carries ``ok: False``; else 0.
+
+    Closes the 'JSON says failed but exit 0' gap without each handler having to
+    special-case it. Values without an ``ok`` key (lists, plain results) → 0.
+    """
+    data = value if isinstance(value, dict) else getattr(value, "__dict__", {})
+    return 1 if isinstance(data, dict) and data.get("ok") is False else 0
 
 
 @_needs_server
@@ -89,10 +156,65 @@ async def _ingest(args: argparse.Namespace) -> None:
         session_id=args.session,
     )
     _print_json(result.__dict__)
+    return _result_exit(result)
+
+
+def _render_search(results: list[Any], query: str) -> None:
+    color = supports_color()
+    if not results:
+        print(paint(f'No results for "{query}".', "dim", enable=color))
+        return
+    print(f'{len(results)} result(s) for "{query}":\n')
+    for index, item in enumerate(results, 1):
+        if isinstance(item, dict):
+            text = (
+                item.get("text") or item.get("content") or item.get("summary")
+                or item.get("title") or item.get("name") or json.dumps(item, default=str)
+            )
+        else:
+            text = str(item)
+        text = " ".join(str(text).split())
+        snippet = text[:300] + ("…" if len(text) > 300 else "")
+        print(f"  {paint(f'{index}.', 'cyan', enable=color)} {snippet}")
+
+
+async def _search(args: argparse.Namespace) -> int:
+    """Search the Organization Vault over HTTP (the Node), like MCP citadel_search.
+
+    Zero-dep: hits the Node's /search with the seat token, so base-install
+    teammates can query the same vault their agent sees. `--local` runs the
+    in-process server stack instead (needs the [server] extra).
+    """
+    if getattr(args, "local", False):
+        return await _search_local(args)
+    base_url = node_base_url(getattr(args, "node_url", None))
+    token = capture_token()
+    if not token:
+        print(
+            "citadel search: no token — set CITADEL_MCP_ACCESS_TOKEN or run `citadel onboard`.",
+            file=sys.stderr,
+        )
+        return 1
+    from kb.status import search_node
+
+    try:
+        results = await asyncio.to_thread(search_node, base_url, token, args.query, args.top_k)
+    except urllib.error.HTTPError as exc:
+        detail = exc.read().decode(errors="replace")[:200] if exc.fp else exc.reason
+        print(f"citadel search: HTTP {exc.code} {detail}", file=sys.stderr)
+        return 1
+    except (urllib.error.URLError, OSError, ValueError, http.client.HTTPException) as exc:
+        print(f"citadel search: {exc}", file=sys.stderr)
+        return 1
+    if getattr(args, "json", False):
+        _print_json(results)
+    else:
+        _render_search(results, args.query)
+    return 0
 
 
 @_needs_server
-async def _search(args: argparse.Namespace) -> None:
+async def _search_local(args: argparse.Namespace) -> int:
     from kb.service import Citadel
 
     kb = Citadel.from_env()
@@ -103,6 +225,7 @@ async def _search(args: argparse.Namespace) -> None:
         top_k=args.top_k,
     )
     _print_json(results)
+    return _result_exit(results)
 
 
 @_needs_server
@@ -121,6 +244,7 @@ async def _feedback(args: argparse.Namespace) -> None:
         )
     )
     _print_json(result.__dict__)
+    return _result_exit(result)
 
 
 @_needs_server
@@ -130,6 +254,7 @@ async def _improve(args: argparse.Namespace) -> None:
     kb = Citadel.from_env()
     result = await kb.improve(dataset=args.dataset, session_ids=args.session_id)
     _print_json(result)
+    return _result_exit(result)
 
 
 @_needs_server
@@ -139,6 +264,7 @@ async def _cognify(args: argparse.Namespace) -> None:
     kb = Citadel.from_env()
     result = await kb.cognify_dataset(dataset=args.dataset, verify=args.verify)
     _print_json(result)
+    return _result_exit(result)
 
 
 @_needs_server
@@ -159,6 +285,7 @@ async def _sync_github(args: argparse.Namespace) -> None:
     )
     result = await syncer.run(force=args.force, dry_run=args.dry_run)
     _print_json(result)
+    return _result_exit(result)
 
 
 @_needs_server
@@ -169,6 +296,7 @@ async def _sync_repo_content(args: argparse.Namespace) -> None:
     syncer = RepoContentSyncer(Citadel.from_env())
     result = await syncer.run(force=args.force, dry_run=args.dry_run)
     _print_json(result)
+    return _result_exit(result)
 
 
 @_needs_server
@@ -183,6 +311,7 @@ async def _learn(args: argparse.Namespace) -> None:
         include_digest_preview=not args.hide_digest_preview,
     )
     _print_json(result)
+    return _result_exit(result)
 
 
 def _parse_root_arg(raw: str) -> tuple[str, tuple[str, ...]]:
@@ -259,9 +388,10 @@ async def _setup(args: argparse.Namespace) -> int:
     written = save_capture_config(
         config, path=config_path, updated_at=datetime.now(timezone.utc).isoformat()
     )
-    if not getattr(args, "json", False):
+    if getattr(args, "json", False):
+        _print_json(load_capture_config(config_path).to_dict())
+    else:
         print(f"\nSaved {len(config.roots)} approved root(s) to {written}")
-    _print_json(load_capture_config(config_path).to_dict())
     return 0
 
 
@@ -330,8 +460,7 @@ async def _capture(args: argparse.Namespace) -> int:
                 print(f"FAIL {root.path}: {exc}", file=sys.stderr)
     if as_json:
         _print_json({"ok": failures == 0, "results": results})
-    else:
-        _print_json(results)
+    # Human mode already printed a per-root OK/FAIL line during the loop.
     return 1 if failures else 0
 
 
@@ -431,6 +560,197 @@ async def _promotion_run(args: argparse.Namespace) -> int:
     return 0 if result.get("ok") else 1
 
 
+def _access_exit(exc: AccessClientError, *, as_json: bool) -> int:
+    if as_json:
+        _print_json({"ok": False, "error": str(exc), "status": exc.status, "body": exc.body})
+    else:
+        print(f"citadel: {exc}", file=sys.stderr)
+    return 1
+
+
+def _print_minted_token(token: str, api_token: dict[str, Any], *, color: bool) -> None:
+    """Print a freshly minted token once, with a store-it-now warning."""
+    print()
+    print(paint("  Token (shown once — copy it now, it cannot be retrieved later):", "yellow", enable=color))
+    print("    " + paint(token, "bold", enable=color))
+    meta = f"  id={api_token.get('id')}  role={api_token.get('role')}"
+    print(paint(meta, "dim", enable=color))
+    print(paint("  Share over a private channel; the teammate pastes it into `citadel onboard`.", "dim", enable=color))
+
+
+async def _seat_list(args: argparse.Namespace) -> int:
+    as_json = args.json
+    try:
+        result = list_seats(base_url=node_base_url(args.node_url))
+    except AccessClientError as exc:
+        return _access_exit(exc, as_json=as_json)
+    if as_json:
+        _print_json(result)
+        return 0
+    color = supports_color()
+    seats = result.get("seats") or []
+    print(f"Seats ({len(seats)}):")
+    for seat in seats:
+        disabled = paint("  [disabled]", "red", enable=color) if seat.get("disabled") else ""
+        slug = paint(str(seat.get("seat_slug") or "—"), "cyan", enable=color)
+        print(
+            f"  {slug}  {seat.get('name', '')}  role={seat.get('role')}  "
+            f"tokens={seat.get('active_token_count', 0)}{disabled}"
+        )
+    return 0
+
+
+async def _seat_create(args: argparse.Namespace) -> int:
+    as_json = args.json
+    try:
+        result = create_seat(
+            base_url=node_base_url(args.node_url),
+            name=args.name,
+            slug=args.slug,
+            email=args.email,
+            role=args.role,
+            issue_token=not args.no_token,
+        )
+    except AccessClientError as exc:
+        return _access_exit(exc, as_json=as_json)
+    if as_json:
+        _print_json(result)
+        return 0
+    color = supports_color()
+    principal = result.get("principal", {})
+    print(
+        paint(
+            f"Seat created: {principal.get('seat_slug')}  (dataset {principal.get('default_dataset')})",
+            "green",
+            enable=color,
+        )
+    )
+    token = result.get("token")
+    if token:
+        _print_minted_token(token, result.get("api_token", {}), color=color)
+    else:
+        print("  (no token issued — re-run without --no-token to mint one)")
+    return 0
+
+
+async def _token_create(args: argparse.Namespace) -> int:
+    as_json = args.json
+    try:
+        result = create_token(
+            base_url=node_base_url(args.node_url),
+            name=args.name,
+            role=args.role,
+            kind=args.kind,
+            default_dataset=args.dataset,
+            expires_at=args.expires_at,
+        )
+    except AccessClientError as exc:
+        return _access_exit(exc, as_json=as_json)
+    if as_json:
+        _print_json(result)
+        return 0
+    color = supports_color()
+    print(paint(f"Token created  (principal {result.get('principal', {}).get('id')})", "green", enable=color))
+    if result.get("token"):
+        _print_minted_token(result["token"], result.get("api_token", {}), color=color)
+    return 0
+
+
+async def _token_revoke(args: argparse.Namespace) -> int:
+    as_json = args.json
+    try:
+        result = revoke_token(args.token_id, base_url=node_base_url(args.node_url))
+    except AccessClientError as exc:
+        return _access_exit(exc, as_json=as_json)
+    if as_json:
+        _print_json(result)
+        return 0
+    print(f"Revoked {args.token_id}")
+    return 0 if result.get("ok") else 1
+
+
+def _indent(text: str, prefix: str = "    ") -> str:
+    return "\n".join(prefix + line for line in text.splitlines())
+
+
+def _wire_detected_tools(node_url: str, *, color: bool) -> None:
+    """Interactive: offer to add Citadel's MCP server to each detected tool.
+
+    Write-tier tools (token stays in the rc via an env reference) are merged on
+    confirmation; snippet-tier tools print a paste-in block on request; Pi gets
+    a note. Used only on an interactive `citadel onboard`.
+    """
+    from kb import tool_detect
+
+    detected = tool_detect.detect()
+    if not detected:
+        return
+    print("\n" + paint("Coding tools", "bold", enable=color))
+    for name in detected:
+        spec = tool_detect.SPECS[name]
+        if spec.mode == "write":
+            answer = input(f"  Add Citadel MCP to {spec.label}? [Y/n]: ").strip().lower()
+            if answer not in ("", "y", "yes"):
+                continue
+            result = tool_detect.apply(name, node_url=node_url)
+            sigil = mark(result.action != "error", enable=color)
+            print(f"  {sigil} {spec.label}  {paint(f'{result.action} · {result.detail}', 'dim', enable=color)}")
+        elif spec.mode == "snippet":
+            answer = input(f"  Show paste-in MCP snippet for {spec.label}? [y/N]: ").strip().lower()
+            if answer not in ("y", "yes"):
+                continue
+            result = tool_detect.apply(name, node_url=node_url)
+            print(paint(f"    → {spec.config_hint}", "dim", enable=color))
+            print(_indent(result.snippet or ""))
+        else:  # note (e.g. Pi)
+            result = tool_detect.apply(name, node_url=node_url)
+            print(f"  {paint('•', 'dim', enable=color)} {spec.label}: {paint(result.detail, 'dim', enable=color)}")
+
+
+async def _mcp_add(args: argparse.Namespace) -> int:
+    from kb import tool_detect
+
+    node_url = node_base_url(args.node_url)
+    color = supports_color()
+    targets = tool_detect.ALL_TOOLS if args.tool == "all" else [args.tool]
+    rc = 0
+    for name in targets:
+        if name not in tool_detect.SPECS:
+            print(f"citadel mcp add: unknown tool {name!r} "
+                  f"(choose from: {', '.join(tool_detect.ALL_TOOLS)}, all)", file=sys.stderr)
+            rc = 1
+            continue
+        spec = tool_detect.SPECS[name]
+        result = tool_detect.apply(name, node_url=node_url)
+        if spec.mode == "write":
+            ok = result.action != "error"
+            rc = rc or (0 if ok else 1)
+            print(f"  {mark(ok, enable=color)} {spec.label}  "
+                  f"{paint(f'{result.action} · {result.detail}', 'dim', enable=color)}")
+        elif spec.mode == "snippet":
+            print(paint(f"{spec.label} — paste into {spec.config_hint}:", "bold", enable=color))
+            print(_indent(result.snippet or ""))
+        else:
+            print(f"{spec.label}: {result.detail}")
+    return rc
+
+
+async def _mcp_list(args: argparse.Namespace) -> int:
+    from kb import tool_detect
+
+    color = supports_color()
+    detected = tool_detect.detect()
+    if not detected:
+        print("No known coding tools detected.")
+        return 0
+    print(f"Detected coding tools ({len(detected)}):")
+    for name in detected:
+        spec = tool_detect.SPECS[name]
+        mode = {"write": "auto-write", "snippet": "snippet", "note": "note"}[spec.mode]
+        print(f"  {paint(name.ljust(9), 'cyan', enable=color)} {mode:<10} {paint(spec.config_hint, 'dim', enable=color)}")
+    return 0
+
+
 async def _status(args: argparse.Namespace) -> int:
     repo = Path(args.repo).expanduser() if args.repo else git_root_or_cwd()
     config_path = Path(args.config).expanduser() if args.config else capture_config_path()
@@ -440,23 +760,149 @@ async def _status(args: argparse.Namespace) -> int:
         node_url = args.node_url or DEFAULT_NODE_URL
     token = capture_token() or None
 
-    report = await asyncio.to_thread(
-        gather_status,
-        node_url,
-        token,
-        repo=repo,
-        config_path=config_path,
-        with_search=not args.no_search,
-        with_recent=not args.no_recent,
-    )
+    async def _gather() -> Any:
+        return await asyncio.to_thread(
+            gather_status,
+            node_url,
+            token,
+            repo=repo,
+            config_path=config_path,
+            with_search=not args.no_search,
+            with_recent=not args.no_recent,
+        )
+
     if args.json:
+        report = await _gather()
         _print_json(report.to_dict())
     else:
+        # The search check can take ~15s cold — spin so it doesn't look hung.
+        with _Spinner("Checking Citadel…"):
+            report = await _gather()
         use_color = supports_color()
         print(banner(color=use_color))
         print()
         print(render_text(report, color=use_color))
     return 0 if report.healthy else 1
+
+
+def _mcp_node_url(path: Path) -> str | None:
+    """The Node base URL wired into .mcp.json (citadel server), sans /mcp/ suffix."""
+    try:
+        servers = json.loads(path.read_text()).get("mcpServers", {})
+        url = (servers.get("citadel") or {}).get("url", "")
+    except (OSError, ValueError, AttributeError):
+        return None
+    for suffix in ("/mcp/", "/mcp"):
+        if url.endswith(suffix):
+            return url[: -len(suffix)]
+    return url or None
+
+
+async def _doctor(args: argparse.Namespace) -> int:
+    """Diagnose common Citadel misconfigs and (with --fix) repair the safe ones."""
+    repo = Path(args.repo).expanduser() if args.repo else git_root_or_cwd()
+    config_path = Path(args.config).expanduser() if args.config else capture_config_path()
+    try:
+        cap_node = load_capture_config(config_path).node_url
+    except ValueError:
+        cap_node = None
+    node_url = args.node_url or cap_node or DEFAULT_NODE_URL
+    token = capture_token() or None
+    as_json = getattr(args, "json", False)
+    color = supports_color() and not as_json
+
+    async def _gather() -> Any:
+        return await asyncio.to_thread(
+            gather_status, node_url, token, repo=repo, config_path=config_path,
+            with_search=False, with_recent=False,
+        )
+
+    if as_json:
+        report = await _gather()
+    else:
+        with _Spinner("Diagnosing Citadel…"):
+            report = await _gather()
+    checks = {c.name: c for c in report.checks}
+
+    issues: list[dict[str, Any]] = []
+    env_token = bool(os.getenv(TOKEN_ENV))
+    rc_path = detect_shell_rc()
+    try:
+        rc_has = rc_path.exists() and f"{TOKEN_ENV}=" in rc_path.read_text()
+    except OSError:
+        rc_has = False
+    if not env_token and rc_has:
+        issues.append({"problem": f"token is in {rc_path} but not this shell's env",
+                       "fix": f"source {rc_path}  (or open a new shell)"})
+    elif not env_token and not rc_has:
+        issues.append({"problem": "no seat token configured", "fix": "citadel onboard"})
+
+    node = checks.get("node")
+    if node and not node.ok:
+        issues.append({"problem": f"Node unreachable at {node_url} ({node.detail})",
+                       "fix": "check the Node URL / network"})
+    auth = checks.get("auth")
+    # Only call it a token rejection when the Node is actually reachable — when
+    # the Node is down, auth fails too, and we must not tell the user to rotate
+    # a perfectly valid token.
+    if node and node.ok and token and auth and not auth.ok:
+        issues.append({"problem": f"Node rejected the token ({auth.detail})",
+                       "fix": "token revoked/expired or wrong Node — re-mint (`citadel seat create`) or re-onboard"})
+
+    mcp_node = _mcp_node_url(repo / ".mcp.json")
+    if mcp_node and cap_node and mcp_node.rstrip("/") != cap_node.rstrip("/"):
+        issues.append({"problem": f".mcp.json Node ({mcp_node}) disagrees with capture config ({cap_node})",
+                       "fix": f"citadel onboard --node-url {cap_node}"})
+
+    if checks.get("pre_push_hook") and not checks["pre_push_hook"].ok:
+        issues.append({"problem": "git pre-push autosync hook missing", "fix": "citadel doctor --fix", "kind": "pre_push"})
+    if checks.get("session_hook") and not checks["session_hook"].ok:
+        issues.append({"problem": "Claude SessionEnd/SessionStart hooks missing", "fix": "citadel doctor --fix", "kind": "session"})
+    if checks.get("mcp") and not checks["mcp"].ok:
+        issues.append({"problem": ".mcp.json missing the citadel MCP server", "fix": "citadel doctor --fix", "kind": "mcp"})
+
+    fixed: list[str] = []
+    if getattr(args, "fix", False):
+        for issue in issues:
+            kind = issue.get("kind")
+            try:
+                if kind == "pre_push":
+                    if not install_pre_push_hook(repo).startswith("skipped"):
+                        fixed.append("pre-push hook")
+                elif kind == "session":
+                    merge_claude_settings(repo / ".claude" / "settings.json")
+                    fixed.append("Claude hooks")
+                elif kind == "mcp":
+                    merge_mcp_config(repo / ".mcp.json", node_url)
+                    fixed.append("MCP server")
+            except (ValueError, OSError):
+                pass
+
+    if as_json:
+        _print_json({
+            "ok": not issues,
+            "node_url": node_url,
+            "issues": [{k: v for k, v in i.items() if k != "kind"} for i in issues],
+            "fixed": fixed,
+        })
+        return 1 if issues else 0
+
+    print(banner(color=color))
+    print()
+    if not issues:
+        print(paint("✓ No problems found.", "green", enable=color))
+        return 0
+    print(paint(f"Found {len(issues)} issue(s):", "yellow", enable=color))
+    for issue in issues:
+        print(f"  {mark(False, enable=color)} {issue['problem']}")
+        print(f"      {paint('fix: ' + issue['fix'], 'dim', enable=color)}")
+    if fixed:
+        print()
+        print(paint(f"Applied: {', '.join(fixed)}. Re-run `citadel doctor` to confirm.", "green", enable=color))
+    elif any(i.get("kind") for i in issues):
+        print()
+        print(paint("Run `citadel doctor --fix` to apply the auto-fixable ones.", "dim", enable=color))
+    return 1
 
 
 async def _tui(args: argparse.Namespace) -> int:
@@ -483,14 +929,42 @@ async def _tui(args: argparse.Namespace) -> int:
     return 0
 
 
+def _humanize_status(status: str) -> tuple[str, bool, bool]:
+    """Map a raw onboard step status → (human text, ok, skipped).
+
+    Step functions return machine tokens like ``skipped:not-git``; humans should
+    never see those. Skipped steps are not failures (they render with ⊘).
+    """
+    if status.startswith("skipped:"):
+        reason = status.split(":", 1)[1].replace("-", " ")
+        reason = {"not git": "not a git repo"}.get(reason, reason)
+        return f"skipped ({reason})", True, True
+    return status, True, False
+
+
 async def _onboard(args: argparse.Namespace) -> int:
     repo = Path(args.repo).expanduser() if args.repo else git_root_or_cwd()
     as_json = getattr(args, "json", False)
     interactive = sys.stdin.isatty() and not args.non_interactive and not as_json
+    color = supports_color() and not as_json
+    node_url = (getattr(args, "node_url", None) or DEFAULT_NODE_URL).rstrip("/")
+
+    if interactive:
+        print(banner(color=color))
 
     token = (args.token or os.environ.get(TOKEN_ENV) or "").strip()
     if not token and interactive:
-        token = input("Paste your Citadel seat token (ctdl_…): ").strip()
+        # Guide the new user to the token instead of dead-ending on an error.
+        print(
+            f"\nGet your seat token from the Citadel dashboard:  "
+            f"{paint(node_url, 'cyan', enable=color)}\n"
+            "  (log in with the admin key → Create Seat → copy the ctdl_… token)\n"
+        )
+        try:
+            # getpass: the pasted secret is not echoed to the screen/scrollback.
+            token = getpass.getpass("Paste your Citadel seat token (ctdl_…): ").strip()
+        except (EOFError, KeyboardInterrupt):
+            print()
     if not token:
         print(
             "citadel onboard: no token — pass --token or set CITADEL_MCP_ACCESS_TOKEN.",
@@ -505,10 +979,26 @@ async def _onboard(args: argparse.Namespace) -> int:
         steps.append(("git pre-push hook", install_pre_push_hook(repo)))
         steps.append(("SessionEnd hook", merge_claude_settings(repo / ".claude" / "settings.json")))
         if not args.no_mcp:
-            steps.append(("MCP server (.mcp.json)", merge_mcp_config(repo / ".mcp.json")))
+            steps.append(("MCP server (.mcp.json)", merge_mcp_config(repo / ".mcp.json", node_url)))
     except ValueError as exc:
         print(f"citadel onboard: {exc}", file=sys.stderr)
         return 1
+
+    # A custom --node-url is persisted to the capture config so MCP and capture
+    # target the same Node (no split-brain). Done before the roots wizard, which
+    # preserves node_url when it re-saves.
+    if getattr(args, "node_url", None):
+        try:
+            cfg_path = capture_config_path()
+            existing = load_capture_config(cfg_path)
+            save_capture_config(
+                CaptureConfig(node_url=node_url, roots=existing.roots, version=existing.version),
+                path=cfg_path,
+                updated_at=datetime.now(timezone.utc).isoformat(),
+            )
+            steps.append((f"node url → {cfg_path}", node_url))
+        except ValueError:
+            pass
 
     want_capture = not args.no_capture and interactive
     if want_capture:
@@ -520,6 +1010,9 @@ async def _onboard(args: argparse.Namespace) -> int:
                 cfg, path=cfg_path, updated_at=datetime.now(timezone.utc).isoformat()
             )
             steps.append((f"capture roots → {cfg_path}", f"{len(cfg.roots)} root(s)"))
+
+    if interactive and not getattr(args, "no_tools", False):
+        _wire_detected_tools(node_url, color=color)
 
     if as_json:
         _print_json(
@@ -533,10 +1026,16 @@ async def _onboard(args: argparse.Namespace) -> int:
         )
         return 0
 
-    print(banner(color=supports_color()))
+    if not interactive:
+        print(banner(color=color))
     print(f"\nCitadel onboarding for {repo}  (token {mask_token(token)}):")
     for label, status in steps:
-        print(f"  • {label}: {status}")
+        text, ok, skipped = _humanize_status(status)
+        sigil = paint(SKIP, "yellow", enable=color) if skipped else mark(ok, enable=color)
+        print(f"  {sigil} {label}  {paint(text, 'dim', enable=color)}")
+    done = sum(1 for _, status in steps if not status.startswith("skipped"))
+    print()
+    print(paint(f"Citadel configured — {done}/{len(steps)} steps wired.", "green", enable=color))
     print(
         f"\nNext: restart your shell (or `source {rc_path}`), then in your agent ask:\n"
         '  "use citadel_search to find what we decided about the vault"'
@@ -547,7 +1046,8 @@ async def _onboard(args: argparse.Namespace) -> int:
 _HOME_MENU = (
     ("Get started", (
         ("onboard", "one-command setup — token · hooks · MCP · capture roots"),
-        ("status", "connection · identity · local setup    (--json for agents)"),
+        ("status", "connection · identity · local setup (--json for agents)"),
+        ("doctor", "diagnose setup problems · --fix to repair"),
     )),
     ("Capture", (
         ("setup", "declare Approved Capture Roots (~/.citadel/capture.json)"),
@@ -559,7 +1059,37 @@ _HOME_MENU = (
         ("search", "search the Organization Vault"),
         ("ingest", "add a durable note to your Node"),
     )),
+    ("Connect & admin", (
+        ("mcp", "add Citadel MCP to Claude · Cursor · Codex · …"),
+        ("seat", "create · list seats and mint tokens (admin)"),
+        ("token", "create · revoke standalone tokens (admin)"),
+    )),
 )
+
+
+def _already_onboarded() -> bool:
+    """Network-free check: has the user ever completed onboarding?
+
+    Onboarding is "done" once the token is wired (any one ⇒ onboarded), checked
+    offline so the home screen and the first-run gate stay instant and work
+    without the Node:
+      1. CITADEL_MCP_ACCESS_TOKEN in the environment (current shell)
+      2. an ``export CITADEL_MCP_ACCESS_TOKEN=`` line in the shell rc — the signal
+         that survives a fresh post-install shell, where the env var isn't set yet
+
+    A capture config alone is NOT a signal: ``citadel setup`` writes one without
+    ever wiring a token, so counting it would falsely suppress first-run
+    onboarding and show "✓ set up" with no token.
+    """
+    if os.environ.get(TOKEN_ENV):
+        return True
+    try:
+        rc = detect_shell_rc()
+        if rc.exists() and f"{TOKEN_ENV}=" in rc.read_text():
+            return True
+    except OSError:
+        pass
+    return False
 
 
 def _print_home() -> None:
@@ -567,11 +1097,24 @@ def _print_home() -> None:
     print(banner_large(color=color))
     print()
     print("  " + paint("the organization vault", "dim", enable=color))
+    if _already_onboarded():
+        state = mark(True, enable=color) + " " + paint("set up", "green", enable=color)
+    else:
+        state = (
+            mark(False, enable=color)
+            + " "
+            + paint("not set up", "red", enable=color)
+            + paint(" — run ", "dim", enable=color)
+            + paint("citadel onboard", "cyan", enable=color)
+        )
+    print("  " + state)
     print()
+    # Pad command names to the widest, so descriptions form a clean column.
+    pad = max(len(name) for _, rows in _HOME_MENU for name, _ in rows) + 2
     for title, rows in _HOME_MENU:
         print("  " + paint(title, "bold", enable=color))
         for name, desc in rows:
-            label = paint(name.ljust(9), "cyan", enable=color)
+            label = paint(name.ljust(pad), "cyan", enable=color)
             print(f"    {label} {paint(desc, 'dim', enable=color)}")
         print()
     print("  " + paint("Run `citadel <command> --help` for details.", "dim", enable=color))
@@ -608,6 +1151,16 @@ class CitadelParser(argparse.ArgumentParser):
 
 def build_parser() -> argparse.ArgumentParser:
     parser = CitadelParser(prog="citadel")
+    try:
+        _version = _pkg_version("citadel-archive")
+    except PackageNotFoundError:
+        _version = "0+unknown"
+    parser.add_argument("--version", action="version", version=f"citadel {_version}")
+    parser.add_argument(
+        "--no-onboard",
+        action="store_true",
+        help="Skip first-run onboarding on bare `citadel` (also via CITADEL_NO_ONBOARD)",
+    )
     # Not required: bare `citadel` shows the banner + command list instead of an error.
     subcommands = parser.add_subparsers(dest="command")
 
@@ -622,6 +1175,17 @@ def build_parser() -> argparse.ArgumentParser:
     status.add_argument("--no-search", action="store_true", help="Skip the search smoke check")
     status.add_argument("--no-recent", action="store_true", help="Skip recent-activity fetch")
     status.set_defaults(handler=_status)
+
+    doctor = subcommands.add_parser(
+        "doctor",
+        help="Diagnose setup problems and suggest (or --fix) repairs",
+    )
+    doctor.add_argument("--fix", action="store_true", help="Apply safe auto-fixes (hooks, .mcp.json)")
+    doctor.add_argument("--json", action="store_true", help="Machine-readable output")
+    doctor.add_argument("--node-url", help="Override Node URL")
+    doctor.add_argument("--repo", help="Repo to check (default: git toplevel or cwd)")
+    doctor.add_argument("--config", help="Override capture config path")
+    doctor.set_defaults(handler=_doctor)
 
     tui = subcommands.add_parser(
         "tui",
@@ -639,9 +1203,16 @@ def build_parser() -> argparse.ArgumentParser:
     onboard.add_argument("--token", help="Seat token (else prompt, or use env)")
     onboard.add_argument("--repo", help="Repo root (default: git toplevel or cwd)")
     onboard.add_argument("--shell-rc", help="Shell rc file for the token export")
+    onboard.add_argument(
+        "--node-url",
+        help="Node URL to wire into MCP/capture (default: the built-in Node)",
+    )
     onboard.add_argument("--no-mcp", action="store_true", help="Skip writing .mcp.json")
     onboard.add_argument(
         "--no-capture", action="store_true", help="Skip Approved Capture Roots setup"
+    )
+    onboard.add_argument(
+        "--no-tools", action="store_true", help="Skip detecting/adding MCP to other coding tools"
     )
     onboard.add_argument(
         "--non-interactive", action="store_true", help="No prompts; requires --token"
@@ -738,6 +1309,81 @@ def build_parser() -> argparse.ArgumentParser:
     promo_run.add_argument("--node-url", help="Override Node URL")
     promo_run.set_defaults(handler=_promotion_run)
 
+    seat = subcommands.add_parser(
+        "seat",
+        help="Manage seats (admin — reads the admin key from CITADEL_ADMIN_KEY)",
+    )
+    seat_sub = seat.add_subparsers(dest="seat_command", required=True)
+
+    seat_list = seat_sub.add_parser("list", help="List seats, roles, and active token counts")
+    seat_list.add_argument("--json", action="store_true", help="Machine-readable output")
+    seat_list.add_argument("--node-url", help="Override Node URL")
+    seat_list.set_defaults(handler=_seat_list)
+
+    seat_create = seat_sub.add_parser(
+        "create", help="Create a seat and mint its writer token (printed once)"
+    )
+    seat_create.add_argument("name", help='Human name, e.g. "Alice Smith"')
+    seat_create.add_argument("slug", help="Seat slug, e.g. alice (a-z, 0-9, hyphen)")
+    seat_create.add_argument("--email", help="Optional contact email")
+    seat_create.add_argument(
+        "--role", default="writer", choices=("writer", "reader"), help="Seat role (default: writer)"
+    )
+    seat_create.add_argument(
+        "--no-token", action="store_true", help="Create the seat without issuing a token"
+    )
+    seat_create.add_argument("--json", action="store_true", help="Machine-readable output")
+    seat_create.add_argument("--node-url", help="Override Node URL")
+    seat_create.set_defaults(handler=_seat_create)
+
+    token = subcommands.add_parser(
+        "token",
+        help="Manage standalone tokens (admin — reads CITADEL_ADMIN_KEY)",
+    )
+    token_sub = token.add_subparsers(dest="token_command", required=True)
+
+    token_create = token_sub.add_parser(
+        "create", help="Issue a standalone (service-account) token, printed once"
+    )
+    token_create.add_argument("name", help="Token name/label")
+    token_create.add_argument(
+        "--role", default="reader", choices=("reader", "writer", "admin"),
+        help="Token role (default: reader)",
+    )
+    token_create.add_argument(
+        "--kind", default="service_account", choices=("service_account", "user"),
+        help="Principal kind (default: service_account)",
+    )
+    token_create.add_argument("--dataset", help="Default dataset for the token")
+    token_create.add_argument("--expires-at", help="ISO 8601 expiry timestamp (optional)")
+    token_create.add_argument("--json", action="store_true", help="Machine-readable output")
+    token_create.add_argument("--node-url", help="Override Node URL")
+    token_create.set_defaults(handler=_token_create)
+
+    token_revoke = token_sub.add_parser("revoke", help="Revoke a token by id (token_…)")
+    token_revoke.add_argument("token_id", help="Token id to revoke (token_…)")
+    token_revoke.add_argument("--json", action="store_true", help="Machine-readable output")
+    token_revoke.add_argument("--node-url", help="Override Node URL")
+    token_revoke.set_defaults(handler=_token_revoke)
+
+    mcp = subcommands.add_parser(
+        "mcp",
+        help="Add the Citadel MCP server to your other coding tools",
+    )
+    mcp_sub = mcp.add_subparsers(dest="mcp_command", required=True)
+
+    mcp_add = mcp_sub.add_parser(
+        "add", help="Add Citadel MCP to a tool (or 'all') — writes config or prints a snippet"
+    )
+    mcp_add.add_argument(
+        "tool", help="Tool to wire: claude, cursor, codex, gemini, windsurf, cline, zed, pi, or all"
+    )
+    mcp_add.add_argument("--node-url", help="Override Node URL")
+    mcp_add.set_defaults(handler=_mcp_add)
+
+    mcp_list = mcp_sub.add_parser("list", help="List detected coding tools and how each is wired")
+    mcp_list.set_defaults(handler=_mcp_list)
+
     ingest = subcommands.add_parser("ingest", help="Ingest text or a path through Cognee")
     ingest.add_argument("data")
     ingest.add_argument("--dataset")
@@ -745,11 +1391,18 @@ def build_parser() -> argparse.ArgumentParser:
     ingest.add_argument("--tag", action="append", default=[])
     ingest.set_defaults(handler=_ingest)
 
-    search = subcommands.add_parser("search", help="Search the Organization Vault")
-    search.add_argument("query")
-    search.add_argument("--dataset")
-    search.add_argument("--session")
-    search.add_argument("--top-k", type=int, default=10)
+    search = subcommands.add_parser("search", help="Search the Organization Vault (via the Node)")
+    search.add_argument("query", help="Search query")
+    search.add_argument("--top-k", type=int, default=10, help="Max results (default: 10)")
+    search.add_argument("--json", action="store_true", help="Machine-readable output")
+    search.add_argument("--node-url", help="Override Node URL")
+    search.add_argument(
+        "--local",
+        action="store_true",
+        help="Search the local server stack instead of the Node (needs the server extra)",
+    )
+    search.add_argument("--dataset", help="(--local only) dataset to search")
+    search.add_argument("--session", help="(--local only) session id")
     search.set_defaults(handler=_search)
 
     feedback = subcommands.add_parser("feedback", help="Attach feedback to a Cognee QA entry")
@@ -822,7 +1475,17 @@ def main() -> None:
     parser = build_parser()
     args = parser.parse_args()
     if not getattr(args, "command", None):
-        # Bare `citadel` → branded home screen (hero + curated command menu).
+        # Bare `citadel`: on a brand-new interactive install, drop straight into
+        # guided onboarding once; afterwards show the branded home screen. The
+        # opt-outs (--no-onboard / CITADEL_NO_ONBOARD / any non-TTY) keep cron,
+        # CI, agents, and pipes safe — they never block on a prompt.
+        opted_out = bool(os.getenv("CITADEL_NO_ONBOARD")) or getattr(args, "no_onboard", False)
+        interactive = sys.stdin.isatty() and sys.stdout.isatty()
+        if interactive and not opted_out and not _already_onboarded():
+            onboard_args = parser.parse_args(["onboard"])
+            asyncio.run(onboard_args.handler(onboard_args))
+            print()
+        # Branded home screen (hero + curated command menu).
         _print_home()
         raise SystemExit(0)
     # Handlers may return an int exit code (capture/setup); others return None.

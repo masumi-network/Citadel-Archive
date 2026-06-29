@@ -14,10 +14,10 @@ from textual import work
 from textual.app import App, ComposeResult
 from textual.widgets import Footer, Header, Static
 
-from kb.status import StatusReport, gather_status
+from kb.status import _CHECK_LABELS, StatusReport, gather_status
 
-_OK = "[green]●[/]"
-_BAD = "[red]○[/]"
+_OK = "[green]✓[/]"
+_BAD = "[red]✗[/]"
 
 
 def _identity_markup(report: StatusReport) -> str:
@@ -36,8 +36,9 @@ def _checks_markup(report: StatusReport) -> str:
     lines = ["[b]Connection & setup[/]"]
     for check in report.checks:
         dot = _OK if check.ok else _BAD
+        label = _CHECK_LABELS.get(check.name, check.name)
         latency = f"  [dim]({check.latency_ms}ms)[/]" if check.latency_ms is not None else ""
-        lines.append(f"  {dot} {escape(check.name):<16} {escape(check.detail)}{latency}")
+        lines.append(f"  {dot} {escape(label):<16} {escape(check.detail)}{latency}")
     return "\n".join(lines)
 
 

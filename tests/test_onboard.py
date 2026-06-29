@@ -131,10 +131,15 @@ def test_merge_claude_settings_adds_then_idempotent(tmp_path: Path) -> None:
     ]
     assert any("kb.hooks.sync_session" in c for c in cmds)
     assert TOKEN_ENV in data["httpHookAllowedEnvVars"]
+    start_groups = data["hooks"]["SessionStart"]
+    start_cmds = [h["command"] for g in start_groups for h in g["hooks"]]
+    assert any("kb.hooks.sync_start" in c for c in start_cmds)
+    assert start_groups[0]["matcher"] == "startup|resume"
 
     assert merge_claude_settings(path, python="/usr/bin/python3") == "unchanged"
     data2 = json.loads(path.read_text())
     assert len(data2["hooks"]["SessionEnd"]) == 1  # not duplicated
+    assert len(data2["hooks"]["SessionStart"]) == 1  # not duplicated
 
 
 def _make_repo(tmp_path: Path) -> Path:
@@ -160,10 +165,11 @@ def test_install_pre_push_hook_not_git(tmp_path: Path) -> None:
 def test_bundled_hooks_are_importable_modules() -> None:
     # The published CLI installs hooks as `python -m kb.hooks.*`; the modules
     # must import and expose a runnable main() with no server deps.
-    from kb.hooks import sync_push, sync_session
+    from kb.hooks import sync_push, sync_session, sync_start
 
     assert callable(sync_push.main)
     assert callable(sync_session.main)
+    assert callable(sync_start.main)
 
 
 def test_pre_push_hook_script_is_failsafe() -> None:

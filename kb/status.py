@@ -148,6 +148,33 @@ def check_search(base_url: str, token: str | None, *, timeout: float = _SEARCH_T
     return Check("search", ok=True, detail=f"{count} result(s)", data={"count": count})
 
 
+def search_node(
+    base_url: str,
+    token: str,
+    query: str,
+    top_k: int = 10,
+    *,
+    timeout: float = _SEARCH_TIMEOUT,
+) -> list[dict[str, Any]]:
+    """POST a query to the Node's /search (the same endpoint MCP citadel_search uses).
+
+    Zero-dep, HTTPS-only. The Node resolves the dataset from the token's seat, so
+    callers pass only query + top_k. Returns the results list (``results`` or the
+    legacy ``matches`` key), or [] if the shape is unexpected.
+    """
+    data = _request(
+        "POST",
+        f"{base_url.rstrip('/')}/search",
+        token=token,
+        payload={"query": query, "top_k": top_k},
+        timeout=timeout,
+    )
+    results = data.get("results")
+    if results is None:
+        results = data.get("matches")
+    return results if isinstance(results, list) else []
+
+
 def check_local_setup(repo: Path, config_path: Path | None = None) -> list[Check]:
     checks: list[Check] = []
     checks.append(
@@ -242,21 +269,48 @@ def gather_status(
     )
 
 
-_DOT_OK = "●"
-_DOT_BAD = "○"
+# Checks split into two sections; everything not here is "Local setup".
+_CONNECTIVITY = ("node", "auth", "search")
+# Human labels — the raw snake_case names read like debug output.
+_CHECK_LABELS = {
+    "node": "Node",
+    "auth": "Auth",
+    "search": "Search",
+    "token": "Token",
+    "mcp": "MCP server",
+    "pre_push_hook": "Pre-push hook",
+    "session_hook": "SessionEnd hook",
+    "capture_roots": "Capture roots",
+}
 
 
 def render_text(report: StatusReport, *, color: bool = False) -> str:
-    from kb.banner import paint
+    from kb.banner import mark, paint
 
     ident = report.identity
     seat = ident.get("seat_slug") or ident.get("actor") or "—"
     role = ident.get("role") or "—"
-    lines = [f"seat: {paint(str(seat), 'bold', enable=color)}   role: {role}", ""]
-    for check in report.checks:
-        dot = paint(_DOT_OK, "green", enable=color) if check.ok else paint(_DOT_BAD, "red", enable=color)
+    lines = [
+        f"seat: {paint(str(seat), 'bold', enable=color)}   role: {role}",
+        paint(f"node: {report.node_url}", "dim", enable=color),
+        "",
+    ]
+
+    def _row(check: Check) -> str:
+        label = _CHECK_LABELS.get(check.name, check.name)
         latency = f"  ({check.latency_ms}ms)" if check.latency_ms is not None else ""
-        lines.append(f"  {dot} {check.name:<16} {check.detail}{latency}")
+        return f"  {mark(check.ok, enable=color)} {label:<16} {check.detail}{latency}"
+
+    conn = [c for c in report.checks if c.name in _CONNECTIVITY]
+    local = [c for c in report.checks if c.name not in _CONNECTIVITY]
+    if conn:
+        lines.append(paint("Connectivity", "bold", enable=color))
+        lines.extend(_row(c) for c in conn)
+        lines.append("")
+    if local:
+        lines.append(paint("Local setup", "bold", enable=color))
+        lines.extend(_row(c) for c in local)
+
     if report.recent:
         lines.append("")
         lines.append("Recent activity")
@@ -264,9 +318,26 @@ def render_text(report: StatusReport, *, color: bool = False) -> str:
             when = item.get("created_at") or item.get("timestamp") or ""
             label = item.get("title") or item.get("action") or item.get("detail") or "—"
             lines.append(f"  · {str(when)[:19]}  {label}")
+
     lines.append("")
-    if report.healthy:
+    total = len(report.checks)
+    ok_count = sum(1 for c in report.checks if c.ok)
+    failing = [_CHECK_LABELS.get(c.name, c.name) for c in report.checks if not c.ok]
+    if report.healthy and not failing:
         lines.append(paint("All systems go.", "green", enable=color))
+    elif report.healthy:
+        # Connected to the Node, but some local setup is still incomplete.
+        lines.append(paint("All systems go.", "green", enable=color))
+        lines.append(
+            paint(f"  setup incomplete ({ok_count}/{total}) — {', '.join(failing)}", "yellow", enable=color)
+        )
     else:
-        lines.append(paint("Not fully connected — try `citadel onboard`.", "yellow", enable=color))
+        lines.append(
+            paint(
+                f"Not fully connected ({ok_count}/{total} ok) — check: "
+                f"{', '.join(failing)}.  Try `citadel onboard`.",
+                "yellow",
+                enable=color,
+            )
+        )
     return "\n".join(lines)
