@@ -50,9 +50,24 @@ promotion. See [`CONTEXT.md`](CONTEXT.md) for the full domain glossary.
 
 ---
 
-## Web UI palette — _deferred_
+## Web UI palette — _set 2026-06-29_
 
-The web dashboard still uses a restrained neutral operations palette and no
-custom typography. To set up a full web brand palette + typography at any time,
-run `/brand-design` (or say "pick brand colors"); it will detect this deferred
-state and proceed directly to setup. _Deferred at: 2026-05-20._
+The web dashboard is themed to **Masumi Network's brand** — magenta `#FA008C`
+on a dark, faint-emerald-neutral base. Tokens live in `kb/static/styles.css`
+`:root`; everything derives from them.
+
+| Role | Token | Value | Rationale |
+|---|---|---|---|
+| Brand accent | `--primary` | `#FA008C` | Masumi's declared `theme-color` (masumi.network) |
+| Accent hover/glow | `--primary-strong` | `#FF5CB0` | lighter magenta |
+| Success / indexed | `--success` | `#34D399` | emerald — day-to-day "healthy/indexed" status |
+| Info / search | `--info` | `#22D3EE` | cyan — nod to Citadel's CLI brand |
+| Danger | `--danger` | `#FA140A` | Masumi's own red |
+| Warning / pending | `--warning` | `#FBBF24` | amber |
+| Surfaces | `--bg` … `--surface` | `#0B0F0E` → `#131B18` | dark, faint emerald-neutral tint |
+
+Magenta carries brand identity (active nav, primary actions, links); emerald
+reads as the "indexed / healthy" status across the timeline. The sidebar is 6
+items (Overview · Search · Knowledge · Activity · Write · Admin); merged groups
+expose sub-pages via a content sub-tab bar. Typography unchanged (Inter body;
+monospace reserved for data — timestamps, IDs, reasons).

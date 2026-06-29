@@ -119,6 +119,60 @@ const searchResultStatus = document.getElementById("searchResultStatus");
 const pageButtons = Array.from(document.querySelectorAll("[data-page-target]"));
 const pages = Array.from(document.querySelectorAll("[data-page]"));
 const roleOrder = { reader: 1, writer: 2, admin: 3 };
+
+// Grouped navigation: the sidebar shows 6 top-level items; merged groups expose
+// their sub-pages as a content sub-tab bar that drives the same setPage()
+// switching. Each group's `nav` is the sidebar button (data-page-target) that
+// represents it, so that button stays lit on any of the group's sub-pages.
+const NAV_GROUPS = [
+  { nav: "knowledge", tabs: [
+    { page: "knowledge", label: "Graph" },
+    { page: "sources", label: "Sources" },
+  ] },
+  { nav: "events", tabs: [
+    { page: "events", label: "Timeline" },
+    { page: "conflicts", label: "Conflicts" },
+  ] },
+  { nav: "ingest", tabs: [
+    { page: "ingest", label: "New note" },
+    { page: "feedback", label: "Feedback" },
+  ] },
+  { nav: "agents", tabs: [
+    { page: "agents", label: "Agents" },
+    { page: "access", label: "Access" },
+    { page: "audit", label: "Audit" },
+    { page: "settings", label: "Settings" },
+  ] },
+];
+const pageToGroup = {};
+NAV_GROUPS.forEach((group) => {
+  group.tabs.forEach((tab) => {
+    pageToGroup[tab.page] = group;
+  });
+});
+const subtabBar = document.getElementById("subtabBar");
+
+function renderSubtabs(activePage) {
+  if (!subtabBar) return;
+  const group = pageToGroup[activePage];
+  subtabBar.innerHTML = "";
+  if (!group) {
+    subtabBar.hidden = true;
+    return;
+  }
+  group.tabs.forEach((tab) => {
+    const targetPage = pages.find((page) => page.dataset.page === tab.page);
+    const minRole = (targetPage && targetPage.dataset.minRole) || "reader";
+    if (!canUse(minRole)) return;
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = `subtab${tab.page === activePage ? " active" : ""}`;
+    button.textContent = tab.label;
+    button.addEventListener("click", () => setPage(tab.page));
+    subtabBar.append(button);
+  });
+  subtabBar.hidden = subtabBar.children.length < 2;
+}
 const sensitiveDetailPattern = /(token|secret|password|authorization|body|content|text|query)$/i;
 
 // force-graph instance + render state. Selection/highlight live here so the
@@ -435,9 +489,19 @@ function setPage(name) {
     page.hidden = page.dataset.page !== resolvedName;
     page.classList.toggle("page-active", page.dataset.page === resolvedName);
   });
+  // Sidebar buttons reflect the active *group* (so e.g. the Admin button stays
+  // lit on the Audit sub-page); in-content [data-page-target] buttons keep
+  // exact-match highlighting.
+  const activeGroup = pageToGroup[resolvedName];
+  const activeNavTarget = activeGroup ? activeGroup.nav : name;
   pageButtons.forEach((button) => {
-    button.classList.toggle("active", button.dataset.pageTarget === name && allowed);
+    const isNavLink = button.classList.contains("nav-link");
+    const match = isNavLink
+      ? button.dataset.pageTarget === activeNavTarget
+      : button.dataset.pageTarget === name;
+    button.classList.toggle("active", match && allowed);
   });
+  renderSubtabs(resolvedName);
   if (allowed && window.location.hash !== `#${name}`) {
     window.history.replaceState(null, "", `#${name}`);
   }
@@ -603,6 +667,11 @@ function timelineEventItem(event) {
   const statusClass = timelineStatusClass(event, timeline);
   const metrics = formatMetrics(timeline.metrics);
   const meta = [timeline.dataset, timeline.source, metrics].filter(Boolean).join(" - ");
+  // Surface the rejection/error reason that the server already records on the
+  // event payload (mesh.record_ingest -> details.reason) but the card never showed.
+  // Skip "accepted" so normal indexed events stay clean.
+  const rawReason = event.details && event.details.reason;
+  const reason = rawReason && rawReason !== "accepted" ? String(rawReason) : null;
   const button = document.createElement("button");
   button.type = "button";
   button.className = `event-item timeline-event-button${selected ? " is-selected" : ""}`;
@@ -616,6 +685,7 @@ function timelineEventItem(event) {
       </span>
       <span class="event-message">${escapeHtml(event.message || humanizeToken(event.type))}</span>
       <span class="event-details">${escapeHtml(meta || formatDetails(event.details || {}))}</span>
+      ${reason ? `<span class="event-reason">reason: ${escapeHtml(reason)}</span>` : ""}
     </span>
     <span class="status-chip ${statusClass}">${escapeHtml(timeline.status || event.type)}</span>
   `;
