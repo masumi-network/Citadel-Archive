@@ -173,13 +173,27 @@ asyncio.run(main())
 
 ### Option D — CLI
 
+Install the standalone client (zero-dep base) — no clone, no `uv`:
+
 ```bash
-uv run citadel ingest "A useful note" --tag personal --tag research
-uv run citadel search "What did I learn about Railway?"
-uv run citadel feedback <qa-id> --score 1 --text "Useful"
-uv run citadel improve
-uv run citadel sync-github --org masumi-network
-uv run citadel learn --force
+pipx install citadel-archive
+# upgrade: pipx install --force citadel-archive --pip-args=--no-cache-dir
+#          (plain `pipx upgrade` can land a stale cached build)
+# bootstrap installer: curl -fsSL https://raw.githubusercontent.com/masumi-network/Citadel-Archive/main/install.sh | sh
+```
+
+`citadel search` and `citadel ingest` are HTTP-backed against the Node by
+default (no `[server]` extra). Add `--json` for machine output, or `--local` to
+run the in-process server stack instead (needs the `[server]` extra).
+
+```bash
+citadel search "What did I learn about Railway?"        # HTTP-backed by default
+citadel ingest "A useful note" --tag personal --tag research
+citadel onboard            # token + git/Claude hooks + .mcp.json + capture roots
+citadel doctor --fix       # diagnose / repair local setup
+citadel mcp add claude     # add the Citadel MCP server to a client (`citadel mcp list`)
+citadel seat create        # admin: mint a seat token (needs CITADEL_ADMIN_KEY)
+citadel seat token <slug>  # admin: mint a fresh token for an existing seat
 ```
 
 ## Access Roles & Permissions

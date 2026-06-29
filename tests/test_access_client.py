@@ -59,6 +59,21 @@ def test_create_seat_sends_payload_and_auth(monkeypatch) -> None:
     assert captured["auth"] == "Bearer owner-admin"
 
 
+def test_issue_seat_token_posts_to_seat_endpoint(monkeypatch) -> None:
+    captured: dict[str, Any] = {}
+
+    def fake_open(req: Any, timeout: float | None = None) -> _FakeResp:
+        captured["url"] = req.full_url
+        captured["method"] = req.get_method()
+        return _FakeResp({"ok": True, "token": "ctdl_seat", "principal": {"seat_slug": "sarthi"}})
+
+    monkeypatch.setattr(ac._OPENER, "open", fake_open)
+    out = ac.issue_seat_token("sarthi", base_url="https://node.example", key="owner-admin")
+    assert out["token"] == "ctdl_seat"
+    assert captured["url"] == "https://node.example/api/access/seats/sarthi/tokens"
+    assert captured["method"] == "POST"
+
+
 def test_http_error_maps_detail_and_status(monkeypatch) -> None:
     def fake_open(req: Any, timeout: float | None = None) -> _FakeResp:
         raise urllib.error.HTTPError(

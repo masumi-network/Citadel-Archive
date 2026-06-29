@@ -6,8 +6,15 @@ import json
 from pathlib import Path
 from typing import Any
 
-from kb.cli import _doctor, _search
+from kb.cli import _doctor, _ingest, _search
 from kb.status import Check, StatusReport
+
+
+def _ingest_args(**kw):
+    base = dict(data="a note", tag=[], json=True, node_url="https://node.example",
+                local=False, dataset=None, session=None, no_cognify=True)
+    base.update(kw)
+    return argparse.Namespace(**base)
 
 
 def _report(checks: list[Check], *, healthy: bool = True) -> StatusReport:
@@ -62,7 +69,8 @@ def test_doctor_fix_installs_missing_local_setup(tmp_path: Path, monkeypatch, ca
     )
     rc = asyncio.run(_doctor(args))
     out = json.loads(capsys.readouterr().out)
-    assert rc == 1  # issues were found (doctor reports even after fixing)
+    assert rc == 0  # all auto-fixable issues were applied → clean exit
+    assert out["resolved"] is True
     assert set(out["fixed"]) == {"pre-push hook", "Claude hooks", "MCP server"}
     assert (tmp_path / ".git" / "hooks" / "pre-push").exists()
     assert (tmp_path / ".claude" / "settings.json").exists()
@@ -91,3 +99,45 @@ def test_search_no_token_exits_one(monkeypatch, capsys) -> None:
     rc = asyncio.run(_search(args))
     assert rc == 1
     assert "no token" in capsys.readouterr().err
+
+
+def test_ingest_http_accepted(monkeypatch, capsys) -> None:
+    monkeypatch.setattr("kb.cli.capture_token", lambda: "ctdl_x")
+    monkeypatch.setattr("kb.status.ingest_node", lambda *a, **k: {"accepted": True, "dataset": "seat:alice"})
+    rc = asyncio.run(_ingest(_ingest_args()))
+    assert rc == 0
+    assert json.loads(capsys.readouterr().out)["accepted"] is True
+
+
+def test_ingest_http_rejected_exits_one(monkeypatch, capsys) -> None:
+    monkeypatch.setattr("kb.cli.capture_token", lambda: "ctdl_x")
+    monkeypatch.setattr("kb.status.ingest_node", lambda *a, **k: {"accepted": False, "reason": "secret_content"})
+    rc = asyncio.run(_ingest(_ingest_args()))
+    assert rc == 1  # a hard rejection must not exit 0
+
+
+def test_ingest_duplicate_is_benign(monkeypatch, capsys) -> None:
+    monkeypatch.setattr("kb.cli.capture_token", lambda: "ctdl_x")
+    monkeypatch.setattr("kb.status.ingest_node", lambda *a, **k: {"accepted": False, "reason": "duplicate_in_process"})
+    # A duplicate is idempotent: exit 0, friendly message, not a scary failure.
+    rc = asyncio.run(_ingest(_ingest_args(json=False)))
+    assert rc == 0
+    assert "duplicate" in capsys.readouterr().out.lower()
+
+
+def test_ingest_no_token_exits_one(monkeypatch, capsys) -> None:
+    monkeypatch.setattr("kb.cli.capture_token", lambda: None)
+    rc = asyncio.run(_ingest(_ingest_args(json=False)))
+    assert rc == 1
+    assert "no token" in capsys.readouterr().err
+
+
+def test_ingest_cognifies_by_default(monkeypatch, capsys) -> None:
+    monkeypatch.setattr("kb.cli.capture_token", lambda: "ctdl_x")
+    monkeypatch.setattr("kb.status.ingest_node", lambda *a, **k: {"accepted": True, "dataset": "seat:alice"})
+    calls: list = []
+    monkeypatch.setattr("kb.status.cognify_node", lambda *a, **k: calls.append(a) or {"ok": True})
+    rc = asyncio.run(_ingest(_ingest_args(no_cognify=False)))
+    assert rc == 0
+    assert calls  # cognify was triggered after a successful ingest
+    assert json.loads(capsys.readouterr().out)["cognified"] is True

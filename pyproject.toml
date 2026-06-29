@@ -1,6 +1,6 @@
 [project]
 name = "citadel-archive"
-version = "0.2.0"
+version = "0.2.1"
 description = "Citadel — a self-hosted Organization Vault and seat-capture CLI built on Cognee."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -30,8 +30,6 @@ server = [
     "requests>=2.32.0,<3.0.0",
     "uvicorn[standard]>=0.34.0,<1.0.0",
 ]
-# `pip install citadel-archive[tui]` — the live `citadel tui` dashboard.
-tui = ["textual>=0.50"]
 
 [project.urls]
 Homepage = "https://github.com/masumi-network/Citadel-Archive"
@@ -46,7 +44,6 @@ dev = [
     "pytest>=7.4.0,<9",
     "pytest-asyncio>=0.21.1,<2",
     "ruff>=0.9.2,<1",
-    "textual>=0.50",
 ]
 
 [build-system]

@@ -372,6 +372,10 @@ class CreateSeatBody(BaseModel):
     token_name: str | None = Field(default=None, max_length=120)
 
 
+class IssueSeatTokenBody(BaseModel):
+    token_name: str | None = Field(default=None, max_length=120)
+
+
 class CapturePolicyBody(BaseModel):
     deny_globs: list[str] = Field(default_factory=list, max_length=200)
 
@@ -1696,6 +1700,48 @@ async def create_access_seat(body: CreateSeatBody, request: Request) -> dict[str
             {key: value for key, value in created.api_token.__dict__.items() if key != "token_hash"}
         )
     return payload
+
+
+@app.post("/api/access/seats/{slug}/tokens")
+async def issue_access_seat_token(
+    slug: str, body: IssueSeatTokenBody, request: Request
+) -> dict[str, Any]:
+    """Mint a fresh token for an EXISTING seat (e.g. to re-link a lost token)."""
+    actor = require_access(request, "admin", "access:manage")
+    try:
+        normalized = validate_seat_slug(slug)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    store = get_access_store()
+    if not store.find_seat_by_slug(normalized):
+        raise HTTPException(status_code=404, detail=f"Seat not found: {normalized}")
+    try:
+        created = store.issue_seat_token(
+            slug=normalized,
+            token_name=body.token_name,
+            central_dataset=central_dataset(get_citadel().config),
+        )
+    except (KeyError, ValueError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    store.record_event(
+        action="access.seat.token.create",
+        actor=actor,
+        success=True,
+        dataset=created.api_token.default_dataset,
+        detail={
+            "principal_id": created.principal.id,
+            "seat_slug": normalized,
+            "token_id": created.api_token.id,
+        },
+    )
+    return {
+        "ok": True,
+        "token": created.token,
+        "principal": jsonable_encoder(created.principal),
+        "api_token": jsonable_encoder(
+            {key: value for key, value in created.api_token.__dict__.items() if key != "token_hash"}
+        ),
+    }
 
 
 @app.get("/api/access/capture-baseline")

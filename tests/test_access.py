@@ -322,6 +322,23 @@ def test_create_seat_uses_supplied_central_dataset(tmp_path: Path) -> None:
     assert created.api_token.allowed_datasets == ("seat:mallory", "org-vault")
 
 
+def test_issue_seat_token_for_existing_seat(tmp_path: Path) -> None:
+    access_store = store(tmp_path)
+    access_store.create_seat(name="Sarthi", slug="sarthi", central_dataset="masumi-network")
+
+    issued = access_store.issue_seat_token(slug="sarthi", central_dataset="masumi-network")
+
+    assert issued.token.startswith("ctdl_")
+    assert issued.api_token.default_dataset == "seat:sarthi"  # routes to the seat
+    assert issued.api_token.allowed_datasets == ("seat:sarthi", "masumi-network")
+    assert issued.principal.seat_slug == "sarthi"  # linked to the existing seat principal
+
+
+def test_issue_seat_token_unknown_seat_raises(tmp_path: Path) -> None:
+    with pytest.raises(KeyError):
+        store(tmp_path).issue_seat_token(slug="ghost")
+
+
 def test_validate_seat_slug_rejects_invalid_values() -> None:
     from kb.access import validate_seat_slug
 

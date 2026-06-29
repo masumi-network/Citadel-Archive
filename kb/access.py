@@ -376,6 +376,35 @@ class AccessStore:
             api_token=created.api_token,
         )
 
+    def issue_seat_token(
+        self,
+        *,
+        slug: str,
+        token_name: str | None = None,
+        central_dataset: str = CENTRAL_DATASET,
+    ) -> TokenCreation:
+        """Mint a FRESH token for an EXISTING seat's principal.
+
+        Scoped exactly like the seat's original token (default_dataset =
+        seat node, allowlist = seat node + Central), so the new token carries
+        seat_slug and routes writes to the seat. Used to re-link a seat whose
+        original (shown-once) token was lost or never adopted.
+        """
+        normalized_slug = validate_seat_slug(slug)
+        principal = self.find_seat_by_slug(normalized_slug)
+        if principal is None:
+            raise KeyError(normalized_slug)
+        node_dataset = seat_dataset(normalized_slug)
+        session_id = f"seat-{normalized_slug}"
+        return self.create_token(
+            principal_id=principal.id,
+            name=token_name or f"{principal.name} token",
+            role=principal.role,
+            default_dataset=node_dataset,
+            default_session=session_id,
+            allowed_datasets=[node_dataset, central_dataset],
+        )
+
     def create_token(
         self,
         *,
