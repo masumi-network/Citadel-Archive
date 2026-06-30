@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 from typing import Any, Protocol
@@ -58,6 +59,14 @@ class CogneeGateway(Protocol):
 class CogneePublicClient:
     def __init__(self) -> None:
         self._startup_migrations_done = False
+        # Serializes graph writes within this process — Kuzu is a single-writer
+        # embedded DB, so two overlapping cognify calls (an inline ingest cognify,
+        # the evolve scheduler, /api/cognify/run) must not collide (#47). One client
+        # per Citadel; the app uses a single Citadel singleton, so this is the
+        # process-wide writer gate. The evolve scheduler also holds it across its
+        # Phase-1 subprocess so the web never cognifies while the subprocess owns
+        # the on-disk Kuzu lock.
+        self.writer_lock = asyncio.Lock()
 
     def _copy_env_if_missing(self, target: str, *sources: str) -> None:
         if os.getenv(target):
@@ -344,7 +353,10 @@ class CogneePublicClient:
         import cognee
 
         await self._ensure_cognee_ready(cognee)
-        return await cognee.cognify(datasets=datasets, incremental_loading=not force)
+        # Single Kuzu writer: serialize the graph write against any other in-process
+        # cognify so they cannot collide on the lock (#47).
+        async with self.writer_lock:
+            return await cognee.cognify(datasets=datasets, incremental_loading=not force)
 
     async def add_feedback(
         self,

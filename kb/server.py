@@ -210,8 +210,17 @@ async def _evolve_scheduler_loop(interval_seconds: int) -> None:
         await asyncio.sleep(interval_seconds)
         logger.info("Evolve scheduler: starting scheduled pass")
         # Phase 1 — heavy stages in a subprocess that frees the Kuzu lock on exit.
+        # Hold the in-process writer lock across the subprocess so no web-loop
+        # cognify (an interactive ingest's, /api/cognify/run) writes Kuzu while the
+        # subprocess owns the on-disk lock — that cross-process overlap is the
+        # hourly "Lock is held by PID N" crash (#47). Phase 2 re-acquires it itself.
         proc = None
+        writer_lock = getattr(getattr(get_citadel(), "cognee", None), "writer_lock", None)
+        acquired = False
         try:
+            if writer_lock is not None:
+                await writer_lock.acquire()
+                acquired = True
             proc = await asyncio.create_subprocess_exec(
                 sys.executable,
                 "-m",
@@ -230,6 +239,9 @@ async def _evolve_scheduler_loop(interval_seconds: int) -> None:
             raise
         except Exception:
             logger.exception("Evolve scheduler: stages subprocess failed")
+        finally:
+            if acquired:
+                writer_lock.release()
         # Phase 2 — cognify in-loop; the web process is the sole Kuzu writer now.
         force = os.getenv("CITADEL_EVOLVE_COGNIFY_FORCE", "").strip().lower() in {
             "1",

@@ -189,6 +189,43 @@ async def test_improve_raises_without_llm_key(monkeypatch: Any) -> None:
 
 
 @pytest.mark.asyncio
+async def test_cognify_serializes_on_writer_lock(monkeypatch: Any) -> None:
+    # #47: Kuzu is single-writer, so two overlapping cognify calls must serialize.
+    import asyncio
+
+    monkeypatch.setenv("LLM_API_KEY", "k")
+    concurrent = 0
+    max_seen = 0
+
+    async def fake_cognify(*, datasets: Any, incremental_loading: bool) -> dict[str, Any]:
+        nonlocal concurrent, max_seen
+        concurrent += 1
+        max_seen = max(max_seen, concurrent)
+        await asyncio.sleep(0.02)
+        concurrent -= 1
+        return {"ok": True}
+
+    async def run_startup_migrations() -> None:
+        return None
+
+    monkeypatch.setitem(
+        sys.modules,
+        "cognee",
+        SimpleNamespace(cognify=fake_cognify, run_startup_migrations=run_startup_migrations),
+    )
+    client = CogneePublicClient()
+    monkeypatch.setattr(client, "_prepare_cognee_environment", lambda: None)
+
+    async def _ready(_cognee: Any) -> None:
+        return None
+
+    monkeypatch.setattr(client, "_ensure_cognee_ready", _ready)
+
+    await asyncio.gather(client.cognify(datasets=["a"]), client.cognify(datasets=["b"]))
+    assert max_seen == 1  # the writer lock prevented concurrent graph writes
+
+
+@pytest.mark.asyncio
 async def test_durable_writes_bypass_session_cache(monkeypatch: Any) -> None:
     """Durable writes never route through cognee's session cache.
 
