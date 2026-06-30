@@ -1,6 +1,6 @@
 [project]
 name = "citadel-archive"
-version = "0.2.1"
+dynamic = ["version"]
 description = "Citadel — a self-hosted Organization Vault and seat-capture CLI built on Cognee."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -49,6 +49,9 @@ dev = [
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
+
+[tool.hatch.version]
+path = "kb/__init__.py"
 
 [tool.hatch.build.targets.wheel]
 packages = ["kb"]

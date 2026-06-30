@@ -1408,7 +1408,7 @@ def build_parser() -> argparse.ArgumentParser:
     try:
         _version = _pkg_version("citadel-archive")
     except PackageNotFoundError:
-        _version = "0+unknown"
+        from kb import __version__ as _version
     parser.add_argument("--version", action="version", version=f"citadel {_version}")
     parser.add_argument(
         "--no-onboard",
