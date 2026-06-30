@@ -294,6 +294,14 @@ class CogneePublicClient:
         reports as processed).
         """
         self._prepare_cognee_environment()
+        # Fail loud on a missing LLM key. cognee swallows LLMAPIKeyNotSetError
+        # inside its pipeline and returns normally, so a keyless cognify would
+        # otherwise report success while indexing nothing (false-green exit 0).
+        if not os.getenv("LLM_API_KEY"):
+            raise RuntimeError(
+                "LLM_API_KEY (or OPENROUTER_API_KEY) is not set; cognify requires an "
+                "LLM key to extract the knowledge graph."
+            )
         import cognee
 
         await self._ensure_cognee_ready(cognee)

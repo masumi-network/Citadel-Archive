@@ -133,6 +133,18 @@ async def test_cognee_public_client_does_not_pass_external_metadata_keyword(
 
 
 @pytest.mark.asyncio
+async def test_cognify_raises_without_llm_key(monkeypatch: Any) -> None:
+    """cognify must fail loud (not false-green) when no LLM key is configured."""
+    monkeypatch.delenv("LLM_API_KEY", raising=False)
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+
+    client = CogneePublicClient()
+
+    with pytest.raises(RuntimeError, match="LLM_API_KEY"):
+        await client.cognify(datasets=["notes"])
+
+
+@pytest.mark.asyncio
 async def test_durable_writes_bypass_session_cache(monkeypatch: Any) -> None:
     """Durable writes never route through cognee's session cache.
 
@@ -343,6 +355,7 @@ async def test_cognee_public_client_falls_back_when_session_has_no_data(
 
 @pytest.mark.asyncio
 async def test_cognee_public_client_cognify_wraps_cognee_cognify(monkeypatch: Any) -> None:
+    monkeypatch.setenv("LLM_API_KEY", "test-key")
     received: dict[str, Any] = {}
 
     async def run_startup_migrations() -> None:
