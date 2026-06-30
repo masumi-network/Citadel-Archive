@@ -391,7 +391,7 @@ def test_api_uses_configured_citadel_service() -> None:
     assert learning_run.status_code == 200
     assert learning_run.json()["sources"]["github"]["commit_count"] == 1
     assert feedback.status_code == 200
-    assert feedback.json() == {"recorded": True, "improved": True}
+    assert feedback.json() == {"recorded": True, "improved": True, "ok": True, "reason": None}
     assert updated_mesh.status_code == 200
     assert updated_mesh.json()["stats"]["feedback"] == 1
     assert upgrade.status_code == 200

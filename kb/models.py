@@ -40,3 +40,7 @@ class FeedbackRequest:
 class FeedbackResult:
     recorded: bool
     improved: bool
+    # ok mirrors recorded so _result_exit maps a dropped feedback to a nonzero
+    # CLI exit / honest API payload instead of a silent recorded:false, exit 0.
+    ok: bool = True
+    reason: str | None = None

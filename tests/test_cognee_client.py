@@ -145,6 +145,18 @@ async def test_cognify_raises_without_llm_key(monkeypatch: Any) -> None:
 
 
 @pytest.mark.asyncio
+async def test_improve_raises_without_llm_key(monkeypatch: Any) -> None:
+    """improve must fail loud like cognify — cognee swallows the keyless error (#41)."""
+    monkeypatch.delenv("LLM_API_KEY", raising=False)
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+
+    client = CogneePublicClient()
+
+    with pytest.raises(RuntimeError, match="LLM_API_KEY"):
+        await client.improve(dataset="notes")
+
+
+@pytest.mark.asyncio
 async def test_durable_writes_bypass_session_cache(monkeypatch: Any) -> None:
     """Durable writes never route through cognee's session cache.
 

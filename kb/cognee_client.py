@@ -334,6 +334,14 @@ class CogneePublicClient:
         build_global_context_index: bool = False,
     ) -> Any:
         self._prepare_cognee_environment()
+        # Mirror cognify's fail-loud guard: cognee swallows LLMAPIKeyNotSetError
+        # internally and returns normally, so a keyless improve would report
+        # success while doing nothing (false-green exit 0, #41).
+        if not os.getenv("LLM_API_KEY"):
+            raise RuntimeError(
+                "LLM_API_KEY (or OPENROUTER_API_KEY) is not set; improve requires an "
+                "LLM key."
+            )
         import cognee
 
         await self._ensure_cognee_ready(cognee)

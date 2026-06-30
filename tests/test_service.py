@@ -272,3 +272,67 @@ async def test_feedback_can_auto_improve() -> None:
     assert result.improved
     assert fake.feedback_calls[0]["qa_id"] == "qa-1"
     assert fake.improve_calls[0]["session_ids"] == ["personal-session"]
+
+
+class _SessionMissCognee(FakeCognee):
+    """add_feedback finds no matching qa_id in the session cache (post-#54 norm)."""
+
+    async def add_feedback(self, **kwargs: Any) -> bool:
+        self.feedback_calls.append(kwargs)
+        return False
+
+
+@pytest.mark.asyncio
+async def test_feedback_falls_back_to_durable_write_when_session_cache_misses() -> None:
+    # #40: a session-cache miss must not be a silent no-op — persist durably.
+    fake = _SessionMissCognee()
+    kb = Citadel(CitadelConfig(), cognee=fake)
+
+    result = await kb.feedback(FeedbackRequest(qa_id="qa-9", score=-1, text="wrong answer"))
+
+    assert result.recorded is True
+    assert result.ok is True
+    assert result.reason is None
+    note = fake.remember_calls[-1]
+    assert "qa-9" in note["data"]
+    assert "wrong answer" in note["data"]
+    assert "feedback" in note["tags"]
+    assert "qa:qa-9" in note["tags"]
+
+
+@pytest.mark.asyncio
+async def test_feedback_reports_reason_when_not_recorded() -> None:
+    # #40: when even the durable write is rejected, report ok:False + a reason
+    # (so the CLI exits nonzero) instead of recorded:false, exit 0.
+    fake = _SessionMissCognee()
+    kb = Citadel(CitadelConfig(min_chars=100_000), cognee=fake)  # forces filter rejection
+
+    result = await kb.feedback(FeedbackRequest(qa_id="qa-9", score=0))
+
+    assert result.recorded is False
+    assert result.ok is False
+    assert result.reason is not None and "not recorded" in result.reason
+
+
+@pytest.mark.asyncio
+async def test_improve_short_circuits_on_empty_graph() -> None:
+    # #41: an empty graph yields a clean no-op, not a raw EntityNotFoundError.
+    fake = FakeCognee()  # nodes/edges empty
+    kb = Citadel(CitadelConfig(), cognee=fake)
+
+    result = await kb.improve()
+
+    assert result["ok"] is True
+    assert result["skipped"] == "empty_graph"
+    assert fake.improve_calls == []
+
+
+@pytest.mark.asyncio
+async def test_improve_runs_when_graph_has_data() -> None:
+    fake = FakeCognee()
+    fake.nodes = ["n1"]
+    kb = Citadel(CitadelConfig(), cognee=fake)
+
+    await kb.improve()
+
+    assert fake.improve_calls, "cognee.improve should run on a non-empty graph"

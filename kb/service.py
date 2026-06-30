@@ -135,12 +135,42 @@ class Citadel:
     async def feedback(self, request: FeedbackRequest) -> FeedbackResult:
         session_id = request.session_id or self.config.default_session
         dataset = request.dataset or self.config.default_dataset
-        recorded = await self.cognee.add_feedback(
-            session_id=session_id,
-            qa_id=request.qa_id,
-            score=request.score,
-            text=request.text,
-        )
+        # Try cognee's per-session QA cache first (preserves the QA linkage when a
+        # live session match exists). Since #54 durable recall bypasses that cache,
+        # add_feedback usually finds no matching qa_id and returns False — which
+        # used to surface as a silent recorded:false, exit 0 (#40).
+        try:
+            session_recorded = await self.cognee.add_feedback(
+                session_id=session_id,
+                qa_id=request.qa_id,
+                score=request.score,
+                text=request.text,
+            )
+        except Exception as exc:  # noqa: BLE001 - cognee session cache is best-effort
+            logger.warning("session feedback cache rejected qa_id=%s: %s", request.qa_id, exc)
+            session_recorded = False
+
+        recorded = session_recorded
+        reason: str | None = None
+        if not session_recorded:
+            # Fall back to a durable, searchable feedback note so the signal is
+            # never silently dropped.
+            note = (
+                f"Feedback for QA {request.qa_id}: score={request.score} | "
+                f"{request.text or ''}"
+            )
+            durable = await self.ingest(
+                note,
+                dataset=dataset,
+                tags=("feedback", f"qa:{request.qa_id}", f"score:{request.score}"),
+            )
+            recorded = durable.accepted
+            if not recorded:
+                reason = (
+                    f"feedback not recorded: no matching QA in the session cache and the "
+                    f"durable write was rejected ({durable.reason})"
+                )
+
         improved = False
         if recorded and self.config.auto_improve:
             await self.cognee.improve(
@@ -149,7 +179,7 @@ class Citadel:
                 build_global_context_index=self.config.build_global_context_index,
             )
             improved = True
-        return FeedbackResult(recorded=recorded, improved=improved)
+        return FeedbackResult(recorded=recorded, improved=improved, ok=recorded, reason=reason)
 
     async def improve(
         self,
@@ -157,8 +187,20 @@ class Citadel:
         dataset: str | None = None,
         session_ids: list[str] | None = None,
     ) -> Any:
+        target_dataset = dataset or self.config.default_dataset
+        # Short-circuit an empty graph: cognee.improve raises a raw
+        # EntityNotFoundError ("Empty graph projected") with nothing to improve, so
+        # return a clean no-op instead of a traceback (#41).
+        counts = await self._graph_counts()
+        if counts["nodes"] == 0 and counts["edges"] == 0:
+            return {
+                "ok": True,
+                "skipped": "empty_graph",
+                "dataset": target_dataset,
+                "reason": "graph is empty; nothing to improve",
+            }
         return await self.cognee.improve(
-            dataset=dataset or self.config.default_dataset,
+            dataset=target_dataset,
             session_ids=session_ids,
             build_global_context_index=self.config.build_global_context_index,
         )
