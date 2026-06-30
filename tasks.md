@@ -19,14 +19,20 @@ Batch 2 + follow-ups (PRs #64–#68), **closed + live-verified on the node:**
 - [x] #15 — purge legacy garbage: **DONE + verified clean** (214 nodes/chunks purged across
       session cache + Kuzu graph + pgvector; PRs #64/#67/#68 + admin cleanup loop)
 
-Still open (deployed + code-correct, pending runtime verification):
-- [ ] #47 — Kuzu single-writer lock (PR #65 real fix: subprocess add-only + web lock-guarded);
-      **verify on next hourly evolve pass** (no `Lock is held by PID` in logs)
-- [ ] #46 — Linear seat mirrors (PR #66 auto-map by member email); **verify `mirror_count`>0 after
-      the next evolve Linear sync** (HTTP force-resync times out on ~200 inline writes)
-- [ ] #50 — search latency: backpressure/429 done; raw ~6–9s latency is cognee-recall-bound (separate perf)
+- [x] #47 — Kuzu single-writer lock (PR #65: subprocess add-only + web lock-guarded). **NODE-VERIFIED
+      + CLOSED**: post-deploy hourly evolve pass ran clean (stages exit=0, zero `Lock is held by PID`,
+      green verify canary).
 - [x] #25 — umbrella diagnostic CLOSED: version skew + [DataItem] + health gates + ingest→index all
-      resolved & verified (#46/#47/#50 are later-sweep findings, not part of #25)
+      resolved & verified.
+
+Still open (root-caused; need node-testable fixes, not blind deploys):
+- [ ] #69 (NEW) — evolve subprocess runs each stage in its own `asyncio.run()` → cognee loop-binding
+      breaks `github_sync` + `linear_sync` every pass ("got Future attached to a different loop").
+      The recurring GitHub/Linear sync isn't actually running. Fix: run stages in one event loop.
+- [ ] #46 — Linear seat mirrors: auto-map deployed (PR #66) but blocked by #69 (recurring sync) +
+      HTTP resync timeout (#52's 200 per-issue cognifies starve the request).
+- [ ] #50 — search latency: backpressure/429 done; raw ~6–9s is cognee's per-search pipeline
+      (Q&A caching + possibly remote embedding), needs node profiling.
 
 **Action:** rotate `CITADEL_ADMIN_KEY` (surfaced in-session during ops).
 

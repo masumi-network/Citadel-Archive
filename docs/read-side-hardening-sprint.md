@@ -57,22 +57,30 @@ surfaced failures), #47 (Kuzu writer lock + cross-process cognify guard), #15
   + the cleanup adds a search sweep for orphaned chunks.
 
 **Verification + status (2026-06-30):**
-- **16 closed + live-verified:** #27, #28, #33, #35, #36, #38, #39, #40, #41, #43,
-  #44, #45, #48, #51, #52, #53. Live: MCP 406→200, search + rate-limit headers,
-  get_document 200, promotion authz reader→403, readyz honest, search returns 0
-  `[DataItem]`.
+- **18 closed + live-verified:** #25, #27, #28, #33, #35, #36, #38, #39, #40, #41,
+  #43, #44, #45, #47, #48, #51, #52, #53. Live: MCP 406→200, search + rate-limit
+  headers, get_document 200, promotion authz reader→403, readyz honest, search
+  returns 0 `[DataItem]`.
+- **#47 (Kuzu) NODE-VERIFIED + CLOSED:** the post-deploy hourly evolve pass ran
+  clean — `stages finished (exit=0)`, zero `Lock is held by PID`, green verify
+  canary (`ok:true, search_hit:true, graph_grew:true`).
 - **#15 DONE + verified clean:** admin cleanup looped to dry — 214 garbage
   nodes/chunks purged across session cache + Kuzu graph + pgvector; all prod
   searches return 0 `[DataItem]`/marker/session, 746 real docs indexed.
-- **Open, pending runtime verification (next hourly evolve pass):** #47 (Kuzu — no
-  `Lock is held by PID`), #46 (Linear `mirror_count`>0 after the auto-map sync;
-  the HTTP force-resync times out on ~200 inline writes — known perf gap).
-- **Open, partial:** #50 — backpressure/429 done; raw ~6–9s latency is
-  cognee-recall-bound (separate perf effort).
-- **#25 (umbrella) CLOSED:** its defects — version skew, `[DataItem]` search,
-  doctor/status, ingest→index, sync/cognify/get_document/resource-auth,
-  onboarding/MCP — are all resolved & verified. #46/#47/#50 are later-sweep
-  findings tracked separately, not part of #25.
+- **#25 (umbrella) CLOSED:** version skew, `[DataItem]` search, doctor/status,
+  ingest→index, sync/cognify/get_document/resource-auth, onboarding/MCP — all
+  resolved & verified.
+
+**Open (root-caused during verification; need node-testable fixes):**
+- **#69 (NEW)** — the evolve subprocess runs each stage in its own `asyncio.run()`,
+  so cognee's engine loop-binding makes `github_sync` AND `linear_sync` fail every
+  pass (`got Future attached to a different loop`) — the recurring GitHub/Linear
+  sync isn't actually running. Fix: run the stages in one event loop.
+- **#46 (Linear mirrors)** — auto-map deployed (PR #66) but blocked by #69 +
+  the HTTP resync timeout (#52's 200 per-issue cognifies starve the request).
+- **#50 (search latency)** — backpressure/429 done; raw ~6–9s is cognee's
+  per-search pipeline (Q&A caching + possibly remote embedding), needs node
+  profiling.
 - **Lesson:** the `[DataItem]` garbage lived in three distinct stores (session
   cache, Kuzu graph, pgvector chunks). Graph deletion ≠ vector deletion ≠
   session-cache; **live prod testing was essential — unit tests passed at every

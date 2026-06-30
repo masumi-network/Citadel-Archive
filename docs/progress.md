@@ -47,13 +47,23 @@ the `[DataItem]` garbage lived in three distinct stores (session cache, Kuzu
 graph, pgvector chunks); graph deletion ≠ vector deletion ≠ session-cache, and
 live prod testing was essential — unit tests passed at every wrong layer.**
 
-**Status:** 17 issues closed and live-verified (#25, #27, #28, #33, #35, #36, #38,
-#39, #40, #41, #43, #44, #45, #48, #51, #52, #53) — incl. the #25 umbrella
-diagnostic (version skew + `[DataItem]` + health gates + ingest→index all
-resolved). 3 open: #47 (Kuzu) and #46 (Linear mirrors) deployed + code-correct,
-pending the next hourly evolve pass to confirm at runtime; #50 (search latency) —
-backpressure done, raw ~6–9s latency is cognee-recall-bound (separate perf
-effort). **Action: rotate `CITADEL_ADMIN_KEY`** (surfaced in-session during ops).
+**Status (final):** **18 issues closed and live-verified** (#25, #27, #28, #33,
+#35, #36, #38, #39, #40, #41, #43, #44, #45, #47, #48, #51, #52, #53) — incl. the
+#25 umbrella diagnostic and **#47 (Kuzu lock), node-verified: the post-deploy
+hourly evolve pass ran clean (`stages finished exit=0`, zero `Lock is held by
+PID`, green verify canary).**
+
+3 open, each root-caused (need node-testable fixes, not blind deploys):
+- **#69 (NEW)** — verifying #46 exposed that the evolve subprocess runs each stage
+  in its own `asyncio.run()`, so cognee's engine loop-binding makes `github_sync`
+  AND `linear_sync` fail every pass (`got Future attached to a different loop`).
+  The recurring GitHub/Linear sync isn't actually running.
+- **#46 (Linear mirrors)** — auto-map deployed (PR #66) but blocked by #69 (recurring
+  sync) and the HTTP resync timeout (#52's 200 per-issue cognifies starve the request).
+- **#50 (search latency)** — backpressure/429 done; raw ~6–9s is cognee's per-search
+  pipeline (Q&A caching + possibly remote embedding), needs node profiling.
+
+**Action: rotate `CITADEL_ADMIN_KEY`** (surfaced in-session during ops).
 
 ## 2026-06-29 — v0.2.0 + v0.2.1: CLI DX overhaul shipped (PyPI + Railway)
 
