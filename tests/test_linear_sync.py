@@ -18,13 +18,19 @@ from kb.service import Citadel
 
 
 class FakeLinearClient(LinearClient):
-    def __init__(self, issues: list[dict[str, Any]]) -> None:
+    def __init__(
+        self, issues: list[dict[str, Any]], users: list[dict[str, Any]] | None = None
+    ) -> None:
         super().__init__(api_key="test-key")
         self._issues = issues
+        self._users = users or []
 
     def fetch_issues(self, *, max_issues: int) -> list[LinearIssue]:
         parsed = [LinearIssue.from_node(item) for item in self._issues]
         return [item for item in parsed if item][:max_issues]
+
+    def fetch_users(self, *, max_users: int = 250) -> list[dict[str, Any]]:
+        return self._users
 
 
 @pytest.fixture
@@ -189,6 +195,56 @@ async def test_linear_sync_writes_each_issue_to_central(
     assert "linear:ENG-2" in id_tags
     # The full description reaches Central, not just the title.
     assert any("Implement workspace sync." in i["data"] for i in central_issue_writes)
+
+
+@pytest.mark.asyncio
+async def test_linear_sync_auto_maps_assignee_by_member_email(
+    tmp_path: Any, monkeypatch: Any
+) -> None:
+    # #46: when the issue payload omits assignee.email, resolve the mirror by
+    # matching the assignee id against the Linear members list (id->email) vs seats.
+    config = CitadelConfig(
+        linear_api_key="lin_test",
+        linear_sync_state_path=str(tmp_path / "s.json"),
+        access_store_path=str(tmp_path / "a.json"),
+    )
+    citadel = Citadel(config)
+    store = AccessStore(config.access_store_path)
+    store.create_seat(name="John Doe", slug="john", email="john@example.com", issue_token=False)
+
+    issues = [
+        {
+            "id": "issue-1",
+            "identifier": "ENG-1",
+            "title": "x",
+            "description": "d",
+            "url": "u",
+            "priority": 1,
+            "updatedAt": "2026-06-25T10:00:00Z",
+            "state": {"name": "In Progress", "type": "started"},
+            "team": {"key": "ENG", "name": "Eng"},
+            "assignee": {"id": "linear-user-john", "name": "John", "email": None},  # no email
+        }
+    ]
+    members = [{"id": "linear-user-john", "name": "John Doe", "email": "john@example.com", "active": True}]
+
+    async def fake_learn(self: Any, data: str, **_: Any) -> Any:
+        class Outcome:
+            class ingest:
+                accepted = True
+
+        return Outcome()
+
+    monkeypatch.setattr("kb.linear_sync.LearningProcess.learn", fake_learn)
+    syncer = LinearSyncer(
+        citadel, client=FakeLinearClient(issues, users=members), access_store=store
+    )
+
+    result = await syncer.run(force=True)
+    assert result["ok"] is True
+    assert result["auto_mapped_assignees"] == 1
+    assert result["mirrored_count"] == 1
+    assert seat_dataset("john") in result["mirrors"]
 
 
 @pytest.mark.asyncio
