@@ -1,6 +1,24 @@
 # Citadel Progress
 
-Last updated: 2026-06-29.
+Last updated: 2026-06-30.
+
+## 2026-06-30 — Read-side hardening sprint (issues #25–#49)
+
+Heavy-user + pentest testing surfaced a broken read/write data plane behind green
+dashboards. Root cause: durable writes were routed through cognee's per-session
+cache, corrupting them to the literal `[DataItem]` and never indexing them.
+
+Shipped to prod (9 PRs, each tested): the data-plane root-cause fix (#54, #56,
+**node-verified**), MCP resource auth (#57), CLI false-green (#58), version
+single-sourcing (#55, #59), input validation (#60), sync-auth surfacing (#61),
+and repo auto-join (#62). **Closed: #26, #29, #30, #31, #32, #34, #37, #42, #49.**
+
+Remaining work + per-issue fix approach tracked in
+[`docs/read-side-hardening-sprint.md`](read-side-hardening-sprint.md): MCP
+406/tool-filter (#45, #33), drilldown (#28), Linear (#46), promotion (#39, #48),
+writer-seat (#40, #41), onboarding (#35, #36, #38, #43), and the design/high-risk
+items health gates (#27), search timeout (#44), Kuzu lock (#47), plus a
+legacy-garbage purge.
 
 ## 2026-06-29 — v0.2.0 + v0.2.1: CLI DX overhaul shipped (PyPI + Railway)
 
