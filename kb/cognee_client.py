@@ -27,6 +27,22 @@ def _suppress_inline_cognify() -> bool:
     }
 
 
+def _session_recall_enabled() -> bool:
+    """Whether to read cognee's per-session QA cache before the durable store.
+
+    The session cache is the deprecated, pre-#54 corrupt path: it stored writes as
+    the literal "[DataItem]" placeholder and is no longer written to (durable
+    writes go to the chunk/vector store). Reading it first only resurfaces that
+    stale garbage in search/linear_search (#15/#52/#26), so it is OFF by default.
+    """
+    return os.getenv("CITADEL_COGNEE_SESSION_RECALL", "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+
 class CogneeGateway(Protocol):
     async def remember(
         self,
@@ -284,7 +300,11 @@ class CogneePublicClient:
         import cognee
 
         await self._ensure_cognee_ready(cognee)
-        if session_id and hasattr(cognee, "recall"):
+        # The per-session QA cache is the deprecated pre-#54 path and now serves only
+        # stale "[DataItem]" scaffolds, so it is OFF by default — durable recall goes
+        # straight to the chunk/vector store (#15/#52). Re-enable per-session reads
+        # with CITADEL_COGNEE_SESSION_RECALL=true only if the cache is ever repaired.
+        if session_id and hasattr(cognee, "recall") and _session_recall_enabled():
             try:
                 session_results = await cognee.recall(
                     query,
