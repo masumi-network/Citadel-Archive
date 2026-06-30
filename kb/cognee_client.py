@@ -51,6 +51,9 @@ class CogneeGateway(Protocol):
     async def cognify(self, *, datasets: list[str], force: bool = False) -> Any:
         ...
 
+    async def get_document(self, document_id: str) -> dict[str, Any] | None:
+        ...
+
 
 class CogneePublicClient:
     def __init__(self) -> None:
@@ -281,6 +284,42 @@ class CogneePublicClient:
         engine = await get_graph_engine()
         nodes, edges = await engine.get_graph_data()
         return list(nodes), list(edges)
+
+    async def get_document(self, document_id: str) -> dict[str, Any] | None:
+        """Resolve a search-hit node id back to its stored chunk text (#28).
+
+        cognee search hits carry a graph node/chunk id with no backing document
+        store, so ``/api/documents`` previously 404'd on every cognee hit. Look
+        the node up in the graph and return its text plus the remaining
+        properties; ``None`` when the node is missing or carries no text.
+        """
+        try:
+            nodes, _ = await self.graph_data()
+        except Exception as exc:  # noqa: BLE001
+            if self._is_no_data_error(exc):
+                return None
+            raise
+        for node_id, properties in nodes:
+            if str(node_id) != str(document_id):
+                continue
+            props = dict(properties or {})
+            text: str | None = None
+            text_key: str | None = None
+            for key in ("text", "chunk", "content", "raw_content"):
+                value = props.get(key)
+                if isinstance(value, str) and value.strip():
+                    text, text_key = value, key
+                    break
+            if text is None:
+                return None
+            return {
+                "id": str(document_id),
+                "source_type": "cognee",
+                "title": props.get("title") or None,
+                "body": text,
+                "metadata": {k: v for k, v in props.items() if k != text_key},
+            }
+        return None
 
     async def cognify(self, *, datasets: list[str], force: bool = False) -> Any:
         """Cognify already-added data in ``datasets``.

@@ -40,6 +40,11 @@ class FakeCitadel:
     async def search(self, query: str, **kwargs: Any) -> list[dict[str, Any]]:
         return [{"query": query, "dataset": kwargs["dataset"], "top_k": kwargs["top_k"]}]
 
+    documents: dict[str, dict[str, Any]] = {}
+
+    async def get_document(self, document_id: str) -> dict[str, Any] | None:
+        return self.documents.get(document_id)
+
     async def feedback(self, request: Any) -> FeedbackResult:
         return FeedbackResult(recorded=bool(request.qa_id), improved=True)
 
@@ -1441,6 +1446,55 @@ def test_github_digest_search_hit_drills_down_to_document(tmp_path: Any) -> None
     assert document.status_code == 200
     assert document.json()["document"]["title"] == hit["title"]
     assert "teach the archive about commits" in document.json()["document"]["body"]
+
+
+def test_document_endpoint_for_result_covers_real_ids_only() -> None:
+    # #28: ghsync/doc_/cognee-UUID ids are drillable; synthetic chunk: ids are not.
+    from kb.server import document_endpoint_for_result
+
+    uuid = "9dbe579d-eccb-51b6-9bba-13982cbaf69f"
+    assert document_endpoint_for_result("ghsync:abc") == "/api/documents/ghsync:abc"
+    assert document_endpoint_for_result("doc_123") == "/api/documents/doc_123"
+    assert document_endpoint_for_result(uuid) == f"/api/documents/{uuid}"
+    assert document_endpoint_for_result("chunk:deadbeef") is None
+    assert document_endpoint_for_result("") is None
+
+
+def test_cognee_search_hit_drills_down_to_document() -> None:
+    # #28: a cognee search hit (UUID id) advertises drilldown and resolves to a
+    # readable document, instead of advertising false and 404ing.
+    class DrilldownCitadel(FakeCitadel):
+        async def search(self, query: str, **kwargs: Any) -> list[dict[str, Any]]:
+            return [{"id": "node-uuid-1", "text": "the answer is 42"}]
+
+        async def get_document(self, document_id: str) -> dict[str, Any] | None:
+            if document_id == "node-uuid-1":
+                return {
+                    "id": "node-uuid-1",
+                    "source_type": "cognee",
+                    "title": "Answer",
+                    "body": "the answer is 42",
+                    "metadata": {},
+                }
+            return None
+
+    client = authed_client("test-reader")
+    app.state.citadel = DrilldownCitadel()  # after authed_client, which resets citadel
+
+    search = client.post("/search", json={"query": "answer", "top_k": 1})
+    assert search.status_code == 200
+    hit = search.json()["results"][0]
+    assert hit["_citadel"]["retrieval"]["document_drilldown_available"] is True
+    endpoint = hit["_citadel"]["document_endpoint"]
+    assert endpoint == "/api/documents/node-uuid-1"
+
+    doc = client.get(endpoint)
+    assert doc.status_code == 200
+    assert doc.json()["document"]["body"] == "the answer is 42"
+    assert doc.json()["document"]["source_type"] == "cognee"
+
+    # An unknown cognee id still 404s cleanly.
+    assert client.get("/api/documents/does-not-exist").status_code == 404
 
 
 def test_knowledge_conflict_listing_and_resolution_are_role_gated(tmp_path: Any) -> None:

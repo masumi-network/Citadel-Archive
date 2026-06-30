@@ -205,6 +205,10 @@ class Citadel:
             build_global_context_index=self.config.build_global_context_index,
         )
 
+    async def get_document(self, document_id: str) -> dict[str, Any] | None:
+        """Resolve a cognee search-hit id to its document/chunk (#28)."""
+        return await self.cognee.get_document(document_id)
+
     async def _graph_counts(self) -> dict[str, int]:
         nodes, edges = await self.cognee.graph_data()
         return {"nodes": len(nodes), "edges": len(edges)}

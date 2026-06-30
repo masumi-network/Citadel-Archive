@@ -1456,9 +1456,13 @@ def result_provenance(result: dict[str, Any]) -> dict[str, str]:
 
 
 def document_endpoint_for_result(result_id: str) -> str | None:
-    if result_id.startswith(f"{GITHUB_DOC_ID_PREFIX}:") or result_id.startswith("doc_"):
-        return f"/api/documents/{result_id}"
-    return None
+    # Any real id is now drillable (#28): ghsync:/doc_ as before, plus native
+    # cognee node/chunk UUIDs that /api/documents resolves via the graph engine.
+    # Only synthetic content-hash ids (chunk:<sha>, given to id-less results) have
+    # no backing store, so they stay honestly non-drillable.
+    if not result_id or result_id.startswith("chunk:"):
+        return None
+    return f"/api/documents/{result_id}"
 
 
 def result_content_sha256(result: dict[str, Any]) -> str:
@@ -2682,8 +2686,13 @@ async def source_document(document_id: str, request: Request) -> Any:
         return {"ok": True, "document": jsonable_encoder(github_document)}
     try:
         document = get_obsidian_sync().document(document_id)
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail="Document not found.") from exc
+    except KeyError:
+        # Not a github/obsidian doc — fall back to resolving a native cognee
+        # search-hit id against the graph store (#28).
+        cognee_document = await get_citadel().get_document(document_id)
+        if cognee_document is None:
+            raise HTTPException(status_code=404, detail="Document not found.") from None
+        return {"ok": True, "document": jsonable_encoder(cognee_document)}
     return {"ok": True, "document": jsonable_encoder(document)}
 
 

@@ -145,6 +145,38 @@ async def test_cognify_raises_without_llm_key(monkeypatch: Any) -> None:
 
 
 @pytest.mark.asyncio
+async def test_get_document_resolves_node_text(monkeypatch: Any) -> None:
+    # #28: resolve a search-hit node id to its chunk text via the graph store.
+    client = CogneePublicClient()
+
+    async def fake_graph_data() -> tuple[list[Any], list[Any]]:
+        return ([("node-1", {"text": "hello world", "title": "Greeting", "extra": 1})], [])
+
+    monkeypatch.setattr(client, "graph_data", fake_graph_data)
+
+    doc = await client.get_document("node-1")
+    assert doc is not None
+    assert doc["id"] == "node-1"
+    assert doc["body"] == "hello world"
+    assert doc["title"] == "Greeting"
+    assert doc["source_type"] == "cognee"
+    assert doc["metadata"] == {"title": "Greeting", "extra": 1}  # text key excluded
+
+    assert await client.get_document("missing") is None
+
+
+@pytest.mark.asyncio
+async def test_get_document_returns_none_for_textless_node(monkeypatch: Any) -> None:
+    client = CogneePublicClient()
+
+    async def fake_graph_data() -> tuple[list[Any], list[Any]]:
+        return ([("node-2", {"title": "no body here"})], [])
+
+    monkeypatch.setattr(client, "graph_data", fake_graph_data)
+    assert await client.get_document("node-2") is None
+
+
+@pytest.mark.asyncio
 async def test_improve_raises_without_llm_key(monkeypatch: Any) -> None:
     """improve must fail loud like cognify — cognee swallows the keyless error (#41)."""
     monkeypatch.delenv("LLM_API_KEY", raising=False)
