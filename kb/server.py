@@ -12,6 +12,8 @@ import re
 import secrets
 from collections.abc import Mapping
 from dataclasses import dataclass
+from importlib.metadata import PackageNotFoundError
+from importlib.metadata import version as _pkg_version
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, Query, Request, Response
@@ -186,9 +188,17 @@ async def lifespan(app: FastAPI) -> Any:
             await _stop_evolve_scheduler(evolve_task)
 
 
+# Single-source the service version from the installed package metadata so the
+# /.well-known/citadel.json discovery field and the CLI never drift (the
+# hardcoded "0.1.0" misled operators into thinking the node ran stale code).
+try:
+    _SERVICE_VERSION = _pkg_version("citadel-archive")
+except PackageNotFoundError:
+    _SERVICE_VERSION = "0+unknown"
+
 app = FastAPI(
     title="Citadel Archive",
-    version="0.1.0",
+    version=_SERVICE_VERSION,
     description="Self-hosted Organization Vault wrapper around Cognee.",
     lifespan=lifespan,
 )
