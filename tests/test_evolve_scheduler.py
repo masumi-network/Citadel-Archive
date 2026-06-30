@@ -123,6 +123,8 @@ async def test_evolve_scheduler_loop_runs_subprocess_then_cognifies(monkeypatch:
     # Phase 1: heavy stages in a subprocess with cognify disabled (frees the lock).
     assert sub_envs[0]["CITADEL_RUN_MODE"] == "evolve"
     assert sub_envs[0]["CITADEL_EVOLVE_COGNIFY_ENABLED"] == "false"
+    # ...and add-only so its per-ingest background cognify never writes Kuzu (#47).
+    assert sub_envs[0]["CITADEL_SUPPRESS_INLINE_COGNIFY"] == "true"
     # Phase 2: cognify ran in-loop after the subprocess.
     assert len(cognify_calls) >= 2
     # The verify canary verdict is recorded for /readyz (#27).

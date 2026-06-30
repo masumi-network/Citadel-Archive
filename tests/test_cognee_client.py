@@ -43,18 +43,19 @@ async def test_cognee_public_client_runs_startup_migrations_once(monkeypatch: An
     async def run_startup_migrations() -> None:
         calls.append("migrate")
 
-    async def remember(*args: Any, **kwargs: Any) -> dict[str, Any]:
+    async def add(*args: Any, **kwargs: Any) -> dict[str, Any]:
         return {"ok": True}
 
     async def recall(*args: Any, **kwargs: Any) -> list[dict[str, Any]]:
         return [{"ok": True}]
 
+    monkeypatch.setenv("CITADEL_SUPPRESS_INLINE_COGNIFY", "true")  # add-only, no bg task
     monkeypatch.setitem(
         sys.modules,
         "cognee",
         SimpleNamespace(
             run_startup_migrations=run_startup_migrations,
-            remember=remember,
+            add=add,
             recall=recall,
         ),
     )
@@ -77,15 +78,16 @@ async def test_cognee_public_client_creates_database_and_retries_migrations(
         if calls == ["migrate"]:
             raise RuntimeError("missing enum")
 
-    async def remember(*args: Any, **kwargs: Any) -> dict[str, Any]:
+    async def add(*args: Any, **kwargs: Any) -> dict[str, Any]:
         return {"ok": True}
 
+    monkeypatch.setenv("CITADEL_SUPPRESS_INLINE_COGNIFY", "true")  # add-only, no bg task
     monkeypatch.setitem(
         sys.modules,
         "cognee",
         SimpleNamespace(
             run_startup_migrations=run_startup_migrations,
-            remember=remember,
+            add=add,
         ),
     )
     client = CogneePublicClient()
@@ -109,27 +111,27 @@ async def test_cognee_public_client_does_not_pass_external_metadata_keyword(
     async def run_startup_migrations() -> None:
         return None
 
-    async def remember(*args: Any, **kwargs: Any) -> dict[str, Any]:
+    async def add(*args: Any, **kwargs: Any) -> dict[str, Any]:
         received["args"] = args
         received["kwargs"] = kwargs
         return {"ok": True}
 
+    monkeypatch.setenv("CITADEL_SUPPRESS_INLINE_COGNIFY", "true")  # add-only, no bg task
     monkeypatch.setitem(
         sys.modules,
         "cognee",
         SimpleNamespace(
             run_startup_migrations=run_startup_migrations,
-            remember=remember,
+            add=add,
         ),
     )
     client = CogneePublicClient()
 
     await client.remember("note", dataset_name="notes", tags=("github", "daily-sync"))
 
-    assert received["kwargs"] == {
-        "dataset_name": "notes",
-        "run_in_background": True,
-    }
+    # metadata rides in the DataItem, never as an add() keyword (external_metadata
+    # is rejected by cognee.add); only dataset_name is passed.
+    assert received["kwargs"] == {"dataset_name": "notes"}
 
 
 @pytest.mark.asyncio
@@ -295,7 +297,7 @@ async def test_durable_writes_bypass_session_cache(monkeypatch: Any) -> None:
     async def run_startup_migrations() -> None:
         return None
 
-    async def remember(data: Any, **kwargs: Any) -> dict[str, Any]:
+    async def add(data: Any, **kwargs: Any) -> dict[str, Any]:
         captured["data"] = data
         captured["kwargs"] = kwargs
         return {"ok": True}
@@ -303,32 +305,64 @@ async def test_durable_writes_bypass_session_cache(monkeypatch: Any) -> None:
     monkeypatch.setitem(
         sys.modules,
         "cognee",
-        SimpleNamespace(
-            run_startup_migrations=run_startup_migrations,
-            remember=remember,
-        ),
+        SimpleNamespace(run_startup_migrations=run_startup_migrations, add=add),
     )
+    # Suppress the background cognify so the test is deterministic (and so a real
+    # cognify isn't scheduled against the mock); the bypass assertion is on add.
+    monkeypatch.setenv("CITADEL_SUPPRESS_INLINE_COGNIFY", "true")
     client = CogneePublicClient()
 
     # Even with a session_id supplied, the write must NOT be diverted into the
-    # session cache: no session_id reaches cognee.remember, and the payload is
+    # session cache: no session_id reaches cognee.add, and the payload is
     # DataItem-wrapped (carrying citadel_tags) for the permanent graph.
-    await client.remember(
+    result = await client.remember(
         "real digest",
         dataset_name="masumi-network",
         session_id="masumi-github-daily",
         tags=("github",),
     )
     assert "session_id" not in captured["kwargs"]
-    # Durable path: no session routing, and cognify runs in the background so the
-    # write returns promptly instead of blocking on inline LLM cognify.
-    assert captured["kwargs"] == {
-        "dataset_name": "masumi-network",
-        "run_in_background": True,
-    }
+    assert captured["kwargs"] == {"dataset_name": "masumi-network"}
     assert isinstance(captured["data"], DataItem)
     assert captured["data"].data == "real digest"
     assert captured["data"].external_metadata == {"citadel_tags": ["github"]}
+    assert result == {"added": {"ok": True}, "cognify": "suppressed"}
+
+
+@pytest.mark.asyncio
+async def test_remember_schedules_lock_guarded_background_cognify(monkeypatch: Any) -> None:
+    # #47: outside the suppress flag, remember adds then schedules OUR background
+    # cognify (lock-guarded), not cognee's fire-and-forget run_in_background.
+    import asyncio
+
+    import kb.cognee_client as cc
+
+    monkeypatch.delenv("CITADEL_SUPPRESS_INLINE_COGNIFY", raising=False)
+    monkeypatch.setenv("LLM_API_KEY", "k")
+    cognified: list[Any] = []
+
+    async def run_startup_migrations() -> None:
+        return None
+
+    async def add(data: Any, **kwargs: Any) -> dict[str, Any]:
+        return {"ok": True}
+
+    async def cognify(*, datasets: Any, incremental_loading: bool) -> dict[str, Any]:
+        cognified.append(list(datasets))
+        return {"ok": True}
+
+    monkeypatch.setitem(
+        sys.modules,
+        "cognee",
+        SimpleNamespace(run_startup_migrations=run_startup_migrations, add=add, cognify=cognify),
+    )
+    client = CogneePublicClient()
+
+    result = await client.remember("note", dataset_name="seat:sarthi", tags=())
+    assert result == {"added": {"ok": True}, "background_cognify": True}
+    # Drain the scheduled background cognify and confirm it ran via cognify().
+    await asyncio.gather(*list(cc._BACKGROUND_COGNIFY_TASKS), return_exceptions=True)
+    assert cognified == [["seat:sarthi"]]
 
 
 @pytest.mark.asyncio
