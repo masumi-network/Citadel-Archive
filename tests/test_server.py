@@ -45,6 +45,14 @@ class FakeCitadel:
     async def get_document(self, document_id: str) -> dict[str, Any] | None:
         return self.documents.get(document_id)
 
+    async def cleanup_legacy_nodes(self, *, dry_run: bool = True) -> dict[str, Any]:
+        return {
+            "dry_run": dry_run,
+            "counts_by_kind": {"marker": 1, "dataitem": 2},
+            "candidates": [{"id": "g1", "kind": "marker", "preview": "x"}],
+            "deleted": 0 if dry_run else 3,
+        }
+
     async def feedback(self, request: Any) -> FeedbackResult:
         return FeedbackResult(recorded=bool(request.qa_id), improved=True)
 
@@ -1446,6 +1454,27 @@ def test_github_digest_search_hit_drills_down_to_document(tmp_path: Any) -> None
     assert document.status_code == 200
     assert document.json()["document"]["title"] == hit["title"]
     assert "teach the archive about commits" in document.json()["document"]["body"]
+
+
+def test_graph_cleanup_admin_only_and_dry_run_default(tmp_path: Any) -> None:
+    # #15: destructive cleanup is admin-only and dry-run by default.
+    app.state.access_store = AccessStore(tmp_path / "access.json")
+    admin = authed_client()
+
+    dry = admin.post("/api/admin/graph/cleanup", json={})
+    assert dry.status_code == 200
+    assert dry.json()["dry_run"] is True
+    assert dry.json()["deleted"] == 0
+    assert dry.json()["candidates"]
+
+    wet = admin.post("/api/admin/graph/cleanup", json={"dry_run": False})
+    assert wet.status_code == 200
+    assert wet.json()["deleted"] == 3
+
+    reader = authed_client("test-reader")
+    assert reader.post("/api/admin/graph/cleanup", json={}).status_code in (401, 403)
+    writer = authed_client("test-writer")
+    assert writer.post("/api/admin/graph/cleanup", json={}).status_code in (401, 403)
 
 
 def test_readyz_reports_503_when_data_plane_empty() -> None:

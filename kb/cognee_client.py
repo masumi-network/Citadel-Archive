@@ -55,6 +55,12 @@ class CogneeGateway(Protocol):
     async def get_document(self, document_id: str) -> dict[str, Any] | None:
         ...
 
+    async def graph_data(self) -> tuple[list[Any], list[Any]]:
+        ...
+
+    async def delete_graph_nodes(self, node_ids: list[str]) -> int:
+        ...
+
 
 class CogneePublicClient:
     def __init__(self) -> None:
@@ -293,6 +299,25 @@ class CogneePublicClient:
         engine = await get_graph_engine()
         nodes, edges = await engine.get_graph_data()
         return list(nodes), list(edges)
+
+    async def delete_graph_nodes(self, node_ids: list[str]) -> int:
+        """Delete nodes by id from the graph store (admin cleanup, #15).
+
+        Serializes on the writer lock like cognify, since deletion is a graph
+        write on the single Kuzu writer (#47). Returns the count requested.
+        """
+        if not node_ids:
+            return 0
+        self._prepare_cognee_environment()
+        import cognee
+
+        await self._ensure_cognee_ready(cognee)
+        from cognee.infrastructure.databases.graph import get_graph_engine
+
+        engine = await get_graph_engine()
+        async with self.writer_lock:
+            await engine.delete_nodes(node_ids)
+        return len(node_ids)
 
     async def get_document(self, document_id: str) -> dict[str, Any] | None:
         """Resolve a search-hit node id back to its stored chunk text (#28).

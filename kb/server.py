@@ -502,6 +502,12 @@ class CognifyRunBody(BaseModel):
     force: bool = False
 
 
+class GraphCleanupBody(BaseModel):
+    # Default to a non-destructive dry run: the caller must POST {"dry_run": false}
+    # to actually delete, after reviewing the listed candidates (#15).
+    dry_run: bool = True
+
+
 class AccessTokenBody(BaseModel):
     name: str = Field(min_length=1, max_length=120)
     role: str = Field(default="reader")
@@ -3189,6 +3195,49 @@ async def run_cognify(body: CognifyRunBody, request: Request) -> Any:
         },
     )
     return jsonable_encoder(result)
+
+
+@app.post("/api/admin/graph/cleanup")
+async def cleanup_graph(body: GraphCleanupBody, request: Request) -> Any:
+    """Purge legacy [DataItem]/marker/session-cache garbage from the graph (#15).
+
+    Admin-only and dry-run-by-default: the dry run lists every candidate id +
+    preview so a human verifies before POSTing {"dry_run": false} to delete.
+    """
+    actor = require_access(request, "admin", "sources:sync")
+    citadel = get_citadel()
+    try:
+        result = await citadel.cleanup_legacy_nodes(dry_run=body.dry_run)
+    except Exception as exc:  # pragma: no cover - depends on Cognee config.
+        logger.error("Graph cleanup failed: %s", exc.__class__.__name__)
+        get_access_store().record_event(
+            action="graph.cleanup",
+            actor=actor,
+            success=False,
+            detail={"dry_run": body.dry_run, "error": str(exc)},
+        )
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    get_access_store().record_event(
+        action="graph.cleanup",
+        actor=actor,
+        success=True,
+        detail={
+            "dry_run": body.dry_run,
+            "counts_by_kind": result.get("counts_by_kind"),
+            "deleted": result.get("deleted"),
+        },
+    )
+    record_mcp_audit(
+        request,
+        actor=actor,
+        success=True,
+        detail={
+            "operation": "graph.cleanup",
+            "dry_run": body.dry_run,
+            "deleted": result.get("deleted"),
+        },
+    )
+    return jsonable_encoder({"ok": True, **result})
 
 
 @app.post("/api/learning-agent/google-chat/test")

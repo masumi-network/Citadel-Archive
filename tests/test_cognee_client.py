@@ -189,6 +189,43 @@ async def test_improve_raises_without_llm_key(monkeypatch: Any) -> None:
 
 
 @pytest.mark.asyncio
+async def test_delete_graph_nodes_calls_engine(monkeypatch: Any) -> None:
+    # #15: delete_graph_nodes forwards ids to the graph engine.
+    captured: dict[str, Any] = {}
+
+    class FakeEngine:
+        async def delete_nodes(self, node_ids: list[str]) -> None:
+            captured["ids"] = list(node_ids)
+
+    async def get_graph_engine() -> FakeEngine:
+        return FakeEngine()
+
+    async def run_startup_migrations() -> None:
+        return None
+
+    monkeypatch.setitem(sys.modules, "cognee", SimpleNamespace(run_startup_migrations=run_startup_migrations))
+    monkeypatch.setitem(sys.modules, "cognee.infrastructure", SimpleNamespace())
+    monkeypatch.setitem(sys.modules, "cognee.infrastructure.databases", SimpleNamespace())
+    monkeypatch.setitem(
+        sys.modules,
+        "cognee.infrastructure.databases.graph",
+        SimpleNamespace(get_graph_engine=get_graph_engine),
+    )
+
+    client = CogneePublicClient()
+    monkeypatch.setattr(client, "_prepare_cognee_environment", lambda: None)
+
+    async def _ready(_cognee: Any) -> None:
+        return None
+
+    monkeypatch.setattr(client, "_ensure_cognee_ready", _ready)
+
+    assert await client.delete_graph_nodes(["a", "b"]) == 2
+    assert captured["ids"] == ["a", "b"]
+    assert await client.delete_graph_nodes([]) == 0  # no-op
+
+
+@pytest.mark.asyncio
 async def test_cognify_serializes_on_writer_lock(monkeypatch: Any) -> None:
     # #47: Kuzu is single-writer, so two overlapping cognify calls must serialize.
     import asyncio
