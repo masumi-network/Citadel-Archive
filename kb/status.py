@@ -16,6 +16,7 @@ import json
 import os
 import shutil
 import time
+import urllib.error
 import urllib.request
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -154,7 +155,39 @@ def check_search(base_url: str, token: str | None, *, timeout: float = _SEARCH_T
     if results is None:
         results = data.get("matches")
     count = len(results) if isinstance(results, list) else 0
-    return Check("search", ok=True, detail=f"{count} result(s)", latency_ms=latency, data={"count": count})
+    # A zero-result smoke search means the read path is up but the data plane is
+    # empty/broken — report it honestly instead of always-green (#27).
+    return Check("search", ok=count > 0, detail=f"{count} result(s)", latency_ms=latency, data={"count": count})
+
+
+def check_corpus(base_url: str, token: str | None, *, timeout: float = _TIMEOUT) -> Check | None:
+    """Data-plane corpus health from the Node's honest /readyz (#27).
+
+    Returns None (non-gating) when there is no token or /readyz is unreachable;
+    /readyz answers 503 with a body when the corpus gate or canary is RED, so we
+    parse the body off the HTTPError too.
+    """
+    if not token:
+        return None
+    url = f"{base_url.rstrip('/')}/readyz"
+    try:
+        data = _request("GET", url, token=token, timeout=timeout)
+    except urllib.error.HTTPError as exc:
+        if exc.code != 503:
+            return None
+        try:
+            data = json.loads(exc.read().decode() or "{}")
+        except (ValueError, OSError):
+            return None
+    except Exception:
+        return None
+    corpus = data.get("corpus") or {}
+    canary = data.get("canary")
+    indexed = corpus.get("indexed_docs")
+    tracked = corpus.get("tracked_sources")
+    ok = bool(corpus.get("ok", True)) and (canary is None or bool(canary.get("ok", True)))
+    detail = "ok" if indexed is None else f"{indexed} indexed / {tracked} tracked"
+    return Check("corpus", ok=ok, detail=detail, data={"canary": canary})
 
 
 def search_node(
@@ -314,12 +347,18 @@ def gather_status(
     checks = [node, auth]
     if with_search:
         checks.append(check_search(base_url, token))  # uses its own longer timeout
+    corpus = check_corpus(base_url, token, timeout=timeout)
+    if corpus is not None:
+        checks.append(corpus)
     checks.extend(check_local_setup(repo, config_path))
 
     recent = fetch_recent(base_url, token, timeout=timeout) if with_recent else []
+    # A RED corpus gate (sources tracked but graph empty, or the canary failed)
+    # makes the whole report unhealthy — no more green over a broken data plane (#27).
+    corpus_ok = corpus.ok if corpus is not None else True
     return StatusReport(
         node_url=base_url,
-        healthy=node.ok and auth.ok,
+        healthy=node.ok and auth.ok and corpus_ok,
         identity=auth.data,
         checks=checks,
         recent=recent,
@@ -327,12 +366,13 @@ def gather_status(
 
 
 # Checks split into two sections; everything not here is "Local setup".
-_CONNECTIVITY = ("node", "auth", "search")
+_CONNECTIVITY = ("node", "auth", "search", "corpus")
 # Human labels — the raw snake_case names read like debug output.
 _CHECK_LABELS = {
     "node": "Node",
     "auth": "Auth",
     "search": "Search",
+    "corpus": "Data plane",
     "token": "Token",
     "mcp": "MCP server",
     "pre_push_hook": "Pre-push hook",
@@ -411,12 +451,35 @@ def render_text(report: StatusReport, *, color: bool = False) -> str:
             detail = next((c.detail for c in search_fail), "")
             lines.append(paint(f"  Search degraded — {detail} (non-gating).", "yellow", enable=color))
     else:
-        labels = ", ".join(_CHECK_LABELS.get(c.name, c.name) for c in conn_fail) or "Node/Auth"
-        lines.append(
-            paint(
-                f"Not connected — {labels} failing. Check the Node URL / token, or run `citadel onboard`.",
-                "yellow",
-                enable=color,
+        node_auth_fail = [c for c in conn_fail if c.name in ("node", "auth")]
+        corpus_fail = next((c for c in conn if c.name == "corpus" and not c.ok), None)
+        if node_auth_fail:
+            labels = ", ".join(_CHECK_LABELS.get(c.name, c.name) for c in node_auth_fail) or "Node/Auth"
+            lines.append(
+                paint(
+                    f"Not connected — {labels} failing. Check the Node URL / token, or run `citadel onboard`.",
+                    "yellow",
+                    enable=color,
+                )
             )
-        )
+        elif corpus_fail is not None:
+            # The Node is up, but the data plane is broken (sources tracked, graph
+            # empty, or the cognify canary failed) — the exact #27 failure mode.
+            lines.append(
+                paint(
+                    f"Data plane broken — {corpus_fail.detail}. The Node is up but search "
+                    "returns nothing; ingested data is not being indexed.",
+                    "red",
+                    enable=color,
+                )
+            )
+        else:
+            labels = ", ".join(_CHECK_LABELS.get(c.name, c.name) for c in conn_fail) or "Node/Auth"
+            lines.append(
+                paint(
+                    f"Not connected — {labels} failing. Check the Node URL / token, or run `citadel onboard`.",
+                    "yellow",
+                    enable=color,
+                )
+            )
     return "\n".join(lines)

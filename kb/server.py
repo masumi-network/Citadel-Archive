@@ -18,7 +18,13 @@ from typing import Any
 
 from fastapi import FastAPI, HTTPException, Query, Request, Response
 from fastapi.encoders import jsonable_encoder
-from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, StreamingResponse
+from fastapi.responses import (
+    FileResponse,
+    HTMLResponse,
+    JSONResponse,
+    RedirectResponse,
+    StreamingResponse,
+)
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -68,6 +74,17 @@ MCP_ENDPOINT_PATH = "/mcp/"
 # Strong refs to detached fire-and-forget tasks (e.g. the webhook re-ingest) so
 # the event loop does not garbage-collect them mid-flight.
 _BACKGROUND_TASKS: set[asyncio.Task[Any]] = set()
+
+# Most recent evolve-scheduler cognify canary verdict (verify=True), surfaced via
+# /readyz so an always-on health probe goes RED when end-to-end ingest+cognify+
+# search stops working — not only when node/auth are down (#27). None until the
+# first scheduled pass runs.
+_LAST_CANARY: dict[str, Any] | None = None
+# Corpus-volume gate: if at least this many sources are tracked but the graph holds
+# fewer than the floor of indexed nodes, the data plane is broken (green dashboards
+# over an empty graph were the #27 failure mode).
+_MIN_TRACKED_FOR_CORPUS = 10
+_INDEXED_FLOOR = 1
 
 mcp_server = create_mcp_server()
 mcp_app = mcp_server.streamable_http_app()
@@ -166,11 +183,22 @@ async def _evolve_scheduler_loop(interval_seconds: int) -> None:
             "on",
         }
         try:
-            result = await get_citadel().cognify_dataset(force=force)
+            # verify=True runs the end-to-end ingest+cognify+search canary and
+            # records its verdict for /readyz (#27).
+            result = await get_citadel().cognify_dataset(force=force, verify=True)
+            global _LAST_CANARY
+            verification = result.get("verification") or {}
+            _LAST_CANARY = {
+                "ok": bool(result.get("ok")),
+                "search_hit": verification.get("search_hit"),
+                "graph_grew": result.get("graph_grew"),
+                "marker": verification.get("marker"),
+            }
             logger.info(
-                "Evolve scheduler: cognify finished (graph_after=%s grew=%s)",
+                "Evolve scheduler: cognify finished (graph_after=%s grew=%s canary_ok=%s)",
                 result.get("graph_after"),
                 result.get("graph_grew"),
+                _LAST_CANARY["ok"],
             )
         except asyncio.CancelledError:
             raise
@@ -2047,18 +2075,49 @@ async def get_skill(slug: str) -> FileResponse:
     return FileResponse(path, media_type="text/markdown; charset=utf-8", headers=headers)
 
 
+async def _corpus_health() -> dict[str, Any]:
+    """Data-plane volume gate: are tracked sources actually indexed? (#27)
+
+    Fail-soft — any error returns ok=True with a ``degraded`` note so readiness
+    never flaps on a transient graph read; the real signal is "many sources
+    tracked but the graph is empty".
+    """
+    try:
+        tracked = 0
+        github_status = await get_github_syncer().status()
+        tracked += int(github_status.get("tracked_repositories") or 0)
+        repo_content_status = await get_repo_content_syncer().status()
+        tracked += int(repo_content_status.get("tracked_files") or 0)
+        linear_status = await get_linear_syncer().status()
+        tracked += int(linear_status.get("issue_count") or 0)
+        counts = await get_citadel()._graph_counts()
+        indexed = int(counts.get("nodes") or 0)
+        ok = not (tracked >= _MIN_TRACKED_FOR_CORPUS and indexed < _INDEXED_FLOOR)
+        return {"ok": ok, "tracked_sources": tracked, "indexed_docs": indexed}
+    except Exception as exc:  # noqa: BLE001 - readiness must not flap on a transient read
+        logger.warning("corpus health check degraded (fail-soft to ok): %s", exc)
+        return {"ok": True, "tracked_sources": None, "indexed_docs": None, "degraded": str(exc)}
+
+
 @app.get("/readyz")
-async def readyz(request: Request) -> dict[str, Any]:
+async def readyz(request: Request) -> Any:
     require_access(request, "reader", "kb:read")
     config = get_citadel().config
-    return {
-        "ok": True,
+    corpus = await _corpus_health()
+    canary = _LAST_CANARY
+    # RED when the corpus gate trips or the last end-to-end canary failed.
+    ok = corpus["ok"] and (canary is None or bool(canary.get("ok", True)))
+    payload = {
+        "ok": ok,
         "service": "citadel",
         "tenant_id": config.tenant_id,
         "default_dataset": config.default_dataset,
         "auto_improve": config.auto_improve,
         "build_global_context_index": config.build_global_context_index,
+        "corpus": corpus,
+        "canary": canary,
     }
+    return JSONResponse(payload, status_code=200 if ok else 503)
 
 
 @app.get("/api/mesh")

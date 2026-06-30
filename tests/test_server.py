@@ -1448,6 +1448,52 @@ def test_github_digest_search_hit_drills_down_to_document(tmp_path: Any) -> None
     assert "teach the archive about commits" in document.json()["document"]["body"]
 
 
+def test_readyz_reports_503_when_data_plane_empty() -> None:
+    # #27: many sources tracked but an empty graph → /readyz is RED (503), so an
+    # always-on probe and `citadel status` stop reporting green over a broken plane.
+    class EmptyGraphCitadel(FakeCitadel):
+        async def _graph_counts(self) -> dict[str, int]:
+            return {"nodes": 0, "edges": 0}
+
+    class BusySyncer:
+        async def status(self) -> dict[str, Any]:
+            return {"tracked_repositories": 50, "tracked_files": 0, "issue_count": 0}
+
+    client = authed_client("test-reader")
+    app.state.citadel = EmptyGraphCitadel()
+    app.state.github_syncer = BusySyncer()
+    app.state.repo_content_syncer = BusySyncer()
+    app.state.linear_syncer = BusySyncer()
+
+    ready = client.get("/readyz")
+    assert ready.status_code == 503
+    body = ready.json()
+    assert body["ok"] is False
+    assert body["corpus"]["ok"] is False
+    assert body["corpus"]["indexed_docs"] == 0
+    assert body["corpus"]["tracked_sources"] == 50
+
+
+def test_readyz_ok_when_graph_populated() -> None:
+    class PopulatedCitadel(FakeCitadel):
+        async def _graph_counts(self) -> dict[str, int]:
+            return {"nodes": 280, "edges": 514}
+
+    class BusySyncer:
+        async def status(self) -> dict[str, Any]:
+            return {"tracked_repositories": 50, "tracked_files": 0, "issue_count": 0}
+
+    client = authed_client("test-reader")
+    app.state.citadel = PopulatedCitadel()
+    app.state.github_syncer = BusySyncer()
+    app.state.repo_content_syncer = BusySyncer()
+    app.state.linear_syncer = BusySyncer()
+
+    ready = client.get("/readyz")
+    assert ready.status_code == 200
+    assert ready.json()["corpus"]["ok"] is True
+
+
 def test_document_endpoint_for_result_covers_real_ids_only() -> None:
     # #28: ghsync/doc_/cognee-UUID ids are drillable; synthetic chunk: ids are not.
     from kb.server import document_endpoint_for_result

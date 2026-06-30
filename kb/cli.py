@@ -1012,6 +1012,15 @@ async def _doctor(args: argparse.Namespace) -> int:
         issues.append({"problem": f"Node rejected the token ({auth.detail})",
                        "fix": "token revoked/expired or wrong Node — re-mint (`citadel seat create`) or re-onboard"})
 
+    # Data-plane gate: a reachable, authenticated Node whose corpus check is RED
+    # (sources tracked but graph empty, or the cognify canary failed) is a real
+    # problem, not "No problems found" (#27). Manual issue (no kind) → stays
+    # unresolved so doctor exits nonzero.
+    corpus = checks.get("corpus")
+    if node and node.ok and auth and auth.ok and corpus and not corpus.ok:
+        issues.append({"problem": f"data plane broken ({corpus.detail}) — Node up but retrieval is empty",
+                       "fix": "check the evolve scheduler / cognify; run `citadel cognify --verify`"})
+
     mcp_node = _mcp_node_url(repo / ".mcp.json")
     if mcp_node and cap_node and mcp_node.rstrip("/") != cap_node.rstrip("/"):
         issues.append({"problem": f".mcp.json Node ({mcp_node}) disagrees with capture config ({cap_node})",
