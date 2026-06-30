@@ -78,6 +78,15 @@ def _request(
         ) from exc
     except urllib.error.URLError as exc:
         raise PromotionClientError(str(exc.reason)) from exc
+    except TimeoutError as exc:
+        # A read-phase timeout surfaces as a bare TimeoutError from http.client's
+        # getresponse(), which urllib does NOT wrap in URLError — so it would
+        # otherwise escape as a raw traceback (#39).
+        raise PromotionClientError(
+            f"Node request timed out after {timeout:.0f}s — retry or check the Node"
+        ) from exc
+    except OSError as exc:
+        raise PromotionClientError(f"could not reach Node: {exc}") from exc
     return json.loads(body) if body else {}
 
 

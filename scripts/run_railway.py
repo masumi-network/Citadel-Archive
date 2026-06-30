@@ -197,6 +197,17 @@ def _cognify_stage() -> int:
     url = os.getenv("CITADEL_COGNIFY_TARGET_URL")
     if url:
         return _cognify_via_api(url, force=_bool(os.getenv("CITADEL_EVOLVE_COGNIFY_FORCE")))
+    # Two OS processes must never write Kuzu at once (#47): if the web's in-process
+    # evolve scheduler is enabled, the web owns the single Kuzu writer. An external
+    # cognify cron that opens Kuzu in-process here would collide ("Lock is held by
+    # PID N"). Refuse and require routing through the API instead.
+    if _bool(os.getenv("CITADEL_EVOLVE_SCHEDULER_ENABLED")):
+        logger.error(
+            "Refusing in-process cognify: CITADEL_EVOLVE_SCHEDULER_ENABLED is set, so the "
+            "web process owns the Kuzu writer. Set CITADEL_COGNIFY_TARGET_URL to the API "
+            "(e.g. http://citadel-archive.railway.internal:8080) to cognify via the web."
+        )
+        return 1
     return _cognify_mode(verify=False)
 
 

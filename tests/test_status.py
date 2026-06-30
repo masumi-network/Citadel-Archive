@@ -56,8 +56,13 @@ def test_check_local_setup(tmp_path: Path, monkeypatch) -> None:
     (tmp_path / ".mcp.json").write_text(json.dumps({"mcpServers": {"citadel": {"type": "http"}}}))
     (tmp_path / ".git" / "hooks").mkdir(parents=True)
     (tmp_path / ".git" / "hooks" / "pre-push").write_text("#!/bin/sh\n")
-    (tmp_path / ".claude").mkdir()
-    (tmp_path / ".claude" / "settings.json").write_text(
+    # Session hook lives in user-scope ~/.claude/settings.json (#38), isolated via
+    # the CITADEL_HOME autouse fixture.
+    from kb.onboard import claude_user_settings_path
+
+    user_settings = claude_user_settings_path()
+    user_settings.parent.mkdir(parents=True, exist_ok=True)
+    user_settings.write_text(
         json.dumps({"hooks": {"SessionEnd": [{"hooks": [{"command": status_mod.SESSION_HOOK_MARKER}]}]}})
     )
     cfg = tmp_path / "capture.json"
@@ -121,8 +126,41 @@ def test_check_local_setup_corrupt_config_does_not_raise(tmp_path: Path) -> None
 def test_check_search_empty_list_is_zero(monkeypatch) -> None:
     monkeypatch.setattr(status_mod._OPENER, "open", _route({"/search": {"results": []}}))
     check = status_mod.check_search("https://node.example", "ctdl_tok")
-    assert check.ok and check.data["count"] == 0
+    # #27: a zero-result smoke search is RED (read path up but data plane empty),
+    # not always-green.
+    assert check.ok is False and check.data["count"] == 0
     assert "0 result(s)" in check.detail
+
+
+def test_check_corpus_red_when_readyz_503(monkeypatch) -> None:
+    # #27: /readyz answers 503 + body when the corpus gate trips; check_corpus
+    # parses the body and reports RED.
+    import io
+    import urllib.error
+
+    body = json.dumps(
+        {"ok": False, "corpus": {"ok": False, "tracked_sources": 200, "indexed_docs": 0}, "canary": None}
+    ).encode()
+
+    def raise_503(request, timeout=None):
+        raise urllib.error.HTTPError(request.full_url, 503, "Service Unavailable", {}, io.BytesIO(body))
+
+    monkeypatch.setattr(status_mod._OPENER, "open", raise_503)
+    check = status_mod.check_corpus("https://node.example", "ctdl_tok")
+    assert check is not None
+    assert check.ok is False
+    assert "0 indexed / 200 tracked" in check.detail
+
+
+def test_check_corpus_ok_when_readyz_healthy(monkeypatch) -> None:
+    monkeypatch.setattr(
+        status_mod._OPENER,
+        "open",
+        _route({"/readyz": {"ok": True, "corpus": {"ok": True, "tracked_sources": 200, "indexed_docs": 280}, "canary": {"ok": True}}}),
+    )
+    check = status_mod.check_corpus("https://node.example", "ctdl_tok")
+    assert check is not None and check.ok is True
+    assert "280 indexed / 200 tracked" in check.detail
 
 
 def test_gather_status_node_down(tmp_path: Path) -> None:

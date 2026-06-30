@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 from typing import Any, Protocol
@@ -51,10 +52,27 @@ class CogneeGateway(Protocol):
     async def cognify(self, *, datasets: list[str], force: bool = False) -> Any:
         ...
 
+    async def get_document(self, document_id: str) -> dict[str, Any] | None:
+        ...
+
+    async def graph_data(self) -> tuple[list[Any], list[Any]]:
+        ...
+
+    async def delete_graph_nodes(self, node_ids: list[str]) -> int:
+        ...
+
 
 class CogneePublicClient:
     def __init__(self) -> None:
         self._startup_migrations_done = False
+        # Serializes graph writes within this process — Kuzu is a single-writer
+        # embedded DB, so two overlapping cognify calls (an inline ingest cognify,
+        # the evolve scheduler, /api/cognify/run) must not collide (#47). One client
+        # per Citadel; the app uses a single Citadel singleton, so this is the
+        # process-wide writer gate. The evolve scheduler also holds it across its
+        # Phase-1 subprocess so the web never cognifies while the subprocess owns
+        # the on-disk Kuzu lock.
+        self.writer_lock = asyncio.Lock()
 
     def _copy_env_if_missing(self, target: str, *sources: str) -> None:
         if os.getenv(target):
@@ -282,6 +300,61 @@ class CogneePublicClient:
         nodes, edges = await engine.get_graph_data()
         return list(nodes), list(edges)
 
+    async def delete_graph_nodes(self, node_ids: list[str]) -> int:
+        """Delete nodes by id from the graph store (admin cleanup, #15).
+
+        Serializes on the writer lock like cognify, since deletion is a graph
+        write on the single Kuzu writer (#47). Returns the count requested.
+        """
+        if not node_ids:
+            return 0
+        self._prepare_cognee_environment()
+        import cognee
+
+        await self._ensure_cognee_ready(cognee)
+        from cognee.infrastructure.databases.graph import get_graph_engine
+
+        engine = await get_graph_engine()
+        async with self.writer_lock:
+            await engine.delete_nodes(node_ids)
+        return len(node_ids)
+
+    async def get_document(self, document_id: str) -> dict[str, Any] | None:
+        """Resolve a search-hit node id back to its stored chunk text (#28).
+
+        cognee search hits carry a graph node/chunk id with no backing document
+        store, so ``/api/documents`` previously 404'd on every cognee hit. Look
+        the node up in the graph and return its text plus the remaining
+        properties; ``None`` when the node is missing or carries no text.
+        """
+        try:
+            nodes, _ = await self.graph_data()
+        except Exception as exc:  # noqa: BLE001
+            if self._is_no_data_error(exc):
+                return None
+            raise
+        for node_id, properties in nodes:
+            if str(node_id) != str(document_id):
+                continue
+            props = dict(properties or {})
+            text: str | None = None
+            text_key: str | None = None
+            for key in ("text", "chunk", "content", "raw_content"):
+                value = props.get(key)
+                if isinstance(value, str) and value.strip():
+                    text, text_key = value, key
+                    break
+            if text is None:
+                return None
+            return {
+                "id": str(document_id),
+                "source_type": "cognee",
+                "title": props.get("title") or None,
+                "body": text,
+                "metadata": {k: v for k, v in props.items() if k != text_key},
+            }
+        return None
+
     async def cognify(self, *, datasets: list[str], force: bool = False) -> Any:
         """Cognify already-added data in ``datasets``.
 
@@ -305,7 +378,10 @@ class CogneePublicClient:
         import cognee
 
         await self._ensure_cognee_ready(cognee)
-        return await cognee.cognify(datasets=datasets, incremental_loading=not force)
+        # Single Kuzu writer: serialize the graph write against any other in-process
+        # cognify so they cannot collide on the lock (#47).
+        async with self.writer_lock:
+            return await cognee.cognify(datasets=datasets, incremental_loading=not force)
 
     async def add_feedback(
         self,
@@ -334,6 +410,14 @@ class CogneePublicClient:
         build_global_context_index: bool = False,
     ) -> Any:
         self._prepare_cognee_environment()
+        # Mirror cognify's fail-loud guard: cognee swallows LLMAPIKeyNotSetError
+        # internally and returns normally, so a keyless improve would report
+        # success while doing nothing (false-green exit 0, #41).
+        if not os.getenv("LLM_API_KEY"):
+            raise RuntimeError(
+                "LLM_API_KEY (or OPENROUTER_API_KEY) is not set; improve requires an "
+                "LLM key."
+            )
         import cognee
 
         await self._ensure_cognee_ready(cognee)

@@ -18,7 +18,13 @@ from typing import Any
 
 from fastapi import FastAPI, HTTPException, Query, Request, Response
 from fastapi.encoders import jsonable_encoder
-from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, StreamingResponse
+from fastapi.responses import (
+    FileResponse,
+    HTMLResponse,
+    JSONResponse,
+    RedirectResponse,
+    StreamingResponse,
+)
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -69,8 +75,115 @@ MCP_ENDPOINT_PATH = "/mcp/"
 # the event loop does not garbage-collect them mid-flight.
 _BACKGROUND_TASKS: set[asyncio.Task[Any]] = set()
 
+# Most recent evolve-scheduler cognify canary verdict (verify=True), surfaced via
+# /readyz so an always-on health probe goes RED when end-to-end ingest+cognify+
+# search stops working — not only when node/auth are down (#27). None until the
+# first scheduled pass runs.
+_LAST_CANARY: dict[str, Any] | None = None
+# Corpus-volume gate: if at least this many sources are tracked but the graph holds
+# fewer than the floor of indexed nodes, the data plane is broken (green dashboards
+# over an empty graph were the #27 failure mode).
+_MIN_TRACKED_FOR_CORPUS = 10
+_INDEXED_FLOOR = 1
+
+# In-flight search count for the soft concurrency cap / 429 backpressure contract
+# (#50). Single-loop server → increment/decrement need no lock.
+_search_inflight = 0
+
+
+class _SearchSlot:
+    """Soft concurrency cap for the read path (#50).
+
+    At capacity, returns a 429 + Retry-After + X-RateLimit-* contract instead of
+    failing silently under load. Sync context manager so the slot is always
+    released, even when the search raises.
+    """
+
+    def __init__(self, limit: int) -> None:
+        self.limit = limit
+        self.remaining = limit
+
+    def __enter__(self) -> "_SearchSlot":
+        global _search_inflight
+        if _search_inflight >= self.limit:
+            raise HTTPException(
+                status_code=429,
+                detail="Search is at capacity; retry after a moment.",
+                headers={
+                    "Retry-After": "1",
+                    "X-RateLimit-Limit": str(self.limit),
+                    "X-RateLimit-Remaining": "0",
+                },
+            )
+        _search_inflight += 1
+        self.remaining = max(0, self.limit - _search_inflight)
+        return self
+
+    def __exit__(self, *exc: Any) -> None:
+        global _search_inflight
+        _search_inflight -= 1
+
+
+async def _search_within_budget(
+    citadel: Citadel, **kwargs: Any
+) -> tuple[list[tuple[str, Any]], bool]:
+    """Run search_across_datasets under the per-request time budget (#44).
+
+    Returns (merged, timed_out). On timeout, degrade to empty-fast rather than
+    hanging for 100s+ on a slow cognee recall.
+    """
+    try:
+        merged = await asyncio.wait_for(
+            search_across_datasets(citadel, **kwargs),
+            timeout=citadel.config.search_timeout_seconds,
+        )
+        return merged, False
+    except asyncio.TimeoutError:
+        return [], True
+
 mcp_server = create_mcp_server()
 mcp_app = mcp_server.streamable_http_app()
+
+
+class _McpAcceptShim:
+    """Augment the Accept header so minimal MCP clients reach the transport.
+
+    The mcp>=1.23 StreamableHTTP transport answers a POST with HTTP 406 unless
+    ``Accept`` lists BOTH ``application/json`` and ``text/event-stream`` (``*/*``
+    is deliberately not honored). Minimal clients (e.g. the Raspberry Pi MCP
+    bridge) send ``application/json`` only, or omit Accept, and cannot connect.
+    This shim rewrites the header in-flight to advertise both content types
+    before delegating to the mounted streamable-HTTP app, leaving callers that
+    already send both untouched.
+    """
+
+    _BOTH = "application/json, text/event-stream"
+    _REQUIRED = ("application/json", "text/event-stream")
+
+    def __init__(self, app: Any) -> None:
+        self.app = app
+
+    async def __call__(self, scope: Any, receive: Any, send: Any) -> None:
+        if scope.get("type") != "http":
+            await self.app(scope, receive, send)
+            return
+        raw_headers = scope.get("headers") or []
+        kept = [(name, value) for name, value in raw_headers if name.lower() != b"accept"]
+        existing = (
+            b", ".join(value for name, value in raw_headers if name.lower() == b"accept")
+            .decode("latin-1")
+            .strip()
+        )
+        if not existing or existing == "*/*":
+            merged = self._BOTH
+        else:
+            merged = existing
+            lowered = existing.lower()
+            for needed in self._REQUIRED:
+                if needed not in lowered:
+                    merged = f"{merged}, {needed}"
+        kept.append((b"accept", merged.encode("latin-1")))
+        await self.app({**scope, "headers": kept}, receive, send)
 
 
 async def _evolve_scheduler_loop(interval_seconds: int) -> None:
@@ -97,8 +210,17 @@ async def _evolve_scheduler_loop(interval_seconds: int) -> None:
         await asyncio.sleep(interval_seconds)
         logger.info("Evolve scheduler: starting scheduled pass")
         # Phase 1 — heavy stages in a subprocess that frees the Kuzu lock on exit.
+        # Hold the in-process writer lock across the subprocess so no web-loop
+        # cognify (an interactive ingest's, /api/cognify/run) writes Kuzu while the
+        # subprocess owns the on-disk lock — that cross-process overlap is the
+        # hourly "Lock is held by PID N" crash (#47). Phase 2 re-acquires it itself.
         proc = None
+        writer_lock = getattr(getattr(get_citadel(), "cognee", None), "writer_lock", None)
+        acquired = False
         try:
+            if writer_lock is not None:
+                await writer_lock.acquire()
+                acquired = True
             proc = await asyncio.create_subprocess_exec(
                 sys.executable,
                 "-m",
@@ -117,6 +239,9 @@ async def _evolve_scheduler_loop(interval_seconds: int) -> None:
             raise
         except Exception:
             logger.exception("Evolve scheduler: stages subprocess failed")
+        finally:
+            if acquired:
+                writer_lock.release()
         # Phase 2 — cognify in-loop; the web process is the sole Kuzu writer now.
         force = os.getenv("CITADEL_EVOLVE_COGNIFY_FORCE", "").strip().lower() in {
             "1",
@@ -125,11 +250,22 @@ async def _evolve_scheduler_loop(interval_seconds: int) -> None:
             "on",
         }
         try:
-            result = await get_citadel().cognify_dataset(force=force)
+            # verify=True runs the end-to-end ingest+cognify+search canary and
+            # records its verdict for /readyz (#27).
+            result = await get_citadel().cognify_dataset(force=force, verify=True)
+            global _LAST_CANARY
+            verification = result.get("verification") or {}
+            _LAST_CANARY = {
+                "ok": bool(result.get("ok")),
+                "search_hit": verification.get("search_hit"),
+                "graph_grew": result.get("graph_grew"),
+                "marker": verification.get("marker"),
+            }
             logger.info(
-                "Evolve scheduler: cognify finished (graph_after=%s grew=%s)",
+                "Evolve scheduler: cognify finished (graph_after=%s grew=%s canary_ok=%s)",
                 result.get("graph_after"),
                 result.get("graph_grew"),
+                _LAST_CANARY["ok"],
             )
         except asyncio.CancelledError:
             raise
@@ -213,7 +349,7 @@ async def mcp_trailing_slash_redirect() -> RedirectResponse:
     return RedirectResponse(url=MCP_ENDPOINT_PATH, status_code=307)
 
 
-app.mount("/mcp", mcp_app)
+app.mount("/mcp", _McpAcceptShim(mcp_app))
 ADMIN_COOKIE = "citadel_admin"
 MCP_TOOL_HEADER = "x-citadel-mcp-tool"
 AUDIT_VIEWS = frozenset({"all", "mcp", "access", "failures"})
@@ -364,6 +500,12 @@ class CognifyRunBody(BaseModel):
     dataset: str | None = None
     verify: bool = False
     force: bool = False
+
+
+class GraphCleanupBody(BaseModel):
+    # Default to a non-destructive dry run: the caller must POST {"dry_run": false}
+    # to actually delete, after reviewing the listed candidates (#15).
+    dry_run: bool = True
 
 
 class AccessTokenBody(BaseModel):
@@ -1055,15 +1197,23 @@ async def search_across_datasets(
     # secondary datasets when more than one is in scope. Sessions are resolved per
     # dataset: a seat's private session must not scope shared datasets like Central
     # (see resolve_search_sessions), or it would hide org-wide hits.
-    per_dataset: list[tuple[str, list[Any]]] = []
-    for dataset in datasets:
-        results = await citadel.search(
-            query,
-            dataset=dataset,
-            session_id=sessions.get(dataset),
-            top_k=top_k,
-        )
-        per_dataset.append((dataset, list(results)))
+    # Query datasets concurrently (the reads are independent and touch no Kuzu
+    # writer), so a 2-dataset seat search costs ~one recall, not two (#50). gather
+    # preserves order, so the primary-wins merge below is unchanged.
+    results_per = await asyncio.gather(
+        *[
+            citadel.search(
+                query,
+                dataset=dataset,
+                session_id=sessions.get(dataset),
+                top_k=top_k,
+            )
+            for dataset in datasets
+        ]
+    )
+    per_dataset: list[tuple[str, list[Any]]] = [
+        (dataset, list(results)) for dataset, results in zip(datasets, results_per)
+    ]
 
     merged: list[tuple[str, Any]] = []
     seen: set[str] = set()
@@ -1415,9 +1565,13 @@ def result_provenance(result: dict[str, Any]) -> dict[str, str]:
 
 
 def document_endpoint_for_result(result_id: str) -> str | None:
-    if result_id.startswith(f"{GITHUB_DOC_ID_PREFIX}:") or result_id.startswith("doc_"):
-        return f"/api/documents/{result_id}"
-    return None
+    # Any real id is now drillable (#28): ghsync:/doc_ as before, plus native
+    # cognee node/chunk UUIDs that /api/documents resolves via the graph engine.
+    # Only synthetic content-hash ids (chunk:<sha>, given to id-less results) have
+    # no backing store, so they stay honestly non-drillable.
+    if not result_id or result_id.startswith("chunk:"):
+        return None
+    return f"/api/documents/{result_id}"
 
 
 def result_content_sha256(result: dict[str, Any]) -> str:
@@ -2002,18 +2156,49 @@ async def get_skill(slug: str) -> FileResponse:
     return FileResponse(path, media_type="text/markdown; charset=utf-8", headers=headers)
 
 
+async def _corpus_health() -> dict[str, Any]:
+    """Data-plane volume gate: are tracked sources actually indexed? (#27)
+
+    Fail-soft — any error returns ok=True with a ``degraded`` note so readiness
+    never flaps on a transient graph read; the real signal is "many sources
+    tracked but the graph is empty".
+    """
+    try:
+        tracked = 0
+        github_status = await get_github_syncer().status()
+        tracked += int(github_status.get("tracked_repositories") or 0)
+        repo_content_status = await get_repo_content_syncer().status()
+        tracked += int(repo_content_status.get("tracked_files") or 0)
+        linear_status = await get_linear_syncer().status()
+        tracked += int(linear_status.get("issue_count") or 0)
+        counts = await get_citadel()._graph_counts()
+        indexed = int(counts.get("nodes") or 0)
+        ok = not (tracked >= _MIN_TRACKED_FOR_CORPUS and indexed < _INDEXED_FLOOR)
+        return {"ok": ok, "tracked_sources": tracked, "indexed_docs": indexed}
+    except Exception as exc:  # noqa: BLE001 - readiness must not flap on a transient read
+        logger.warning("corpus health check degraded (fail-soft to ok): %s", exc)
+        return {"ok": True, "tracked_sources": None, "indexed_docs": None, "degraded": str(exc)}
+
+
 @app.get("/readyz")
-async def readyz(request: Request) -> dict[str, Any]:
+async def readyz(request: Request) -> Any:
     require_access(request, "reader", "kb:read")
     config = get_citadel().config
-    return {
-        "ok": True,
+    corpus = await _corpus_health()
+    canary = _LAST_CANARY
+    # RED when the corpus gate trips or the last end-to-end canary failed.
+    ok = corpus["ok"] and (canary is None or bool(canary.get("ok", True)))
+    payload = {
+        "ok": ok,
         "service": "citadel",
         "tenant_id": config.tenant_id,
         "default_dataset": config.default_dataset,
         "auto_improve": config.auto_improve,
         "build_global_context_index": config.build_global_context_index,
+        "corpus": corpus,
+        "canary": canary,
     }
+    return JSONResponse(payload, status_code=200 if ok else 503)
 
 
 @app.get("/api/mesh")
@@ -2501,6 +2686,22 @@ async def push_obsidian_sync(body: ObsidianPushBody, request: Request) -> Any:
             document_tags,
             citadel.config,
         )
+        # Enforce the same byte cap as /ingest and /api/contribute on the per-document
+        # obsidian write path (#51): an oversized note is rejected individually so it
+        # cannot bloat the index, without failing the rest of the vault sync.
+        try:
+            enforce_ingest_size(source_document.content)
+        except HTTPException as exc:
+            ingest_results.append(
+                {
+                    "document_id": accepted["document_id"],
+                    "accepted": False,
+                    "reason": exc.detail,
+                    "dataset": document_targets[0].dataset,
+                    "tags": list(document_tags),
+                }
+            )
+            continue
         try:
             outcome, _ = await execute_learning_writes(
                 learning,
@@ -2625,8 +2826,13 @@ async def source_document(document_id: str, request: Request) -> Any:
         return {"ok": True, "document": jsonable_encoder(github_document)}
     try:
         document = get_obsidian_sync().document(document_id)
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail="Document not found.") from exc
+    except KeyError:
+        # Not a github/obsidian doc — fall back to resolving a native cognee
+        # search-hit id against the graph store (#28).
+        cognee_document = await get_citadel().get_document(document_id)
+        if cognee_document is None:
+            raise HTTPException(status_code=404, detail="Document not found.") from None
+        return {"ok": True, "document": jsonable_encoder(cognee_document)}
     return {"ok": True, "document": jsonable_encoder(document)}
 
 
@@ -2776,7 +2982,10 @@ async def approve_promotion_pending(
     request: Request,
     body: PromotionDecisionBody | None = None,
 ) -> dict[str, Any]:
-    identity = require_access(request, "writer", "kb:ingest")
+    # Approving commits a candidate into Central, so it requires admin — a
+    # seat-writer is rejected with 403 BEFORE the item lookup, closing the gap
+    # where a seat could self-promote its own pending item into Central (#48).
+    identity = require_access(request, "admin", "sources:sync")
     item = get_access_store().get_promotion_pending(item_id)
     if item is None:
         raise HTTPException(status_code=404, detail=f"Promotion item not found: {item_id}")
@@ -2808,7 +3017,9 @@ async def reject_promotion_pending(
     request: Request,
     body: PromotionDecisionBody | None = None,
 ) -> dict[str, Any]:
-    identity = require_access(request, "writer", "kb:ingest")
+    # Symmetric with approve: deciding a Central-bound promotion is admin-only, so
+    # a seat-writer is 403'd before the item lookup (#48).
+    identity = require_access(request, "admin", "sources:sync")
     item = get_access_store().get_promotion_pending(item_id)
     if item is None:
         raise HTTPException(status_code=404, detail=f"Promotion item not found: {item_id}")
@@ -2984,6 +3195,49 @@ async def run_cognify(body: CognifyRunBody, request: Request) -> Any:
         },
     )
     return jsonable_encoder(result)
+
+
+@app.post("/api/admin/graph/cleanup")
+async def cleanup_graph(body: GraphCleanupBody, request: Request) -> Any:
+    """Purge legacy [DataItem]/marker/session-cache garbage from the graph (#15).
+
+    Admin-only and dry-run-by-default: the dry run lists every candidate id +
+    preview so a human verifies before POSTing {"dry_run": false} to delete.
+    """
+    actor = require_access(request, "admin", "sources:sync")
+    citadel = get_citadel()
+    try:
+        result = await citadel.cleanup_legacy_nodes(dry_run=body.dry_run)
+    except Exception as exc:  # pragma: no cover - depends on Cognee config.
+        logger.error("Graph cleanup failed: %s", exc.__class__.__name__)
+        get_access_store().record_event(
+            action="graph.cleanup",
+            actor=actor,
+            success=False,
+            detail={"dry_run": body.dry_run, "error": str(exc)},
+        )
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    get_access_store().record_event(
+        action="graph.cleanup",
+        actor=actor,
+        success=True,
+        detail={
+            "dry_run": body.dry_run,
+            "counts_by_kind": result.get("counts_by_kind"),
+            "deleted": result.get("deleted"),
+        },
+    )
+    record_mcp_audit(
+        request,
+        actor=actor,
+        success=True,
+        detail={
+            "operation": "graph.cleanup",
+            "dry_run": body.dry_run,
+            "deleted": result.get("deleted"),
+        },
+    )
+    return jsonable_encoder({"ok": True, **result})
 
 
 @app.post("/api/learning-agent/google-chat/test")
@@ -3343,6 +3597,7 @@ def flat_knowledge_result(result: Any) -> dict[str, Any]:
 @app.get("/api/knowledge")
 async def knowledge(
     request: Request,
+    response: Response,
     q: str,
     limit: int = 10,
     dataset: str | None = None,
@@ -3358,17 +3613,22 @@ async def knowledge(
     mesh_state = get_mesh()
     search_datasets = resolve_search_datasets(identity, dataset, citadel.config)
     search_sessions = resolve_search_sessions(identity, None, search_datasets)
-    try:
-        merged = await search_across_datasets(
-            citadel,
-            query=query,
-            datasets=search_datasets,
-            sessions=search_sessions,
-            top_k=limit,
-        )
-    except Exception as exc:  # pragma: no cover - depends on runtime Cognee configuration.
-        await mesh_state.record_error(citadel.config, operation="search", error=str(exc))
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    max_concurrency = citadel.config.search_max_concurrency
+    timed_out = False
+    with _SearchSlot(max_concurrency) as slot:  # 429 here if at capacity
+        response.headers["X-RateLimit-Limit"] = str(max_concurrency)
+        response.headers["X-RateLimit-Remaining"] = str(slot.remaining)
+        try:
+            merged, timed_out = await _search_within_budget(
+                citadel,
+                query=query,
+                datasets=search_datasets,
+                sessions=search_sessions,
+                top_k=limit,
+            )
+        except Exception as exc:  # pragma: no cover - depends on runtime Cognee configuration.
+            await mesh_state.record_error(citadel.config, operation="search", error=str(exc))
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
     for search_dataset, _ in merged:
         await mesh_state.record_search(
             citadel.config,
@@ -3431,35 +3691,44 @@ async def optimize_learning_agent(body: OptimizeBody, request: Request) -> Any:
 
 
 @app.post("/search")
-async def search(body: SearchBody, request: Request) -> Any:
+async def search(body: SearchBody, request: Request, response: Response) -> Any:
     actor = require_access(request, "reader", "kb:search")
     citadel = get_citadel()
     mesh_state = get_mesh()
     search_datasets = resolve_search_datasets(actor, body.dataset, citadel.config)
     search_sessions = resolve_search_sessions(actor, body.session_id, search_datasets)
-    try:
-        merged = await search_across_datasets(
-            citadel,
-            query=body.query,
-            datasets=search_datasets,
-            sessions=search_sessions,
-            top_k=body.top_k,
+    limit = citadel.config.search_max_concurrency
+    timed_out = False
+    with _SearchSlot(limit) as slot:  # 429 here if at capacity
+        response.headers["X-RateLimit-Limit"] = str(limit)
+        response.headers["X-RateLimit-Remaining"] = str(slot.remaining)
+        try:
+            merged, timed_out = await _search_within_budget(
+                citadel,
+                query=body.query,
+                datasets=search_datasets,
+                sessions=search_sessions,
+                top_k=body.top_k,
+            )
+        except Exception as exc:  # pragma: no cover - depends on runtime Cognee configuration.
+            await mesh_state.record_error(citadel.config, operation="search", error=str(exc))
+            record_mcp_audit(
+                request,
+                actor=actor,
+                success=False,
+                dataset=search_datasets[0],
+                detail={
+                    "operation": "search",
+                    "query_sha256": hashlib.sha256(body.query.encode("utf-8")).hexdigest(),
+                    "query_length": len(body.query),
+                    "error_type": exc.__class__.__name__,
+                },
+            )
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
+    if timed_out:
+        await mesh_state.record_error(
+            citadel.config, operation="search", error="search budget exceeded"
         )
-    except Exception as exc:  # pragma: no cover - depends on runtime Cognee configuration.
-        await mesh_state.record_error(citadel.config, operation="search", error=str(exc))
-        record_mcp_audit(
-            request,
-            actor=actor,
-            success=False,
-            dataset=search_datasets[0],
-            detail={
-                "operation": "search",
-                "query_sha256": hashlib.sha256(body.query.encode("utf-8")).hexdigest(),
-                "query_length": len(body.query),
-                "error_type": exc.__class__.__name__,
-            },
-        )
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
 
     for search_dataset in search_datasets:
         await mesh_state.record_search(
@@ -3494,7 +3763,13 @@ async def search(body: SearchBody, request: Request) -> Any:
     }
     if len(search_datasets) > 1:
         payload["datasets"] = search_datasets
-    if not normalized and body.dataset is None:
+    if timed_out:
+        payload["note"] = (
+            f"Search exceeded the {citadel.config.search_timeout_seconds:.0f}s budget; "
+            "returning empty results — retry or narrow the query."
+        )
+        payload["timed_out"] = True
+    elif not normalized and body.dataset is None:
         payload["note"] = (
             "No results in the default dataset. Pass an explicit \"dataset\" to search a "
             "specific source; see known_datasets."

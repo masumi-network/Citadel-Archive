@@ -272,3 +272,145 @@ async def test_feedback_can_auto_improve() -> None:
     assert result.improved
     assert fake.feedback_calls[0]["qa_id"] == "qa-1"
     assert fake.improve_calls[0]["session_ids"] == ["personal-session"]
+
+
+class _SessionMissCognee(FakeCognee):
+    """add_feedback finds no matching qa_id in the session cache (post-#54 norm)."""
+
+    async def add_feedback(self, **kwargs: Any) -> bool:
+        self.feedback_calls.append(kwargs)
+        return False
+
+
+@pytest.mark.asyncio
+async def test_feedback_falls_back_to_durable_write_when_session_cache_misses() -> None:
+    # #40: a session-cache miss must not be a silent no-op — persist durably.
+    fake = _SessionMissCognee()
+    kb = Citadel(CitadelConfig(), cognee=fake)
+
+    result = await kb.feedback(FeedbackRequest(qa_id="qa-9", score=-1, text="wrong answer"))
+
+    assert result.recorded is True
+    assert result.ok is True
+    assert result.reason is None
+    note = fake.remember_calls[-1]
+    assert "qa-9" in note["data"]
+    assert "wrong answer" in note["data"]
+    assert "feedback" in note["tags"]
+    assert "qa:qa-9" in note["tags"]
+
+
+@pytest.mark.asyncio
+async def test_feedback_reports_reason_when_not_recorded() -> None:
+    # #40: when even the durable write is rejected, report ok:False + a reason
+    # (so the CLI exits nonzero) instead of recorded:false, exit 0.
+    fake = _SessionMissCognee()
+    kb = Citadel(CitadelConfig(min_chars=100_000), cognee=fake)  # forces filter rejection
+
+    result = await kb.feedback(FeedbackRequest(qa_id="qa-9", score=0))
+
+    assert result.recorded is False
+    assert result.ok is False
+    assert result.reason is not None and "not recorded" in result.reason
+
+
+def test_legacy_garbage_kind_classifies_safely() -> None:
+    # #15: the classifier must purge only well-identified garbage and NEVER real
+    # content — this is the safety gate for a destructive admin operation.
+    from kb.service import _legacy_garbage_kind
+
+    hex32 = "a" * 32
+    assert _legacy_garbage_kind("n1", {"text": f"COGNIFY_TEST_MARKER_{hex32}"}) == "marker"
+    assert _legacy_garbage_kind("n2", {"text": "[DataItem]"}) == "dataitem"
+    assert (
+        _legacy_garbage_kind("n3", {"text": "Session ID: x\n\nQuestion: \n\nAnswer: [DataItem]"})
+        == "dataitem"
+    )
+    assert _legacy_garbage_kind("n4", {"type": "user_sessions_from_cache"}) == "session_cache"
+
+    # SAFETY — real content is never classified:
+    assert _legacy_garbage_kind("r1", {"text": "We fixed the [DataItem] bug in #26."}) is None
+    assert _legacy_garbage_kind("r2", {"text": "COGNIFY_TEST_MARKER is a concept."}) is None
+    assert _legacy_garbage_kind("r3", {"text": "Question: how?\n\nAnswer: hold a lock"}) is None
+    assert _legacy_garbage_kind("r4", {"text": "A genuine project decision."}) is None
+    assert _legacy_garbage_kind("r5", {"type": "TextSummary"}) is None
+
+
+class _GraphGateway(FakeCognee):
+    def __init__(self, graph_nodes: list[Any]) -> None:
+        super().__init__()
+        self._graph_nodes = graph_nodes
+        self.deleted: list[str] = []
+
+    async def graph_data(self) -> tuple[list[Any], list[Any]]:
+        return self._graph_nodes, []
+
+    async def delete_graph_nodes(self, node_ids: list[str]) -> int:
+        self.deleted.extend(node_ids)
+        return len(node_ids)
+
+
+@pytest.mark.asyncio
+async def test_cleanup_legacy_nodes_dry_run_then_delete() -> None:
+    nodes = [
+        ("g1", {"text": "COGNIFY_TEST_MARKER_" + "b" * 32}),
+        ("g2", {"text": "[DataItem]"}),
+        ("real1", {"text": "A genuine project decision."}),
+    ]
+    gw = _GraphGateway(nodes)
+    kb = Citadel(CitadelConfig(), cognee=gw)
+
+    dry = await kb.cleanup_legacy_nodes(dry_run=True)
+    assert dry["dry_run"] is True
+    assert dry["deleted"] == 0
+    assert gw.deleted == []  # dry run deletes nothing
+    assert {c["id"] for c in dry["candidates"]} == {"g1", "g2"}
+    assert dry["counts_by_kind"] == {"marker": 1, "dataitem": 1}
+
+    res = await kb.cleanup_legacy_nodes(dry_run=False)
+    assert res["deleted"] == 2
+    assert set(gw.deleted) == {"g1", "g2"}  # real1 is never deleted
+
+
+@pytest.mark.asyncio
+async def test_cognify_verify_deletes_its_marker_node() -> None:
+    # #15 backprop: the verify canary must not leave a marker node behind.
+    class MarkerGateway(_GraphGateway):
+        def __init__(self) -> None:
+            super().__init__([])
+
+        async def graph_data(self) -> tuple[list[Any], list[Any]]:
+            return [(f"node-{i}", {"text": text}) for i, text in enumerate(self.nodes)], []
+
+        async def recall(self, query: str, **kwargs: Any) -> list[dict[str, Any]]:
+            return [{"text": query}]
+
+    gw = MarkerGateway()
+    kb = Citadel(CitadelConfig(), cognee=gw)
+
+    await kb.cognify_dataset(verify=True)
+    assert gw.deleted, "the cognify verify marker node should be deleted"
+
+
+@pytest.mark.asyncio
+async def test_improve_short_circuits_on_empty_graph() -> None:
+    # #41: an empty graph yields a clean no-op, not a raw EntityNotFoundError.
+    fake = FakeCognee()  # nodes/edges empty
+    kb = Citadel(CitadelConfig(), cognee=fake)
+
+    result = await kb.improve()
+
+    assert result["ok"] is True
+    assert result["skipped"] == "empty_graph"
+    assert fake.improve_calls == []
+
+
+@pytest.mark.asyncio
+async def test_improve_runs_when_graph_has_data() -> None:
+    fake = FakeCognee()
+    fake.nodes = ["n1"]
+    kb = Citadel(CitadelConfig(), cognee=fake)
+
+    await kb.improve()
+
+    assert fake.improve_calls, "cognee.improve should run on a non-empty graph"

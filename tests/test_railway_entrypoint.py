@@ -93,6 +93,21 @@ def test_cognify_mode_runs_cognify_without_verify(monkeypatch: Any) -> None:
     assert calls == [{"dataset": None, "verify": False}]
 
 
+def test_cognify_stage_refuses_in_process_when_scheduler_enabled(monkeypatch: Any) -> None:
+    # #47: a second OS process must not open Kuzu while the web's in-process evolve
+    # scheduler owns it — refuse and require routing through the API.
+    monkeypatch.delenv("CITADEL_COGNIFY_TARGET_URL", raising=False)
+    monkeypatch.setenv("CITADEL_EVOLVE_SCHEDULER_ENABLED", "true")
+
+    called: list[bool] = []
+    monkeypatch.setattr(
+        run_railway, "_cognify_mode", lambda *, verify: (called.append(verify), 0)[1]
+    )
+
+    assert run_railway._cognify_stage() == 1
+    assert called == []  # never opened an in-process Kuzu writer
+
+
 def test_cognify_verify_mode_fails_when_verification_fails(monkeypatch: Any) -> None:
     class FakeCitadel:
         async def cognify_dataset(self, *, dataset: Any, verify: bool) -> dict[str, Any]:

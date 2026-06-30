@@ -270,6 +270,10 @@ class LinearSyncer:
             "enabled": bool(self.config.linear_api_key),
             "dataset": self.config.linear_sync_dataset,
             "last_synced_at": state.get("last_synced_at"),
+            # Surface the last failure + when it was attempted so a broken sync is
+            # visible instead of a stale green last_synced_at (#46).
+            "last_error": state.get("last_error"),
+            "last_attempt_at": state.get("last_attempt_at"),
             "issue_count": len(issues),
             "mirror_count": mirror_count,
             "state_path": str(self.state_path),
@@ -302,11 +306,21 @@ class LinearSyncer:
         if not self.config.linear_api_key:
             return {"ok": False, "enabled": False, "reason": "linear_api_key_missing"}
 
-        client = self._client()
-        issues = await asyncio.to_thread(
-            client.fetch_issues,
-            max_issues=self.config.linear_sync_max_issues,
-        )
+        try:
+            client = self._client()
+            issues = await asyncio.to_thread(
+                client.fetch_issues,
+                max_issues=self.config.linear_sync_max_issues,
+            )
+        except LinearAPIError as exc:
+            # Persist the failure so status()/list_sources surface a reason instead
+            # of a stale green last_synced_at, and the evolve stage logs it (#46).
+            state = self._load_state()
+            state["last_error"] = str(exc)
+            state["last_attempt_at"] = utc_now()
+            self._save_state(state)
+            logger.error("Linear sync failed: %s", exc)
+            return {"ok": False, "enabled": True, "reason": "linear_api_error", "error": str(exc)}
         email_index = (
             seat_email_index(self.access_store)
             if self.access_store
@@ -332,6 +346,23 @@ class LinearSyncer:
         mirrored = 0
         mirrors: dict[str, list[str]] = {}
         for issue in issues:
+            # Write each issue's full text (title + description) to Central so
+            # linear_search returns real issues org-wide — the digest only carried
+            # titles, leaving the 200 synced issues invisible to search (#52).
+            await learning.learn(
+                format_issue_note(issue),
+                dataset=central_dataset,
+                tags=[
+                    "linear-issue",
+                    "linear-sync",
+                    f"linear:{issue.identifier}",
+                    issue.team_key or "linear",
+                ],
+                session_id=session_id,
+                operation="linear_sync",
+                run_improve=False,
+                tier="light",
+            )
             mirror_dataset = resolve_mirror_dataset(issue, email_index, linear_user_map=user_map)
             if not mirror_dataset:
                 continue
@@ -356,6 +387,8 @@ class LinearSyncer:
         payload = {
             "version": STATE_VERSION,
             "last_synced_at": utc_now(),
+            "last_error": None,  # clear any prior failure on a successful sync
+            "last_attempt_at": utc_now(),
             "issues": [asdict(issue) for issue in issues],
             "mirrors": mirrors,
         }

@@ -40,6 +40,19 @@ class FakeCitadel:
     async def search(self, query: str, **kwargs: Any) -> list[dict[str, Any]]:
         return [{"query": query, "dataset": kwargs["dataset"], "top_k": kwargs["top_k"]}]
 
+    documents: dict[str, dict[str, Any]] = {}
+
+    async def get_document(self, document_id: str) -> dict[str, Any] | None:
+        return self.documents.get(document_id)
+
+    async def cleanup_legacy_nodes(self, *, dry_run: bool = True) -> dict[str, Any]:
+        return {
+            "dry_run": dry_run,
+            "counts_by_kind": {"marker": 1, "dataitem": 2},
+            "candidates": [{"id": "g1", "kind": "marker", "preview": "x"}],
+            "deleted": 0 if dry_run else 3,
+        }
+
     async def feedback(self, request: Any) -> FeedbackResult:
         return FeedbackResult(recorded=bool(request.qa_id), improved=True)
 
@@ -391,7 +404,7 @@ def test_api_uses_configured_citadel_service() -> None:
     assert learning_run.status_code == 200
     assert learning_run.json()["sources"]["github"]["commit_count"] == 1
     assert feedback.status_code == 200
-    assert feedback.json() == {"recorded": True, "improved": True}
+    assert feedback.json() == {"recorded": True, "improved": True, "ok": True, "reason": None}
     assert updated_mesh.status_code == 200
     assert updated_mesh.json()["stats"]["feedback"] == 1
     assert upgrade.status_code == 200
@@ -529,6 +542,74 @@ def test_ingest_and_contribute_reject_oversized_payloads(monkeypatch: Any) -> No
     assert "limit is 16 bytes" in ingest.json()["detail"]
     assert contribute.status_code == 413
     assert small.status_code == 200
+
+
+def test_mcp_accept_shim_advertises_both_content_types() -> None:
+    # #45: minimal MCP clients (json-only / no Accept / */*) must reach the
+    # streamable-HTTP transport, which 406s unless Accept lists both types.
+    from kb.server import _McpAcceptShim
+
+    captured: dict[str, Any] = {}
+
+    async def inner(scope: Any, receive: Any, send: Any) -> None:
+        captured["scope"] = scope
+
+    shim = _McpAcceptShim(inner)
+
+    def accept_after(headers: list[tuple[bytes, bytes]]) -> list[str]:
+        captured.clear()
+        asyncio.run(shim({"type": "http", "headers": headers}, None, None))
+        return [
+            v.decode("latin-1")
+            for n, v in captured["scope"]["headers"]
+            if n.lower() == b"accept"
+        ]
+
+    both = "application/json, text/event-stream"
+    assert accept_after([]) == [both]
+    assert accept_after([(b"accept", b"*/*")]) == [both]
+    assert accept_after([(b"accept", b"application/json, text/event-stream")]) == [both]
+
+    json_only = accept_after([(b"accept", b"application/json")])
+    assert len(json_only) == 1
+    assert "application/json" in json_only[0] and "text/event-stream" in json_only[0]
+
+    sse_only = accept_after([(b"accept", b"text/event-stream")])
+    assert "application/json" in sse_only[0] and "text/event-stream" in sse_only[0]
+
+    # Non-http scopes pass through untouched.
+    captured.clear()
+    asyncio.run(shim({"type": "lifespan"}, None, None))
+    assert captured["scope"]["type"] == "lifespan"
+
+
+def test_obsidian_push_enforces_byte_cap_per_document(monkeypatch: Any, tmp_path: Any) -> None:
+    # #51: the obsidian sync push path must honor the same byte cap as /ingest. An
+    # oversized note is rejected individually without failing the rest of the sync.
+    monkeypatch.setenv("CITADEL_MCP_MAX_INGEST_BYTES", "32")
+    app.state.access_store = AccessStore(tmp_path / "access.json")
+    app.state.obsidian_sync = ObsidianSyncStore(tmp_path / "obsidian.json")
+    client = authed_client("test-writer")
+
+    vault_id = client.post("/api/obsidian/vaults", json={"vault_name": "V"}).json()["vault"]["id"]
+    pushed = client.post(
+        "/api/obsidian/sync/push",
+        json={
+            "vault_id": vault_id,
+            "documents": [
+                {"path": "small.md", "content": "tiny note"},
+                {"path": "big.md", "content": "x" * 200},
+            ],
+        },
+    )
+
+    assert pushed.status_code == 200
+    results = {r["document_id"]: r for r in pushed.json()["ingest_results"]}
+    by_path = {a["path"]: a["document_id"] for a in pushed.json()["accepted"]}
+    assert results[by_path["small.md"]]["accepted"] is True
+    big = results[by_path["big.md"]]
+    assert big["accepted"] is False
+    assert "limit is 32 bytes" in big["reason"]
 
 
 def test_writer_access_can_ingest_and_feedback_but_not_admin_actions() -> None:
@@ -1373,6 +1454,192 @@ def test_github_digest_search_hit_drills_down_to_document(tmp_path: Any) -> None
     assert document.status_code == 200
     assert document.json()["document"]["title"] == hit["title"]
     assert "teach the archive about commits" in document.json()["document"]["body"]
+
+
+def test_graph_cleanup_admin_only_and_dry_run_default(tmp_path: Any) -> None:
+    # #15: destructive cleanup is admin-only and dry-run by default.
+    app.state.access_store = AccessStore(tmp_path / "access.json")
+    admin = authed_client()
+
+    dry = admin.post("/api/admin/graph/cleanup", json={})
+    assert dry.status_code == 200
+    assert dry.json()["dry_run"] is True
+    assert dry.json()["deleted"] == 0
+    assert dry.json()["candidates"]
+
+    wet = admin.post("/api/admin/graph/cleanup", json={"dry_run": False})
+    assert wet.status_code == 200
+    assert wet.json()["deleted"] == 3
+
+    reader = authed_client("test-reader")
+    assert reader.post("/api/admin/graph/cleanup", json={}).status_code in (401, 403)
+    writer = authed_client("test-writer")
+    assert writer.post("/api/admin/graph/cleanup", json={}).status_code in (401, 403)
+
+
+def test_readyz_reports_503_when_data_plane_empty() -> None:
+    # #27: many sources tracked but an empty graph → /readyz is RED (503), so an
+    # always-on probe and `citadel status` stop reporting green over a broken plane.
+    class EmptyGraphCitadel(FakeCitadel):
+        async def _graph_counts(self) -> dict[str, int]:
+            return {"nodes": 0, "edges": 0}
+
+    class BusySyncer:
+        async def status(self) -> dict[str, Any]:
+            return {"tracked_repositories": 50, "tracked_files": 0, "issue_count": 0}
+
+    client = authed_client("test-reader")
+    app.state.citadel = EmptyGraphCitadel()
+    app.state.github_syncer = BusySyncer()
+    app.state.repo_content_syncer = BusySyncer()
+    app.state.linear_syncer = BusySyncer()
+
+    ready = client.get("/readyz")
+    assert ready.status_code == 503
+    body = ready.json()
+    assert body["ok"] is False
+    assert body["corpus"]["ok"] is False
+    assert body["corpus"]["indexed_docs"] == 0
+    assert body["corpus"]["tracked_sources"] == 50
+
+
+def test_readyz_ok_when_graph_populated() -> None:
+    class PopulatedCitadel(FakeCitadel):
+        async def _graph_counts(self) -> dict[str, int]:
+            return {"nodes": 280, "edges": 514}
+
+    class BusySyncer:
+        async def status(self) -> dict[str, Any]:
+            return {"tracked_repositories": 50, "tracked_files": 0, "issue_count": 0}
+
+    client = authed_client("test-reader")
+    app.state.citadel = PopulatedCitadel()
+    app.state.github_syncer = BusySyncer()
+    app.state.repo_content_syncer = BusySyncer()
+    app.state.linear_syncer = BusySyncer()
+
+    ready = client.get("/readyz")
+    assert ready.status_code == 200
+    assert ready.json()["corpus"]["ok"] is True
+
+
+def test_search_across_datasets_runs_concurrently() -> None:
+    # #50: per-dataset recalls run concurrently, not serially.
+    import asyncio as aio
+
+    from kb.server import search_across_datasets
+
+    order: list[tuple[str, str]] = []
+
+    class ConcurrentCitadel:
+        config = FakeCitadel.config
+
+        async def search(self, query: str, *, dataset: str, session_id: Any, top_k: int) -> list[Any]:
+            order.append(("start", dataset))
+            await aio.sleep(0.05)
+            order.append(("end", dataset))
+            return [{"id": dataset}]
+
+    merged = aio.run(
+        search_across_datasets(
+            ConcurrentCitadel(), query="q", datasets=["a", "b"], sessions={}, top_k=10
+        )
+    )
+    # Concurrent: both datasets start before either finishes.
+    assert order[0][0] == "start" and order[1][0] == "start"
+    assert {d for d, _ in merged} == {"a", "b"}
+
+
+def test_search_returns_429_when_at_capacity(monkeypatch: Any) -> None:
+    # #50: at capacity the Node returns a 429 + Retry-After backpressure contract.
+    client = authed_client("test-reader")
+    monkeypatch.setattr(server_module, "_search_inflight", 9999)
+
+    r = client.post("/search", json={"query": "q", "top_k": 3})
+    assert r.status_code == 429
+    assert r.headers["Retry-After"] == "1"
+    assert r.headers["X-RateLimit-Remaining"] == "0"
+
+
+def test_search_sets_ratelimit_headers_when_served() -> None:
+    client = authed_client("test-reader")
+    r = client.post("/search", json={"query": "q", "top_k": 3})
+    assert r.status_code == 200
+    assert int(r.headers["X-RateLimit-Limit"]) >= 1
+    assert "X-RateLimit-Remaining" in r.headers
+
+
+def test_search_degrades_to_empty_on_timeout_budget() -> None:
+    # #44: a recall slower than the budget degrades to empty-fast with a note,
+    # instead of hanging for 100s+.
+    import asyncio as aio
+    import dataclasses
+
+    class SlowCitadel(FakeCitadel):
+        config = dataclasses.replace(FakeCitadel.config, search_timeout_seconds=0.01)
+
+        async def search(self, query: str, **kwargs: Any) -> list[Any]:
+            await aio.sleep(0.3)
+            return [{"id": "x"}]
+
+    client = authed_client("test-reader")
+    app.state.citadel = SlowCitadel()
+
+    r = client.post("/search", json={"query": "q", "top_k": 3})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["results"] == []
+    assert body.get("timed_out") is True
+    assert "budget" in body["note"]
+
+
+def test_document_endpoint_for_result_covers_real_ids_only() -> None:
+    # #28: ghsync/doc_/cognee-UUID ids are drillable; synthetic chunk: ids are not.
+    from kb.server import document_endpoint_for_result
+
+    uuid = "9dbe579d-eccb-51b6-9bba-13982cbaf69f"
+    assert document_endpoint_for_result("ghsync:abc") == "/api/documents/ghsync:abc"
+    assert document_endpoint_for_result("doc_123") == "/api/documents/doc_123"
+    assert document_endpoint_for_result(uuid) == f"/api/documents/{uuid}"
+    assert document_endpoint_for_result("chunk:deadbeef") is None
+    assert document_endpoint_for_result("") is None
+
+
+def test_cognee_search_hit_drills_down_to_document() -> None:
+    # #28: a cognee search hit (UUID id) advertises drilldown and resolves to a
+    # readable document, instead of advertising false and 404ing.
+    class DrilldownCitadel(FakeCitadel):
+        async def search(self, query: str, **kwargs: Any) -> list[dict[str, Any]]:
+            return [{"id": "node-uuid-1", "text": "the answer is 42"}]
+
+        async def get_document(self, document_id: str) -> dict[str, Any] | None:
+            if document_id == "node-uuid-1":
+                return {
+                    "id": "node-uuid-1",
+                    "source_type": "cognee",
+                    "title": "Answer",
+                    "body": "the answer is 42",
+                    "metadata": {},
+                }
+            return None
+
+    client = authed_client("test-reader")
+    app.state.citadel = DrilldownCitadel()  # after authed_client, which resets citadel
+
+    search = client.post("/search", json={"query": "answer", "top_k": 1})
+    assert search.status_code == 200
+    hit = search.json()["results"][0]
+    assert hit["_citadel"]["retrieval"]["document_drilldown_available"] is True
+    endpoint = hit["_citadel"]["document_endpoint"]
+    assert endpoint == "/api/documents/node-uuid-1"
+
+    doc = client.get(endpoint)
+    assert doc.status_code == 200
+    assert doc.json()["document"]["body"] == "the answer is 42"
+    assert doc.json()["document"]["source_type"] == "cognee"
+
+    # An unknown cognee id still 404s cleanly.
+    assert client.get("/api/documents/does-not-exist").status_code == 404
 
 
 def test_knowledge_conflict_listing_and_resolution_are_role_gated(tmp_path: Any) -> None:
@@ -2936,3 +3203,41 @@ def test_promotion_pending_list_redacts_body(tmp_path: Any) -> None:
     )
     assert other.status_code == 200
     assert other.json()["count"] == 0
+
+
+def test_promotion_approve_reject_require_admin_not_seat_writer(tmp_path: Any) -> None:
+    # #48: a seat-writer must NOT be able to approve/reject a promotion into Central.
+    # The admin gate must 403 BEFORE the item lookup, so even a real own-seat item
+    # cannot be self-promoted, and a bogus id never reaches a 404 for a seat.
+    app.state.access_store = AccessStore(tmp_path / "access.json")
+    admin = authed_client()
+    created = admin.post("/api/access/seats", json={"name": "Bob", "slug": "bob"})
+    bob_token = created.json()["token"]
+    bob = TestClient(app, base_url="https://testserver")
+    bob_headers = {"Authorization": f"Bearer {bob_token}"}
+
+    from kb.access import now_iso
+    from kb.promotion_queue import build_pending_item
+    from kb.promotion_refs import ReferenceAssessment
+
+    item = build_pending_item(
+        seat_slug="bob",
+        seat_dataset="seat:bob",
+        candidate_text="bob's own candidate",
+        assessment=ReferenceAssessment(status="new_org_project", reason="no_org_or_central_match"),
+        created_at=now_iso(),
+    )
+    app.state.access_store.add_promotion_pending(item)
+
+    for verb in ("approve", "reject"):
+        # Seat-writer is 403'd for both its own real item and a bogus id (authz first).
+        own = bob.post(f"/api/promotion/pending/{item.id}/{verb}", headers=bob_headers, json={})
+        bogus = bob.post(f"/api/promotion/pending/does-not-exist/{verb}", headers=bob_headers, json={})
+        assert own.status_code == 403, verb
+        assert bogus.status_code == 403, verb
+        # Admin passes the authz gate (proven by reaching the 404 id lookup).
+        admin_bogus = admin.post(f"/api/promotion/pending/does-not-exist/{verb}", json={})
+        assert admin_bogus.status_code == 404, verb
+
+    # The seat's own pending item is still queued (never approved/rejected/promoted).
+    assert app.state.access_store.get_promotion_pending(item.id) is not None

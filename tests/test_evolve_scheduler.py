@@ -83,9 +83,16 @@ class _FakeCitadel:
     def __init__(self, cognify_calls: list[bool]) -> None:
         self._cognify_calls = cognify_calls
 
-    async def cognify_dataset(self, *, force: bool = False) -> dict[str, Any]:
+    async def cognify_dataset(self, *, force: bool = False, verify: bool = False) -> dict[str, Any]:
         self._cognify_calls.append(force)
-        return {"graph_after": {"nodes": 7, "edges": 4}, "graph_grew": True}
+        # The scheduler runs the verify canary (#27) and records its verdict.
+        assert verify is True
+        return {
+            "ok": True,
+            "graph_after": {"nodes": 7, "edges": 4},
+            "graph_grew": True,
+            "verification": {"marker": "COGNIFY_TEST_MARKER_x", "search_hit": True, "ok": True},
+        }
 
 
 async def test_evolve_scheduler_loop_runs_subprocess_then_cognifies(monkeypatch: Any) -> None:
@@ -118,6 +125,8 @@ async def test_evolve_scheduler_loop_runs_subprocess_then_cognifies(monkeypatch:
     assert sub_envs[0]["CITADEL_EVOLVE_COGNIFY_ENABLED"] == "false"
     # Phase 2: cognify ran in-loop after the subprocess.
     assert len(cognify_calls) >= 2
+    # The verify canary verdict is recorded for /readyz (#27).
+    assert server._LAST_CANARY is not None and server._LAST_CANARY["ok"] is True
 
 
 async def test_evolve_scheduler_loop_cognifies_even_if_subprocess_fails(monkeypatch: Any) -> None:

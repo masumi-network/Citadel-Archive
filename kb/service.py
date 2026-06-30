@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Iterable
 from hashlib import sha256
 import logging
+import re
 from uuid import uuid4
 from typing import Any
 
@@ -135,12 +136,42 @@ class Citadel:
     async def feedback(self, request: FeedbackRequest) -> FeedbackResult:
         session_id = request.session_id or self.config.default_session
         dataset = request.dataset or self.config.default_dataset
-        recorded = await self.cognee.add_feedback(
-            session_id=session_id,
-            qa_id=request.qa_id,
-            score=request.score,
-            text=request.text,
-        )
+        # Try cognee's per-session QA cache first (preserves the QA linkage when a
+        # live session match exists). Since #54 durable recall bypasses that cache,
+        # add_feedback usually finds no matching qa_id and returns False — which
+        # used to surface as a silent recorded:false, exit 0 (#40).
+        try:
+            session_recorded = await self.cognee.add_feedback(
+                session_id=session_id,
+                qa_id=request.qa_id,
+                score=request.score,
+                text=request.text,
+            )
+        except Exception as exc:  # noqa: BLE001 - cognee session cache is best-effort
+            logger.warning("session feedback cache rejected qa_id=%s: %s", request.qa_id, exc)
+            session_recorded = False
+
+        recorded = session_recorded
+        reason: str | None = None
+        if not session_recorded:
+            # Fall back to a durable, searchable feedback note so the signal is
+            # never silently dropped.
+            note = (
+                f"Feedback for QA {request.qa_id}: score={request.score} | "
+                f"{request.text or ''}"
+            )
+            durable = await self.ingest(
+                note,
+                dataset=dataset,
+                tags=("feedback", f"qa:{request.qa_id}", f"score:{request.score}"),
+            )
+            recorded = durable.accepted
+            if not recorded:
+                reason = (
+                    f"feedback not recorded: no matching QA in the session cache and the "
+                    f"durable write was rejected ({durable.reason})"
+                )
+
         improved = False
         if recorded and self.config.auto_improve:
             await self.cognee.improve(
@@ -149,7 +180,7 @@ class Citadel:
                 build_global_context_index=self.config.build_global_context_index,
             )
             improved = True
-        return FeedbackResult(recorded=recorded, improved=improved)
+        return FeedbackResult(recorded=recorded, improved=improved, ok=recorded, reason=reason)
 
     async def improve(
         self,
@@ -157,11 +188,27 @@ class Citadel:
         dataset: str | None = None,
         session_ids: list[str] | None = None,
     ) -> Any:
+        target_dataset = dataset or self.config.default_dataset
+        # Short-circuit an empty graph: cognee.improve raises a raw
+        # EntityNotFoundError ("Empty graph projected") with nothing to improve, so
+        # return a clean no-op instead of a traceback (#41).
+        counts = await self._graph_counts()
+        if counts["nodes"] == 0 and counts["edges"] == 0:
+            return {
+                "ok": True,
+                "skipped": "empty_graph",
+                "dataset": target_dataset,
+                "reason": "graph is empty; nothing to improve",
+            }
         return await self.cognee.improve(
-            dataset=dataset or self.config.default_dataset,
+            dataset=target_dataset,
             session_ids=session_ids,
             build_global_context_index=self.config.build_global_context_index,
         )
+
+    async def get_document(self, document_id: str) -> dict[str, Any] | None:
+        """Resolve a cognee search-hit id to its document/chunk (#28)."""
+        return await self.cognee.get_document(document_id)
 
     async def _graph_counts(self) -> dict[str, int]:
         nodes, edges = await self.cognee.graph_data()
@@ -203,6 +250,10 @@ class Citadel:
                 "marker": marker,
                 "search_hit": _marker_in_results(marker, matches),
             }
+            # Backprop (#15): the canary marker used to persist forever, surfacing in
+            # search/linear_search results. Delete its node now so verify leaves no
+            # trace. Best-effort — never fail the cognify on a cleanup hiccup.
+            await self._delete_marker_node(marker)
 
         after = await self._graph_counts()
         graph_grew = (
@@ -225,9 +276,106 @@ class Citadel:
             "verification": verification,
         }
 
+    async def _delete_marker_node(self, marker: str) -> None:
+        """Best-effort delete of a cognify verify-marker node (backprop, #15)."""
+        try:
+            nodes, _ = await self.cognee.graph_data()
+            ids = [
+                str(node_id)
+                for node_id, properties in nodes
+                if marker
+                in str((properties or {}).get("text") or (properties or {}).get("name") or "")
+            ]
+            if ids:
+                await self.cognee.delete_graph_nodes(ids)
+        except Exception:  # noqa: BLE001 - cleanup must never fail the cognify
+            logger.warning("could not delete cognify verify marker %s", marker, exc_info=True)
+
+    async def cleanup_legacy_nodes(self, *, dry_run: bool = True) -> dict[str, Any]:
+        """Find (and, when dry_run is False, delete) legacy garbage nodes (#15).
+
+        Targets only the well-identified leak classes — COGNIFY_TEST_MARKER canaries,
+        the literal ``[DataItem]`` / session-scaffold blobs, and explicit
+        session-cache node types. The classifier is anchored so real content is
+        never matched; the default dry run returns every candidate id + preview so a
+        human verifies before any deletion.
+        """
+        nodes, _ = await self.cognee.graph_data()
+        candidates: list[dict[str, Any]] = []
+        counts: dict[str, int] = {}
+        for node_id, properties in nodes:
+            kind = _legacy_garbage_kind(node_id, properties)
+            if kind is None:
+                continue
+            props = properties if isinstance(properties, dict) else {}
+            preview = _normalize_text(props.get("text") or props.get("name") or node_id)[:120]
+            candidates.append({"id": str(node_id), "kind": kind, "preview": preview})
+            counts[kind] = counts.get(kind, 0) + 1
+        deleted = 0
+        if not dry_run and candidates:
+            deleted = await self.cognee.delete_graph_nodes([c["id"] for c in candidates])
+        return {
+            "dry_run": dry_run,
+            "counts_by_kind": counts,
+            "candidates": candidates,
+            "deleted": deleted,
+        }
+
 
 def _marker_in_results(marker: str, results: list[Any]) -> bool:
     for item in results:
         if marker in str(item):
             return True
     return False
+
+
+_MARKER_RE = re.compile(r"^COGNIFY_TEST_MARKER_[0-9a-f]{32}$")
+_SESSION_CACHE_TYPES = {"user_sessions_from_cache", "session_cache"}
+
+
+def _normalize_text(value: Any) -> str:
+    return " ".join(str(value).split()) if value is not None else ""
+
+
+def _is_dataitem_garbage(text: str) -> bool:
+    """True for the #26/#52 ``[DataItem]`` leak only.
+
+    Matches a bare ``[DataItem]`` placeholder, or a session-scaffold blob whose
+    every ``Answer:`` line is exactly ``[DataItem]`` and every ``Question:`` line
+    is empty. Never matches real prose that merely contains the substring (a real
+    answer or a non-empty question keeps the node).
+    """
+    if _normalize_text(text) == "[DataItem]":
+        return True
+    has_answer = False
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if line.startswith("Answer:"):
+            has_answer = True
+            if line[len("Answer:"):].strip() != "[DataItem]":
+                return False
+        elif line.startswith("Question:"):
+            if line[len("Question:"):].strip():
+                return False
+    return has_answer
+
+
+def _legacy_garbage_kind(node_id: Any, properties: Any) -> str | None:
+    """Classify a graph node as legacy garbage to purge, or None to keep (#15).
+
+    Conservative + anchored: only an exact COGNIFY_TEST_MARKER id, the literal
+    [DataItem]/session-scaffold blob, or an explicit session-cache node type. Real
+    content is never classified — there is no substring-of-prose match.
+    """
+    props = properties if isinstance(properties, dict) else {}
+    for value in (props.get("text"), props.get("name"), props.get("title"), props.get("id"), node_id):
+        if isinstance(value, str) and _MARKER_RE.fullmatch(value.strip()):
+            return "marker"
+    text = props.get("text")
+    if isinstance(text, str) and _is_dataitem_garbage(text):
+        return "dataitem"
+    for key in ("type", "node_type", "category", "source"):
+        value = props.get(key)
+        if isinstance(value, str) and value.strip().lower() in _SESSION_CACHE_TYPES:
+            return "session_cache"
+    return None

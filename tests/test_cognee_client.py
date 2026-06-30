@@ -145,6 +145,124 @@ async def test_cognify_raises_without_llm_key(monkeypatch: Any) -> None:
 
 
 @pytest.mark.asyncio
+async def test_get_document_resolves_node_text(monkeypatch: Any) -> None:
+    # #28: resolve a search-hit node id to its chunk text via the graph store.
+    client = CogneePublicClient()
+
+    async def fake_graph_data() -> tuple[list[Any], list[Any]]:
+        return ([("node-1", {"text": "hello world", "title": "Greeting", "extra": 1})], [])
+
+    monkeypatch.setattr(client, "graph_data", fake_graph_data)
+
+    doc = await client.get_document("node-1")
+    assert doc is not None
+    assert doc["id"] == "node-1"
+    assert doc["body"] == "hello world"
+    assert doc["title"] == "Greeting"
+    assert doc["source_type"] == "cognee"
+    assert doc["metadata"] == {"title": "Greeting", "extra": 1}  # text key excluded
+
+    assert await client.get_document("missing") is None
+
+
+@pytest.mark.asyncio
+async def test_get_document_returns_none_for_textless_node(monkeypatch: Any) -> None:
+    client = CogneePublicClient()
+
+    async def fake_graph_data() -> tuple[list[Any], list[Any]]:
+        return ([("node-2", {"title": "no body here"})], [])
+
+    monkeypatch.setattr(client, "graph_data", fake_graph_data)
+    assert await client.get_document("node-2") is None
+
+
+@pytest.mark.asyncio
+async def test_improve_raises_without_llm_key(monkeypatch: Any) -> None:
+    """improve must fail loud like cognify — cognee swallows the keyless error (#41)."""
+    monkeypatch.delenv("LLM_API_KEY", raising=False)
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+
+    client = CogneePublicClient()
+
+    with pytest.raises(RuntimeError, match="LLM_API_KEY"):
+        await client.improve(dataset="notes")
+
+
+@pytest.mark.asyncio
+async def test_delete_graph_nodes_calls_engine(monkeypatch: Any) -> None:
+    # #15: delete_graph_nodes forwards ids to the graph engine.
+    captured: dict[str, Any] = {}
+
+    class FakeEngine:
+        async def delete_nodes(self, node_ids: list[str]) -> None:
+            captured["ids"] = list(node_ids)
+
+    async def get_graph_engine() -> FakeEngine:
+        return FakeEngine()
+
+    async def run_startup_migrations() -> None:
+        return None
+
+    monkeypatch.setitem(sys.modules, "cognee", SimpleNamespace(run_startup_migrations=run_startup_migrations))
+    monkeypatch.setitem(sys.modules, "cognee.infrastructure", SimpleNamespace())
+    monkeypatch.setitem(sys.modules, "cognee.infrastructure.databases", SimpleNamespace())
+    monkeypatch.setitem(
+        sys.modules,
+        "cognee.infrastructure.databases.graph",
+        SimpleNamespace(get_graph_engine=get_graph_engine),
+    )
+
+    client = CogneePublicClient()
+    monkeypatch.setattr(client, "_prepare_cognee_environment", lambda: None)
+
+    async def _ready(_cognee: Any) -> None:
+        return None
+
+    monkeypatch.setattr(client, "_ensure_cognee_ready", _ready)
+
+    assert await client.delete_graph_nodes(["a", "b"]) == 2
+    assert captured["ids"] == ["a", "b"]
+    assert await client.delete_graph_nodes([]) == 0  # no-op
+
+
+@pytest.mark.asyncio
+async def test_cognify_serializes_on_writer_lock(monkeypatch: Any) -> None:
+    # #47: Kuzu is single-writer, so two overlapping cognify calls must serialize.
+    import asyncio
+
+    monkeypatch.setenv("LLM_API_KEY", "k")
+    concurrent = 0
+    max_seen = 0
+
+    async def fake_cognify(*, datasets: Any, incremental_loading: bool) -> dict[str, Any]:
+        nonlocal concurrent, max_seen
+        concurrent += 1
+        max_seen = max(max_seen, concurrent)
+        await asyncio.sleep(0.02)
+        concurrent -= 1
+        return {"ok": True}
+
+    async def run_startup_migrations() -> None:
+        return None
+
+    monkeypatch.setitem(
+        sys.modules,
+        "cognee",
+        SimpleNamespace(cognify=fake_cognify, run_startup_migrations=run_startup_migrations),
+    )
+    client = CogneePublicClient()
+    monkeypatch.setattr(client, "_prepare_cognee_environment", lambda: None)
+
+    async def _ready(_cognee: Any) -> None:
+        return None
+
+    monkeypatch.setattr(client, "_ensure_cognee_ready", _ready)
+
+    await asyncio.gather(client.cognify(datasets=["a"]), client.cognify(datasets=["b"]))
+    assert max_seen == 1  # the writer lock prevented concurrent graph writes
+
+
+@pytest.mark.asyncio
 async def test_durable_writes_bypass_session_cache(monkeypatch: Any) -> None:
     """Durable writes never route through cognee's session cache.
 

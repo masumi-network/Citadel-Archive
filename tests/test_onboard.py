@@ -10,6 +10,7 @@ import pytest
 from kb.cli import _onboard
 from kb.onboard import (
     TOKEN_ENV,
+    claude_user_settings_path,
     detect_shell_rc,
     ensure_token_in_rc,
     install_pre_push_hook,
@@ -197,7 +198,9 @@ def test_onboard_non_interactive_full_run(tmp_path: Path, monkeypatch) -> None:
 
     assert "CITADEL_MCP_ACCESS_TOKEN='ctdl_test_seat_token'" in rc.read_text()
     assert (repo / ".git" / "hooks" / "pre-push").exists()
-    settings = json.loads((repo / ".claude" / "settings.json").read_text())
+    # Session hooks land in user-scope ~/.claude/settings.json (#38), not the repo.
+    assert not (repo / ".claude" / "settings.json").exists()
+    settings = json.loads(claude_user_settings_path().read_text())
     assert any(
         "kb.hooks.sync_session" in h["command"]
         for g in settings["hooks"]["SessionEnd"]

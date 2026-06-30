@@ -2,17 +2,15 @@ from __future__ import annotations
 
 import json
 
-import pytest
-
 from kb import tool_detect as td
 
 NODE = "https://node.example"
 
 
 def test_specs_modes() -> None:
-    for write_tool in ("cursor", "codex", "gemini", "windsurf"):
+    for write_tool in ("cursor", "codex", "gemini", "windsurf", "claude"):
         assert td.SPECS[write_tool].mode == "write"
-    for snippet_tool in ("claude", "cline", "zed"):
+    for snippet_tool in ("cline", "zed"):
         assert td.SPECS[snippet_tool].mode == "snippet"
     assert td.SPECS["pi"].mode == "note"
 
@@ -87,14 +85,42 @@ def test_snippet_shapes() -> None:
     zed = td.apply("zed", node_url=NODE)
     assert "context_servers" in zed.snippet and '"source"' not in zed.snippet
 
-    claude = td.apply("claude", node_url=NODE)
-    assert "claude mcp add" in claude.snippet and "--scope user" in claude.snippet
+
+def test_claude_writes_user_scope_via_cli(tmp_path, monkeypatch) -> None:
+    # #36: with the `claude` CLI present, wire user scope via `claude mcp add`.
+    monkeypatch.setenv("HOME", str(tmp_path))
+    calls: list[list[str]] = []
+
+    def fake_run(cmd, **kwargs):
+        calls.append(cmd)
+        return type("R", (), {"returncode": 0})()
+
+    monkeypatch.setattr(td, "_which", lambda name: name == "claude")
+    monkeypatch.setattr(td.subprocess, "run", fake_run)
+
+    result = td.apply("claude", node_url=NODE)
+    assert result.action == "wrote"
+    assert calls and calls[0][:3] == ["claude", "mcp", "add"]
+    assert "--scope" in calls[0] and "user" in calls[0]
+
+
+def test_claude_merges_claude_json_when_cli_absent(tmp_path, monkeypatch) -> None:
+    # #36: without the CLI, merge ~/.claude.json (env-ref header, not a plaintext token).
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setattr(td, "_which", lambda name: False)
+
+    result = td.apply("claude", node_url=NODE)
+    assert result.action == "wrote"
+    entry = json.loads((tmp_path / ".claude.json").read_text())["mcpServers"]["citadel"]
+    assert entry["url"] == "https://node.example/mcp/"
+    assert entry["headers"]["Authorization"] == "Bearer ${CITADEL_MCP_ACCESS_TOKEN}"
+    assert td.apply("claude", node_url=NODE).action == "unchanged"
 
 
 def test_pi_is_note_only() -> None:
     result = td.apply("pi", node_url=NODE)
     assert result.action == "note"
-    assert "no native MCP" in result.detail
+    assert "MCP gateway" in result.detail
 
 
 def test_unknown_tool_errors() -> None:

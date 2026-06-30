@@ -37,7 +37,9 @@ from kb.capture_config import (
 from kb.capture import build_capture_payload, capture_token, post_capture
 from kb.onboard import (
     TOKEN_ENV,
+    claude_user_settings_path,
     detect_shell_rc,
+    ensure_env_in_rc,
     ensure_token_in_rc,
     git_root_or_cwd,
     install_pre_push_hook,
@@ -565,6 +567,7 @@ def _promotion_exit(exc: PromotionClientError, *, as_json: bool) -> int:
     return 1
 
 
+@_needs_server
 async def _promotion_list(args: argparse.Namespace) -> int:
     as_json = args.json
     try:
@@ -588,6 +591,7 @@ async def _promotion_list(args: argparse.Namespace) -> int:
     return 0
 
 
+@_needs_server
 async def _promotion_approve(args: argparse.Namespace) -> int:
     as_json = args.json
     try:
@@ -606,6 +610,7 @@ async def _promotion_approve(args: argparse.Namespace) -> int:
     return 0 if result.get("ok") else 1
 
 
+@_needs_server
 async def _promotion_reject(args: argparse.Namespace) -> int:
     as_json = args.json
     try:
@@ -623,6 +628,7 @@ async def _promotion_reject(args: argparse.Namespace) -> int:
     return 0 if result.get("ok") else 1
 
 
+@_needs_server
 async def _promotion_run(args: argparse.Namespace) -> int:
     as_json = args.json
     dry_run = not args.execute
@@ -1006,6 +1012,15 @@ async def _doctor(args: argparse.Namespace) -> int:
         issues.append({"problem": f"Node rejected the token ({auth.detail})",
                        "fix": "token revoked/expired or wrong Node — re-mint (`citadel seat create`) or re-onboard"})
 
+    # Data-plane gate: a reachable, authenticated Node whose corpus check is RED
+    # (sources tracked but graph empty, or the cognify canary failed) is a real
+    # problem, not "No problems found" (#27). Manual issue (no kind) → stays
+    # unresolved so doctor exits nonzero.
+    corpus = checks.get("corpus")
+    if node and node.ok and auth and auth.ok and corpus and not corpus.ok:
+        issues.append({"problem": f"data plane broken ({corpus.detail}) — Node up but retrieval is empty",
+                       "fix": "check the evolve scheduler / cognify; run `citadel cognify --verify`"})
+
     mcp_node = _mcp_node_url(repo / ".mcp.json")
     if mcp_node and cap_node and mcp_node.rstrip("/") != cap_node.rstrip("/"):
         issues.append({"problem": f".mcp.json Node ({mcp_node}) disagrees with capture config ({cap_node})",
@@ -1029,7 +1044,7 @@ async def _doctor(args: argparse.Namespace) -> int:
                         fixed.append("pre-push hook")
                         fixed_kinds.add(kind)
                 elif kind == "session":
-                    merge_claude_settings(repo / ".claude" / "settings.json")
+                    merge_claude_settings(claude_user_settings_path())
                     fixed.append("Claude hooks")
                     fixed_kinds.add(kind)
                 elif kind == "mcp":
@@ -1170,7 +1185,9 @@ async def _onboard(args: argparse.Namespace) -> int:
     try:
         steps.append((f"token → {rc_path}", ensure_token_in_rc(rc_path, token)))
         steps.append(("git pre-push hook", install_pre_push_hook(repo)))
-        steps.append(("SessionEnd hook", merge_claude_settings(repo / ".claude" / "settings.json")))
+        # Session hooks go to the USER-scope settings so they fire across every
+        # repo, not only the onboard repo (#38).
+        steps.append(("SessionEnd hook", merge_claude_settings(claude_user_settings_path())))
         if not args.no_mcp:
             steps.append(("MCP server (.mcp.json)", merge_mcp_config(repo / ".mcp.json", node_url)))
     except ValueError as exc:
@@ -1193,16 +1210,49 @@ async def _onboard(args: argparse.Namespace) -> int:
         except ValueError:
             pass
 
-    want_capture = not args.no_capture and interactive
-    if want_capture:
-        answer = input("\nSet up Approved Capture Roots now? [Y/n]: ").strip().lower()
-        if answer in ("", "y", "yes"):
-            cfg_path = capture_config_path()
-            cfg = _wizard_roots(load_capture_config(cfg_path))
-            save_capture_config(
-                cfg, path=cfg_path, updated_at=datetime.now(timezone.utc).isoformat()
+    # Optionally collect an OpenRouter key so local `cognify`/`cognify --verify`
+    # and proactive-ingest work out of the box (#35). Interactive-only; written
+    # to the shell rc next to the seat token.
+    if interactive:
+        try:
+            llm_key = getpass.getpass(
+                "Optional: paste an OpenRouter API key for local cognify "
+                "(enter to skip): "
+            ).strip()
+        except (EOFError, KeyboardInterrupt):
+            llm_key = ""
+        if llm_key:
+            steps.append(
+                (
+                    f"OpenRouter key → {rc_path}",
+                    ensure_env_in_rc(
+                        rc_path,
+                        "OPENROUTER_API_KEY",
+                        llm_key,
+                        comment="OpenRouter key for Citadel local cognify (added by `citadel onboard`)",
+                    ),
+                )
             )
-            steps.append((f"capture roots → {cfg_path}", f"{len(cfg.roots)} root(s)"))
+        print(
+            "  (local cognify also needs: pipx install 'citadel-archive[server]')"
+        )
+
+    # Always seed the repo toplevel as a capture root (unless --no-capture) so the
+    # pre-push hook is not a guaranteed no-op out of the box (#43/#35). The wizard
+    # only runs interactively, but a default root is persisted either way.
+    if not args.no_capture:
+        cfg_path = capture_config_path()
+        cfg = load_capture_config(cfg_path)
+        if not cfg.roots:
+            cfg = cfg.with_root(str(repo), (DEFAULT_ROOT_TAG,))  # 'personal' never promotes
+        if interactive:
+            answer = input("\nSet up Approved Capture Roots now? [Y/n]: ").strip().lower()
+            if answer in ("", "y", "yes"):
+                cfg = _wizard_roots(cfg)
+        save_capture_config(
+            cfg, path=cfg_path, updated_at=datetime.now(timezone.utc).isoformat()
+        )
+        steps.append((f"capture roots → {cfg_path}", f"{len(cfg.roots)} root(s)"))
 
     if interactive and not getattr(args, "no_tools", False):
         _wire_detected_tools(node_url, color=color)

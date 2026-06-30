@@ -58,8 +58,11 @@ class FakeHttpClient:
         payload: dict[str, Any],
         *,
         tool_name: str | None = None,
+        timeout: float | None = None,
     ) -> dict[str, Any]:
-        self.posts.append({"path": path, "payload": payload, "tool_name": tool_name})
+        self.posts.append(
+            {"path": path, "payload": payload, "tool_name": tool_name, "timeout": timeout}
+        )
         return {"ok": True, "path": path, "payload": payload, "tool_name": tool_name}
 
 
@@ -258,6 +261,209 @@ def test_write_tools_reject_empty_or_oversized_payloads(monkeypatch: pytest.Monk
 
     with pytest.raises(ToolError, match="qa_id must not be empty"):
         run_tool(server, "citadel_record_feedback", "", None)
+
+
+def test_ingest_tool_requests_inline_cognify_by_default() -> None:
+    # #53: the MCP ingest tool must send cognify=true (parity with the CLI) so an
+    # agent-ingested note is searchable immediately, not stuck on background cognify.
+    client = FakeHttpClient()
+    server = create_mcp_server(client)
+
+    run_tool(server, "citadel_ingest", "a durable note", None)
+
+    assert len(client.posts) == 1
+    post = client.posts[0]
+    assert post["path"] == "/ingest"
+    assert post["payload"]["cognify"] is True
+    # Inline cognify can exceed the default 30s budget, so the tool extends the timeout.
+    assert post["timeout"] == mcp_server._INGEST_COGNIFY_TIMEOUT
+
+
+def test_ingest_tool_honors_cognify_opt_out() -> None:
+    client = FakeHttpClient()
+    server = create_mcp_server(client)
+
+    run_tool(server, "citadel_ingest", "a durable note", None, cognify=False)
+
+    post = client.posts[0]
+    assert post["payload"]["cognify"] is False
+    # No extended budget when not blocking on cognify.
+    assert post["timeout"] is None
+
+
+class _OkResp:
+    def __enter__(self) -> Any:
+        return self
+
+    def __exit__(self, *args: Any) -> None:
+        return None
+
+    def read(self) -> bytes:
+        return b'{"ok": true}'
+
+
+def test_http_client_retries_transient_5xx_on_reads(monkeypatch: pytest.MonkeyPatch) -> None:
+    # #50: idempotent reads ride out a transient 503 instead of failing ~20%.
+    monkeypatch.setenv("CITADEL_RETRY_BASE_DELAY_SECONDS", "0")
+    monkeypatch.setenv("CITADEL_RETRY_MAX_ATTEMPTS", "3")
+    attempts: list[int] = []
+
+    def fake_urlopen(request: Any, timeout: float) -> Any:
+        attempts.append(1)
+        if len(attempts) < 2:
+            raise HTTPError(request.full_url, 503, "busy", {}, BytesIO(b"{}"))
+        return _OkResp()
+
+    monkeypatch.setattr(mcp_server, "urlopen", fake_urlopen)
+    client = CitadelHttpClient(base_url="http://localhost:8000", access_token="ctdl_t")
+
+    result = client.get("/api/session", tool_name="citadel_session")
+    assert result["ok"] is True
+    assert len(attempts) == 2  # one retry, then success
+
+
+def test_http_client_does_not_retry_writes(monkeypatch: pytest.MonkeyPatch) -> None:
+    # #50: writes are never retried (avoid duplicate ingests).
+    monkeypatch.setenv("CITADEL_RETRY_BASE_DELAY_SECONDS", "0")
+    monkeypatch.setenv("CITADEL_RETRY_MAX_ATTEMPTS", "3")
+    attempts: list[int] = []
+
+    def fake_urlopen(request: Any, timeout: float) -> Any:
+        attempts.append(1)
+        raise HTTPError(request.full_url, 503, "busy", {}, BytesIO(b"{}"))
+
+    monkeypatch.setattr(mcp_server, "urlopen", fake_urlopen)
+    client = CitadelHttpClient(base_url="http://localhost:8000", access_token="ctdl_t")
+
+    with pytest.raises(CitadelMcpError):
+        client.post("/ingest", {"data": "x"}, tool_name="citadel_ingest")
+    assert len(attempts) == 1  # no retry on a write
+
+
+def test_http_client_request_honors_explicit_timeout_override(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, float] = {}
+
+    def fake_urlopen(request: Any, timeout: float) -> Any:
+        captured["timeout"] = timeout
+
+        class _Resp:
+            def __enter__(self) -> Any:
+                return self
+
+            def __exit__(self, *args: Any) -> None:
+                return None
+
+            def read(self) -> bytes:
+                return b"{}"
+
+        return _Resp()
+
+    monkeypatch.setattr(mcp_server, "urlopen", fake_urlopen)
+    client = CitadelHttpClient(base_url="http://localhost:8000", access_token="ctdl_t")
+
+    client.post("/ingest", {"data": "x"}, tool_name="citadel_ingest", timeout=180.0)
+    assert captured["timeout"] == 180.0
+
+    client.post("/ingest", {"data": "x"}, tool_name="citadel_ingest")
+    assert captured["timeout"] == client.timeout
+
+
+_ADMIN_TOOLS = {
+    "citadel_audit_events",
+    "citadel_improve",
+    "citadel_backup_mirror_status",
+    "citadel_run_learning_agent",
+    "citadel_run_repo_content_sync",
+    "citadel_run_backup_mirror",
+}
+
+
+def test_tools_list_filters_by_role_and_seat() -> None:
+    # #33: tools/list must not advertise tools the caller's role/seat cannot use.
+    from kb.mcp_server import _filter_tools_for_session
+
+    server = create_mcp_server(FakeHttpClient())
+    all_tools = asyncio.run(server.list_tools())
+    names = {t.name for t in all_tools}
+    assert _ADMIN_TOOLS <= names  # sanity: unfiltered list has the admin tools
+
+    def visible(session: Any) -> set[str]:
+        return {t.name for t in _filter_tools_for_session(all_tools, session)}
+
+    # Non-seat writer: admin tools hidden; contribute + ingest visible.
+    writer = visible({"role": "writer", "seat_slug": None})
+    assert not (_ADMIN_TOOLS & writer)
+    assert {"citadel_contribute", "citadel_ingest"} <= writer
+
+    # Seat writer: contribute additionally hidden (Central read-only from seat MCP).
+    seat = visible({"role": "writer", "seat_slug": "sarthi"})
+    assert "citadel_contribute" not in seat
+    assert "citadel_ingest" in seat
+
+    # Reader: writer + admin tools hidden; read tools visible.
+    reader = visible({"role": "reader", "seat_slug": None})
+    assert not (_ADMIN_TOOLS & reader)
+    assert "citadel_ingest" not in reader
+    assert "citadel_search" in reader
+
+    # Admin: full set.
+    assert _ADMIN_TOOLS <= visible({"role": "admin", "seat_slug": None})
+
+    # Fail open: a missing or unknown-role session never blanks the tool list.
+    assert _filter_tools_for_session(all_tools, None) == all_tools
+    assert _filter_tools_for_session(all_tools, {"role": "bogus"}) == all_tools
+
+
+def test_promotion_decision_tools_require_admin_in_policy() -> None:
+    # #48: discovery metadata must match the server's admin/sources:sync gate so an
+    # agent doesn't read "writer" and try (then 403) approve/reject.
+    for name in ("citadel_promotion_approve", "citadel_promotion_reject"):
+        policy = TOOL_POLICIES[name]
+        assert policy.role == "admin", name
+        assert policy.scope == "sources:sync", name
+
+
+def test_tools_list_protocol_handler_applies_role_filter(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # #33: prove the override is wired into the live tools/list protocol handler
+    # (not just the pure helper) and resolves the caller's session to filter.
+    from mcp import types as mcp_types
+
+    server = create_mcp_server(FakeHttpClient())
+
+    monkeypatch.setattr(server, "get_context", lambda: object())
+    monkeypatch.setattr(mcp_server, "_bearer_from_context", lambda ctx: "ctdl_tok")
+
+    class _SessionClient:
+        def __init__(self, **_: Any) -> None: ...
+
+        def get(self, path: str, **_: Any) -> dict[str, Any]:
+            assert path == "/api/session"
+            return {"role": "writer", "seat_slug": "sarthi"}
+
+    monkeypatch.setattr(mcp_server, "CitadelHttpClient", _SessionClient)
+
+    handler = server._mcp_server.request_handlers[mcp_types.ListToolsRequest]
+    result = asyncio.run(handler(mcp_types.ListToolsRequest(method="tools/list")))
+    names = {t.name for t in result.root.tools}
+
+    assert not (_ADMIN_TOOLS & names)
+    assert "citadel_contribute" not in names  # seat writer
+    assert "citadel_ingest" in names
+
+
+def test_tools_list_protocol_handler_fails_open_without_context() -> None:
+    # No HTTP request context (stdio) → unfiltered, since call-time authz applies.
+    from mcp import types as mcp_types
+
+    server = create_mcp_server(FakeHttpClient())
+    handler = server._mcp_server.request_handlers[mcp_types.ListToolsRequest]
+    result = asyncio.run(handler(mcp_types.ListToolsRequest(method="tools/list")))
+    names = {t.name for t in result.root.tools}
+    assert _ADMIN_TOOLS <= names
 
 
 def test_remote_http_base_url_is_rejected_without_escape_hatch(
