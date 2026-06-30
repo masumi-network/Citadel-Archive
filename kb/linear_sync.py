@@ -107,6 +107,15 @@ query Issues($first: Int!, $after: String) {
 """
 
 
+USERS_QUERY = """
+query Users($first: Int!) {
+  users(first: $first) {
+    nodes { id name email active }
+  }
+}
+"""
+
+
 class LinearClient:
     def __init__(self, *, api_key: str, timeout: float = 30.0) -> None:
         self.api_key = api_key
@@ -166,6 +175,15 @@ class LinearClient:
             if not cursor:
                 break
         return issues
+
+    def fetch_users(self, *, max_users: int = 250) -> list[dict[str, Any]]:
+        """List workspace members (id/name/email) for assignee→seat auto-mapping."""
+        data = self.query(USERS_QUERY, {"first": min(max(max_users, 1), 250)})
+        block = data.get("users") if isinstance(data.get("users"), dict) else {}
+        nodes = block.get("nodes")
+        if not isinstance(nodes, list):
+            return []
+        return [node for node in nodes if isinstance(node, dict) and node.get("id")]
 
 
 def format_issue_note(issue: LinearIssue) -> str:
@@ -326,7 +344,33 @@ class LinearSyncer:
             if self.access_store
             else {}
         )
-        user_map = self.config.linear_user_map
+        # Auto-resolve assignee_id -> seat by matching Linear members' emails to
+        # seat emails, using the node's own Linear key (#46). This populates seat
+        # mirrors without a manual CITADEL_LINEAR_USER_MAP, and works even when the
+        # per-issue assignee.email is null (a common non-admin-key limitation) —
+        # the id is matched instead. Explicit config map entries always win.
+        user_map = dict(self.config.linear_user_map)
+        auto_mapped = 0
+        if self.access_store:
+            email_to_slug = {
+                email: dataset.removeprefix(SEAT_DATASET_PREFIX)
+                for email, dataset in email_index.items()
+            }
+            try:
+                members = await asyncio.to_thread(self._client().fetch_users)
+            except LinearAPIError as exc:
+                members = []
+                logger.warning(
+                    "Linear member fetch failed; mirrors fall back to assignee email/config map: %s",
+                    exc,
+                )
+            for member in members:
+                member_id = member.get("id")
+                member_email = (member.get("email") or "").strip().lower()
+                if member_id and member_email and member_email in email_to_slug:
+                    if member_id not in user_map:
+                        user_map[member_id] = email_to_slug[member_email]
+                        auto_mapped += 1
 
         learning = LearningProcess(self.citadel)
         central_dataset = self.config.linear_sync_dataset or CENTRAL_DATASET
@@ -399,6 +443,10 @@ class LinearSyncer:
             "enabled": True,
             "issue_count": len(issues),
             "mirrored_count": mirrored,
+            # Diagnostics for #46: how many assignees were auto-mapped to seats by
+            # email. 0 with issues present usually means the Linear key cannot read
+            # member emails — set CITADEL_LINEAR_USER_MAP explicitly in that case.
+            "auto_mapped_assignees": auto_mapped,
             "central_ingested": central_outcome.ingest.accepted,
             "mirrors": mirrors,
             "last_synced_at": payload["last_synced_at"],
