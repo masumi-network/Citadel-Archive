@@ -252,9 +252,11 @@ TOOL_POLICIES: dict[str, ToolPolicy] = {
             openWorldHint=False,
         ),
     ),
+    # Approving/rejecting commits a candidate into Central, an admin decision
+    # (#48). Discovery metadata must match the server's admin/sources:sync gate.
     "citadel_promotion_approve": ToolPolicy(
-        role="writer",
-        scope="kb:ingest",
+        role="admin",
+        scope="sources:sync",
         risk="additive_write",
         annotations=ToolAnnotations(
             readOnlyHint=False,
@@ -264,8 +266,8 @@ TOOL_POLICIES: dict[str, ToolPolicy] = {
         ),
     ),
     "citadel_promotion_reject": ToolPolicy(
-        role="writer",
-        scope="kb:ingest",
+        role="admin",
+        scope="sources:sync",
         risk="additive_write",
         annotations=ToolAnnotations(
             readOnlyHint=False,

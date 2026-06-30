@@ -2833,7 +2833,10 @@ async def approve_promotion_pending(
     request: Request,
     body: PromotionDecisionBody | None = None,
 ) -> dict[str, Any]:
-    identity = require_access(request, "writer", "kb:ingest")
+    # Approving commits a candidate into Central, so it requires admin — a
+    # seat-writer is rejected with 403 BEFORE the item lookup, closing the gap
+    # where a seat could self-promote its own pending item into Central (#48).
+    identity = require_access(request, "admin", "sources:sync")
     item = get_access_store().get_promotion_pending(item_id)
     if item is None:
         raise HTTPException(status_code=404, detail=f"Promotion item not found: {item_id}")
@@ -2865,7 +2868,9 @@ async def reject_promotion_pending(
     request: Request,
     body: PromotionDecisionBody | None = None,
 ) -> dict[str, Any]:
-    identity = require_access(request, "writer", "kb:ingest")
+    # Symmetric with approve: deciding a Central-bound promotion is admin-only, so
+    # a seat-writer is 403'd before the item lookup (#48).
+    identity = require_access(request, "admin", "sources:sync")
     item = get_access_store().get_promotion_pending(item_id)
     if item is None:
         raise HTTPException(status_code=404, detail=f"Promotion item not found: {item_id}")

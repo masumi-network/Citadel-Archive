@@ -367,6 +367,15 @@ def test_tools_list_filters_by_role_and_seat() -> None:
     assert _filter_tools_for_session(all_tools, {"role": "bogus"}) == all_tools
 
 
+def test_promotion_decision_tools_require_admin_in_policy() -> None:
+    # #48: discovery metadata must match the server's admin/sources:sync gate so an
+    # agent doesn't read "writer" and try (then 403) approve/reject.
+    for name in ("citadel_promotion_approve", "citadel_promotion_reject"):
+        policy = TOOL_POLICIES[name]
+        assert policy.role == "admin", name
+        assert policy.scope == "sources:sync", name
+
+
 def test_tools_list_protocol_handler_applies_role_filter(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

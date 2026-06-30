@@ -3004,3 +3004,41 @@ def test_promotion_pending_list_redacts_body(tmp_path: Any) -> None:
     )
     assert other.status_code == 200
     assert other.json()["count"] == 0
+
+
+def test_promotion_approve_reject_require_admin_not_seat_writer(tmp_path: Any) -> None:
+    # #48: a seat-writer must NOT be able to approve/reject a promotion into Central.
+    # The admin gate must 403 BEFORE the item lookup, so even a real own-seat item
+    # cannot be self-promoted, and a bogus id never reaches a 404 for a seat.
+    app.state.access_store = AccessStore(tmp_path / "access.json")
+    admin = authed_client()
+    created = admin.post("/api/access/seats", json={"name": "Bob", "slug": "bob"})
+    bob_token = created.json()["token"]
+    bob = TestClient(app, base_url="https://testserver")
+    bob_headers = {"Authorization": f"Bearer {bob_token}"}
+
+    from kb.access import now_iso
+    from kb.promotion_queue import build_pending_item
+    from kb.promotion_refs import ReferenceAssessment
+
+    item = build_pending_item(
+        seat_slug="bob",
+        seat_dataset="seat:bob",
+        candidate_text="bob's own candidate",
+        assessment=ReferenceAssessment(status="new_org_project", reason="no_org_or_central_match"),
+        created_at=now_iso(),
+    )
+    app.state.access_store.add_promotion_pending(item)
+
+    for verb in ("approve", "reject"):
+        # Seat-writer is 403'd for both its own real item and a bogus id (authz first).
+        own = bob.post(f"/api/promotion/pending/{item.id}/{verb}", headers=bob_headers, json={})
+        bogus = bob.post(f"/api/promotion/pending/does-not-exist/{verb}", headers=bob_headers, json={})
+        assert own.status_code == 403, verb
+        assert bogus.status_code == 403, verb
+        # Admin passes the authz gate (proven by reaching the 404 id lookup).
+        admin_bogus = admin.post(f"/api/promotion/pending/does-not-exist/{verb}", json={})
+        assert admin_bogus.status_code == 404, verb
+
+    # The seat's own pending item is still queued (never approved/rejected/promoted).
+    assert app.state.access_store.get_promotion_pending(item.id) is not None

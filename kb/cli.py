@@ -565,6 +565,7 @@ def _promotion_exit(exc: PromotionClientError, *, as_json: bool) -> int:
     return 1
 
 
+@_needs_server
 async def _promotion_list(args: argparse.Namespace) -> int:
     as_json = args.json
     try:
@@ -588,6 +589,7 @@ async def _promotion_list(args: argparse.Namespace) -> int:
     return 0
 
 
+@_needs_server
 async def _promotion_approve(args: argparse.Namespace) -> int:
     as_json = args.json
     try:
@@ -606,6 +608,7 @@ async def _promotion_approve(args: argparse.Namespace) -> int:
     return 0 if result.get("ok") else 1
 
 
+@_needs_server
 async def _promotion_reject(args: argparse.Namespace) -> int:
     as_json = args.json
     try:
@@ -623,6 +626,7 @@ async def _promotion_reject(args: argparse.Namespace) -> int:
     return 0 if result.get("ok") else 1
 
 
+@_needs_server
 async def _promotion_run(args: argparse.Namespace) -> int:
     as_json = args.json
     dry_run = not args.execute
