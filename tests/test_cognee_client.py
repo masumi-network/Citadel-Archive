@@ -401,9 +401,10 @@ async def test_cognee_public_client_uses_chunk_search_by_default(monkeypatch: An
 
 
 @pytest.mark.asyncio
-async def test_cognee_public_client_returns_session_recall_before_chunk_search(
-    monkeypatch: Any,
-) -> None:
+async def test_session_recall_off_by_default_and_opt_in(monkeypatch: Any) -> None:
+    # #15/#52: the per-session QA cache served stale "[DataItem]" garbage, so the
+    # session-scoped recall is OFF by default — search goes straight to the durable
+    # chunk store. It only runs when CITADEL_COGNEE_SESSION_RECALL is set.
     received: dict[str, Any] = {}
 
     async def run_startup_migrations() -> None:
@@ -429,11 +430,19 @@ async def test_cognee_public_client_returns_session_recall_before_chunk_search(
     )
     client = CogneePublicClient()
 
+    # Default OFF: the session cache is never read; the durable chunk search runs.
+    monkeypatch.delenv("CITADEL_COGNEE_SESSION_RECALL", raising=False)
     result = await client.recall("note", dataset="notes", session_id="source-session")
+    assert result == [{"source": "graph"}]
+    assert "recall" not in received  # session QA cache never touched
+    assert "search" in received
 
+    # Opt-in: session recall runs first only when explicitly enabled.
+    received.clear()
+    monkeypatch.setenv("CITADEL_COGNEE_SESSION_RECALL", "true")
+    result = await client.recall("note", dataset="notes", session_id="source-session")
     assert result == [{"source": "session"}]
     assert received["recall"]["kwargs"]["scope"] == "session"
-    assert received["recall"]["kwargs"]["session_id"] == "source-session"
     assert "search" not in received
 
 
@@ -498,6 +507,8 @@ async def test_cognee_public_client_falls_back_when_session_has_no_data(
     )
     client = CogneePublicClient()
 
+    # The session-recall fallback only applies when session recall is opted in.
+    monkeypatch.setenv("CITADEL_COGNEE_SESSION_RECALL", "true")
     result = await client.recall("note", dataset="notes", session_id="source-session")
 
     assert result == [{"source": "chunks"}]
