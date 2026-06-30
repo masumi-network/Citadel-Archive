@@ -45,7 +45,7 @@ class ToolSpec:
 
 # Order here is the order tools are offered during onboarding.
 SPECS: dict[str, ToolSpec] = {
-    "claude": ToolSpec("claude", "Claude Code (user scope)", "snippet", "~/.claude.json (or `claude mcp add`)"),
+    "claude": ToolSpec("claude", "Claude Code (user scope)", "write", "~/.claude.json (or `claude mcp add --scope user`)"),
     "cursor": ToolSpec("cursor", "Cursor", "write", "~/.cursor/mcp.json"),
     "codex": ToolSpec("codex", "Codex CLI", "write", "~/.codex/config.toml"),
     "gemini": ToolSpec("gemini", "Gemini CLI", "write", "~/.gemini/settings.json"),
@@ -181,6 +181,31 @@ def _wire_codex(url: str) -> ToolResult:
     return ToolResult("codex", "wrote", str(path))
 
 
+def _wire_claude(url: str) -> ToolResult:
+    """Prefer `claude mcp add --scope user`; else merge ~/.claude.json (#36)."""
+    if _which("claude"):
+        try:
+            subprocess.run(
+                [
+                    "claude", "mcp", "add", "--transport", "http", "citadel", url,
+                    "--scope", "user",
+                    "--header", f"Authorization: Bearer ${{{TOKEN_ENV}}}",
+                ],
+                check=True,
+                capture_output=True,
+                timeout=30,
+            )
+            return ToolResult("claude", "wrote", "via `claude mcp add --scope user`")
+        except (OSError, subprocess.SubprocessError):
+            pass  # fall back to editing ~/.claude.json directly
+    return _merge_json_mcp(
+        Path("~/.claude.json").expanduser(),
+        "claude",
+        "mcpServers",
+        {"type": "http", "url": url, "headers": {"Authorization": f"Bearer ${{{TOKEN_ENV}}}"}},
+    )
+
+
 def apply(name: str, *, node_url: str = DEFAULT_NODE_URL) -> ToolResult:
     """Wire (write tier) or produce a snippet/note (others) for one tool."""
     spec = SPECS.get(name)
@@ -215,13 +240,7 @@ def apply(name: str, *, node_url: str = DEFAULT_NODE_URL) -> ToolResult:
             {"serverUrl": url, "headers": {"Authorization": "Bearer ${env:%s}" % TOKEN_ENV}},
         )
     if name == "claude":
-        snippet = (
-            "# Project scope is already wired by `citadel onboard` (.mcp.json).\n"
-            "# To add Citadel at USER scope (every project), run:\n"
-            f'claude mcp add --transport http citadel {url} --scope user '
-            f'--header "Authorization: Bearer ${TOKEN_ENV}"'
-        )
-        return ToolResult("claude", "snippet", spec.config_hint, snippet)
+        return _wire_claude(url)
     if name == "cline":
         # `type` MUST be the camelCase "streamableHttp" or Cline falls back to
         # legacy SSE and 405s. No header env-interpolation → literal token.
@@ -251,7 +270,7 @@ def apply(name: str, *, node_url: str = DEFAULT_NODE_URL) -> ToolResult:
         return ToolResult(
             "pi",
             "note",
-            "Pi has no native MCP. With the community pi-mcp-adapter extension it can reach "
-            f"{url} using a Bearer token; otherwise it cannot consume Citadel's MCP.",
+            "Pi has no native auto-writable MCP config; it reaches Citadel via its "
+            f"MCP gateway with a Bearer token to {url}.",
         )
     return ToolResult(name, "error", f"unknown tool: {name}")

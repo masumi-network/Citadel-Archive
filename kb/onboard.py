@@ -61,6 +61,22 @@ def detect_shell_rc(home: Path | None = None) -> Path:
     return home / ".profile"
 
 
+def claude_home() -> Path:
+    """Home dir for user-scope Claude config (CITADEL_HOME overrides, for tests)."""
+    override = os.getenv("CITADEL_HOME")
+    return Path(override) if override else Path.home()
+
+
+def claude_user_settings_path() -> Path:
+    """User-scope Claude Code settings — where cross-repo session hooks must live.
+
+    Claude Code reads ``~/.claude/settings.json`` for session hooks across every
+    repo; installing them into a project's ``.claude/settings.json`` (the old
+    behavior) made them fire only inside the onboard repo (#38).
+    """
+    return claude_home() / ".claude" / "settings.json"
+
+
 def mask_token(token: str) -> str:
     # Reveal only the last 4 chars — no contiguous bytes from the secret's start.
     token = token.strip()
@@ -118,8 +134,9 @@ def pre_push_hook_script(python: str | None = None) -> str:
     return (
         "#!/bin/sh\n"
         "# Citadel autosync — installed by `citadel onboard`.\n"
-        "# Fail-silent: never blocks `git push`.\n"
-        f'"{py}" -m {PUSH_MODULE} "$@" 2>/dev/null || true\n'
+        "# Non-blocking: never fails `git push`. Warnings (e.g. a path that is not\n"
+        "# an Approved Capture Root) go to stderr instead of being swallowed (#43).\n"
+        f'"{py}" -m {PUSH_MODULE} "$@" || true\n'
         "exit 0\n"
     )
 
@@ -141,19 +158,19 @@ def _write_json(path: Path, data: dict[str, Any]) -> None:
     path.write_text(json.dumps(data, indent=2) + "\n")
 
 
-def ensure_token_in_rc(rc_path: Path, token: str) -> str:
-    """Write ``export CITADEL_MCP_ACCESS_TOKEN=…`` to the shell rc.
+def ensure_env_in_rc(rc_path: Path, var_name: str, value: str, *, comment: str) -> str:
+    """Write/refresh ``export VAR=value`` in the shell rc.
 
     Idempotent, and rotation-aware: if the var is already exported with a
     *different* value, that line is rewritten (returns ``updated``) instead of
-    being left stale. The token is single-quoted POSIX-safely.
+    being left stale. The value is single-quoted POSIX-safely.
     """
-    token = token.strip()
-    export_line = f"export {TOKEN_ENV}={_sh_single_quote(token)}"
+    value = value.strip()
+    export_line = f"export {var_name}={_sh_single_quote(value)}"
     lines = rc_path.read_text().splitlines() if rc_path.exists() else []
     for index, raw in enumerate(lines):
         stripped = raw.strip()
-        if stripped.startswith(f"export {TOKEN_ENV}=") or stripped.startswith(f"{TOKEN_ENV}="):
+        if stripped.startswith(f"export {var_name}=") or stripped.startswith(f"{var_name}="):
             if stripped == export_line:
                 return "present"
             lines[index] = export_line
@@ -161,8 +178,18 @@ def ensure_token_in_rc(rc_path: Path, token: str) -> str:
             return "updated"
     rc_path.parent.mkdir(parents=True, exist_ok=True)
     with rc_path.open("a", encoding="utf-8") as handle:
-        handle.write(f"\n# Citadel seat token (added by `citadel onboard`)\n{export_line}\n")
+        handle.write(f"\n# {comment}\n{export_line}\n")
     return "added"
+
+
+def ensure_token_in_rc(rc_path: Path, token: str) -> str:
+    """Write ``export CITADEL_MCP_ACCESS_TOKEN=…`` to the shell rc (see ensure_env_in_rc)."""
+    return ensure_env_in_rc(
+        rc_path,
+        TOKEN_ENV,
+        token,
+        comment="Citadel seat token (added by `citadel onboard`)",
+    )
 
 
 def merge_mcp_config(path: Path, base_url: str = DEFAULT_NODE_URL) -> str:

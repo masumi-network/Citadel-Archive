@@ -56,8 +56,13 @@ def test_check_local_setup(tmp_path: Path, monkeypatch) -> None:
     (tmp_path / ".mcp.json").write_text(json.dumps({"mcpServers": {"citadel": {"type": "http"}}}))
     (tmp_path / ".git" / "hooks").mkdir(parents=True)
     (tmp_path / ".git" / "hooks" / "pre-push").write_text("#!/bin/sh\n")
-    (tmp_path / ".claude").mkdir()
-    (tmp_path / ".claude" / "settings.json").write_text(
+    # Session hook lives in user-scope ~/.claude/settings.json (#38), isolated via
+    # the CITADEL_HOME autouse fixture.
+    from kb.onboard import claude_user_settings_path
+
+    user_settings = claude_user_settings_path()
+    user_settings.parent.mkdir(parents=True, exist_ok=True)
+    user_settings.write_text(
         json.dumps({"hooks": {"SessionEnd": [{"hooks": [{"command": status_mod.SESSION_HOOK_MARKER}]}]}})
     )
     cfg = tmp_path / "capture.json"

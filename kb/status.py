@@ -249,7 +249,11 @@ def check_local_setup(repo: Path, config_path: Path | None = None) -> list[Check
         Check("pre_push_hook", ok=pre_push.exists(), detail="installed" if pre_push.exists() else "missing")
     )
 
-    settings = repo / ".claude" / "settings.json"
+    # Session hooks live in user-scope ~/.claude/settings.json (cross-repo), not
+    # the project's .claude/settings.json (#38).
+    from kb.onboard import claude_user_settings_path
+
+    settings = claude_user_settings_path()
     session_ok = False
     if settings.exists():
         try:

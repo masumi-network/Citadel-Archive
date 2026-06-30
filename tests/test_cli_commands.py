@@ -4,7 +4,6 @@ import argparse
 import asyncio
 import json
 from pathlib import Path
-from typing import Any
 
 from kb.cli import _doctor, _ingest, _search
 from kb.status import Check, StatusReport
@@ -73,7 +72,10 @@ def test_doctor_fix_installs_missing_local_setup(tmp_path: Path, monkeypatch, ca
     assert out["resolved"] is True
     assert set(out["fixed"]) == {"pre-push hook", "Claude hooks", "MCP server"}
     assert (tmp_path / ".git" / "hooks" / "pre-push").exists()
-    assert (tmp_path / ".claude" / "settings.json").exists()
+    # Claude hooks are installed at user scope (#38), isolated via CITADEL_HOME.
+    from kb.onboard import claude_user_settings_path
+
+    assert claude_user_settings_path().exists()
     assert (tmp_path / ".mcp.json").exists()
 
 
