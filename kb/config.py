@@ -196,6 +196,9 @@ class CitadelConfig:
     repo_content_sync_max_files_per_repo: int = 40
     repo_content_sync_max_bytes_per_file: int = 120_000
     repo_content_sync_run_improve: bool = True
+    repo_content_sync_autojoin_enabled: bool = False
+    repo_content_sync_autojoin_markers: tuple[str, ...] = field(default_factory=tuple)
+    repo_content_sync_autojoin_max_repos: int = 100
     contribute_run_improve: bool = False
     organization_digest_enabled: bool = True
     organization_digest_window_hours: int = 24
@@ -381,6 +384,17 @@ class CitadelConfig:
             repo_content_sync_run_improve=_bool(
                 os.getenv("CITADEL_REPO_CONTENT_SYNC_RUN_IMPROVE"),
                 default=True,
+            ),
+            repo_content_sync_autojoin_enabled=_bool(
+                os.getenv("CITADEL_REPO_CONTENT_SYNC_AUTOJOIN_ENABLED"),
+                default=False,
+            ),
+            repo_content_sync_autojoin_markers=tuple(
+                _csv(os.getenv("CITADEL_REPO_CONTENT_SYNC_AUTOJOIN_MARKERS"))
+            ),
+            repo_content_sync_autojoin_max_repos=_int(
+                os.getenv("CITADEL_REPO_CONTENT_SYNC_AUTOJOIN_MAX_REPOS"),
+                default=100,
             ),
             contribute_run_improve=_bool(
                 os.getenv("CITADEL_CONTRIBUTE_RUN_IMPROVE"),

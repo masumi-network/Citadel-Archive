@@ -25,6 +25,7 @@ from kb.security_scan import SecurityScanEntry, scan_text_entries
 from kb.service import Citadel
 
 __all__ = [
+    "DEFAULT_REPO_CONTENT_AUTOJOIN_MARKERS",
     "DEFAULT_REPO_CONTENT_REPOS",
     "DEFAULT_REPO_CONTENT_ROOT_PATHS",
     "DEFAULT_REPO_CONTENT_TREE_EXTENSIONS",
@@ -46,7 +47,7 @@ DEFAULT_REPO_CONTENT_REPOS = (
     "sokosumi-cli",
     "sokosumi-docs",
 )
-DEFAULT_REPO_CONTENT_ROOT_PATHS = ("README.md", "SKILL.md", "CONTEXT.md")
+DEFAULT_REPO_CONTENT_ROOT_PATHS = ("README.md", "AGENTS.md", "SKILL.md", "CONTEXT.md")
 DEFAULT_REPO_CONTENT_TREE_PREFIXES = (
     "skills/",
     "content/docs/",
@@ -54,6 +55,7 @@ DEFAULT_REPO_CONTENT_TREE_PREFIXES = (
     "plugins/",
 )
 DEFAULT_REPO_CONTENT_TREE_EXTENSIONS = (".md", ".mdx", ".txt")
+DEFAULT_REPO_CONTENT_AUTOJOIN_MARKERS = ("AGENTS.md", "CONTEXT.md", "SKILL.md")
 
 
 @dataclass(frozen=True)
@@ -229,6 +231,49 @@ def discover_repo_paths(
     return selected
 
 
+def discover_org_repos(
+    client: RepoContentGitHubClient,
+    org: str,
+    *,
+    markers: tuple[str, ...],
+    max_repos: int,
+) -> list[str]:
+    """Auto-join org repos that carry a marker file (e.g. AGENTS.md/CONTEXT.md/
+    SKILL.md) at their root, so the static allowlist never silently lags reality.
+
+    Returns the full names of non-archived repos in ``org`` that have at least one
+    ``markers`` file at their default-branch root. Failures degrade to an empty
+    result rather than aborting the sync.
+    """
+    if not markers or max_repos <= 0:
+        return []
+    try:
+        repos = client.fetch_repos(org, max_repos=max_repos)
+    except GitHubAPIError as exc:
+        logger.warning("Auto-join skipped: could not list repos for org %s: %s", org, exc)
+        return []
+    discovered: list[str] = []
+    for repo in repos:
+        full_name = repo.full_name
+        ref = repo.default_branch
+        if not full_name or repo.archived or not ref:
+            continue
+        for marker in markers:
+            normalized = marker.strip().lstrip("/")
+            if not normalized:
+                continue
+            try:
+                if client.file_exists(full_name, normalized, ref=ref):
+                    discovered.append(full_name)
+                    break
+            except GitHubAPIError as exc:
+                logger.warning(
+                    "Auto-join: marker probe failed for %s/%s: %s", full_name, normalized, exc
+                )
+                continue
+    return discovered
+
+
 class RepoContentSyncer:
     """Fetch allowlisted repository files and cognify them into the vault."""
 
@@ -268,7 +313,25 @@ class RepoContentSyncer:
 
     def _resolved_repos(self) -> list[str]:
         repos = self.config.repo_content_sync_repos or DEFAULT_REPO_CONTENT_REPOS
-        return [resolve_repo_full_name(name, self.org) for name in repos if name.strip()]
+        resolved = [resolve_repo_full_name(name, self.org) for name in repos if name.strip()]
+        if not self.config.repo_content_sync_autojoin_enabled:
+            return resolved
+        markers = (
+            self.config.repo_content_sync_autojoin_markers
+            or DEFAULT_REPO_CONTENT_AUTOJOIN_MARKERS
+        )
+        discovered = discover_org_repos(
+            self.client,
+            self.org,
+            markers=markers,
+            max_repos=self.config.repo_content_sync_autojoin_max_repos,
+        )
+        seen = set(resolved)
+        for full_name in discovered:
+            if full_name not in seen:
+                resolved.append(full_name)
+                seen.add(full_name)
+        return resolved
 
     async def status(self) -> dict[str, Any]:
         state = self._load_state()
@@ -281,6 +344,11 @@ class RepoContentSyncer:
             "enabled": self.config.repo_content_sync_enabled,
             "dataset": self.config.repo_content_sync_dataset,
             "session": self.config.repo_content_sync_session,
+            "autojoin_enabled": self.config.repo_content_sync_autojoin_enabled,
+            "autojoin_markers": list(
+                self.config.repo_content_sync_autojoin_markers
+                or DEFAULT_REPO_CONTENT_AUTOJOIN_MARKERS
+            ),
             "repos": self._resolved_repos(),
             "root_paths": list(
                 self.config.repo_content_sync_root_paths or DEFAULT_REPO_CONTENT_ROOT_PATHS

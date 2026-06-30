@@ -31,3 +31,20 @@ def test_from_env_env_vars_still_override(monkeypatch) -> None:
     config = CitadelConfig.from_env()
     assert config.tenant_id == "explicit-org"
     assert config.default_dataset == "explicit-dataset"
+
+
+def test_repo_content_autojoin_env(monkeypatch) -> None:
+    monkeypatch.setenv("CITADEL_REPO_CONTENT_SYNC_AUTOJOIN_ENABLED", "true")
+    monkeypatch.setenv("CITADEL_REPO_CONTENT_SYNC_AUTOJOIN_MARKERS", "AGENTS.md, SKILL.md")
+    monkeypatch.setenv("CITADEL_REPO_CONTENT_SYNC_AUTOJOIN_MAX_REPOS", "25")
+    config = CitadelConfig.from_env(env_file=None)
+    assert config.repo_content_sync_autojoin_enabled is True
+    assert config.repo_content_sync_autojoin_markers == ("AGENTS.md", "SKILL.md")
+    assert config.repo_content_sync_autojoin_max_repos == 25
+
+
+def test_repo_content_autojoin_defaults_off() -> None:
+    config = CitadelConfig()
+    assert config.repo_content_sync_autojoin_enabled is False
+    assert config.repo_content_sync_autojoin_markers == ()
+    assert config.repo_content_sync_autojoin_max_repos == 100
