@@ -188,13 +188,14 @@ async def lifespan(app: FastAPI) -> Any:
             await _stop_evolve_scheduler(evolve_task)
 
 
-# Single-source the service version from the installed package metadata so the
-# /.well-known/citadel.json discovery field and the CLI never drift (the
-# hardcoded "0.1.0" misled operators into thinking the node ran stale code).
+# Single-source the service version so /.well-known/citadel.json and the CLI
+# never drift. Prefer installed package metadata; fall back to the in-source
+# kb.__version__ because the Railway node runs from source (not dist-installed),
+# where importlib.metadata raises and a hardcoded version would mislead.
 try:
     _SERVICE_VERSION = _pkg_version("citadel-archive")
 except PackageNotFoundError:
-    _SERVICE_VERSION = "0+unknown"
+    from kb import __version__ as _SERVICE_VERSION
 
 app = FastAPI(
     title="Citadel Archive",

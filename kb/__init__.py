@@ -10,11 +10,17 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
+# Single source of truth for the package version. pyproject reads this via
+# hatchling dynamic versioning, and server discovery / the CLI fall back to it
+# when the package is not dist-installed (the Railway node runs from source, so
+# importlib.metadata.version raises there). Keeps server + CLI from drifting.
+__version__ = "0.2.1"
+
 if TYPE_CHECKING:
     from kb.config import CitadelConfig
     from kb.service import Citadel
 
-__all__ = ["Citadel", "CitadelConfig"]
+__all__ = ["Citadel", "CitadelConfig", "__version__"]
 
 
 def __getattr__(name: str) -> Any:
