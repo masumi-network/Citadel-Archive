@@ -410,3 +410,21 @@ async def test_github_sync_security_scan_blocks_secret_metadata(tmp_path: Any) -
     assert result["security_scan"]["highest_severity"] == "high"
     assert citadel.ingest_calls == []
     assert "not-a-real-secret-value" not in serialized_findings
+
+
+@pytest.mark.asyncio
+async def test_github_sync_reports_authenticated_flag(tmp_path: Any) -> None:
+    config = CitadelConfig(
+        github_sync_dataset="masumi-network",
+        github_sync_session="masumi-github-daily",
+        github_sync_state_path=str(tmp_path / "github_state.json"),
+    )
+    client = FakeGitHubClient()
+    syncer = GitHubOrgSyncer(FakeCitadel(config), client=client, org="masumi-network")
+
+    result = await syncer.run()
+    assert result["authenticated"] is False
+    assert (await syncer.status())["authenticated"] is False
+
+    client.token = "ghp_example"  # type: ignore[attr-defined]
+    assert (await syncer.status())["authenticated"] is True

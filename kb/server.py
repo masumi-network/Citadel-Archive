@@ -2256,6 +2256,9 @@ async def _run_webhook_reingest(syncer: GitHubOrgSyncer) -> None:
             exc.__class__.__name__,
             exc,
         )
+        await get_mesh().record_error(
+            get_citadel().config, operation="github_sync", error=str(exc)
+        )
 
 
 @app.post("/api/webhooks/github")

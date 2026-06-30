@@ -7,6 +7,7 @@ from typing import Any
 import pytest
 
 from kb.config import CitadelConfig
+from kb.github_sync import GitHubAPIError
 from kb.models import IngestResult
 from kb.repo_content_sync import (
     RepoContentFile,
@@ -177,3 +178,36 @@ async def test_repo_content_syncer_respects_disabled_flag() -> None:
     syncer = RepoContentSyncer(FakeCitadel(config), client=FakeRepoContentClient())
     result = await syncer.run()
     assert result["enabled"] is False
+
+
+class FailingRepoContentClient(RepoContentGitHubClient):
+    def __init__(self) -> None:
+        super().__init__(token=None)
+
+    def fetch_default_branch(self, full_name: str) -> str:
+        raise GitHubAPIError(
+            "GitHub API returned 403: API rate limit exceeded for 95.90.238.57"
+        )
+
+
+@pytest.mark.asyncio
+async def test_repo_content_syncer_marks_failure_when_all_repos_error(tmp_path: Path) -> None:
+    config = CitadelConfig(
+        repo_content_sync_enabled=True,
+        repo_content_sync_state_path=str(tmp_path / "repo_content_sync_state.json"),
+        repo_content_sync_repos=("sokosumi-cli", "sokosumi-docs"),
+    )
+    syncer = RepoContentSyncer(
+        FakeCitadel(config),
+        client=FailingRepoContentClient(),
+        state_path=config.repo_content_sync_state_path,
+        learning=FakeLearningProcess(),  # type: ignore[arg-type]
+    )
+
+    result = await syncer.run()
+
+    assert result["ok"] is False
+    assert result["authenticated"] is False
+    assert result["repos_errored"] == 2
+    assert result["files_ingested"] == 0
+    assert all(repo["errors"] for repo in result["repositories"])

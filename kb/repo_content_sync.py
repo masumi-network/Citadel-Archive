@@ -275,6 +275,7 @@ class RepoContentSyncer:
         files = state.get("files") if isinstance(state.get("files"), dict) else {}
         return {
             "ok": True,
+            "authenticated": bool(getattr(self.client, "token", None)),
             "source_type": "github_repo_content",
             "org": self.org,
             "enabled": self.config.repo_content_sync_enabled,
@@ -308,6 +309,12 @@ class RepoContentSyncer:
             }
 
         checked_at = utc_now()
+        authenticated = bool(getattr(self.client, "token", None))
+        if not authenticated:
+            logger.warning(
+                "Repo content sync is running UNAUTHENTICATED (no GITHUB_TOKEN); GitHub "
+                "throttles anonymous requests to 60/hr and will 403 across the repo allowlist.",
+            )
         state = self._load_state()
         tracked: dict[str, Any] = dict(state.get("files") or {})
         root_paths = self.config.repo_content_sync_root_paths or DEFAULT_REPO_CONTENT_ROOT_PATHS
@@ -446,6 +453,13 @@ class RepoContentSyncer:
             state["files"] = tracked
             self._save_state(state)
 
+        repos_errored = [result for result in repo_results if result["errors"]]
+        all_repos_errored = (
+            bool(repo_results)
+            and len(repos_errored) == len(repo_results)
+            and ingested_files == 0
+        )
+
         logger.info(
             "Repo content sync finished: repos=%d ingested=%d skipped=%d blocked=%d dry_run=%s",
             len(repo_results),
@@ -455,11 +469,13 @@ class RepoContentSyncer:
             dry_run,
         )
         return {
-            "ok": True,
+            "ok": not all_repos_errored,
             "enabled": True,
+            "authenticated": authenticated,
             "org": self.org,
             "checked_at": checked_at,
             "repos_scanned": len(repo_results),
+            "repos_errored": len(repos_errored),
             "files_ingested": ingested_files,
             "files_skipped": skipped_files,
             "files_skipped_by_reason": skip_totals,
