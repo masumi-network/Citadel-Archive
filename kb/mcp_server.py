@@ -17,6 +17,7 @@ from mcp.server.transport_security import TransportSecuritySettings
 from mcp.types import ToolAnnotations
 
 from kb.access import ROLE_ORDER
+from kb.retry import run_with_retries
 from kb.security_scan import redact_secrets
 
 logger = logging.getLogger(__name__)
@@ -532,11 +533,22 @@ class CitadelHttpClient:
             method=method,
             headers=headers,
         )
+        effective_timeout = self.timeout if timeout is None else timeout
+
+        def _open() -> str:
+            with urlopen(request, timeout=effective_timeout) as response:
+                return response.read().decode("utf-8")
+
+        # Retry transient 429/5xx/timeout for idempotent reads only (GET, or the
+        # search POST) so an agent doing exploratory searches rides out a brief
+        # Node hiccup instead of failing ~20% of the time (#50). Writes are never
+        # retried to avoid duplicate ingests; Retry-After is honored by the helper.
+        retryable = method == "GET" or path.rstrip("/").endswith("/search")
         try:
-            with urlopen(
-                request, timeout=self.timeout if timeout is None else timeout
-            ) as response:
-                data = response.read().decode("utf-8")
+            if retryable:
+                data = run_with_retries(_open, operation=f"{method} {path}")
+            else:
+                data = _open()
         except HTTPError as exc:
             detail = redact_secrets(
                 exc.read().decode("utf-8", errors="replace")[:500],

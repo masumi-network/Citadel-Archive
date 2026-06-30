@@ -291,6 +291,55 @@ def test_ingest_tool_honors_cognify_opt_out() -> None:
     assert post["timeout"] is None
 
 
+class _OkResp:
+    def __enter__(self) -> Any:
+        return self
+
+    def __exit__(self, *args: Any) -> None:
+        return None
+
+    def read(self) -> bytes:
+        return b'{"ok": true}'
+
+
+def test_http_client_retries_transient_5xx_on_reads(monkeypatch: pytest.MonkeyPatch) -> None:
+    # #50: idempotent reads ride out a transient 503 instead of failing ~20%.
+    monkeypatch.setenv("CITADEL_RETRY_BASE_DELAY_SECONDS", "0")
+    monkeypatch.setenv("CITADEL_RETRY_MAX_ATTEMPTS", "3")
+    attempts: list[int] = []
+
+    def fake_urlopen(request: Any, timeout: float) -> Any:
+        attempts.append(1)
+        if len(attempts) < 2:
+            raise HTTPError(request.full_url, 503, "busy", {}, BytesIO(b"{}"))
+        return _OkResp()
+
+    monkeypatch.setattr(mcp_server, "urlopen", fake_urlopen)
+    client = CitadelHttpClient(base_url="http://localhost:8000", access_token="ctdl_t")
+
+    result = client.get("/api/session", tool_name="citadel_session")
+    assert result["ok"] is True
+    assert len(attempts) == 2  # one retry, then success
+
+
+def test_http_client_does_not_retry_writes(monkeypatch: pytest.MonkeyPatch) -> None:
+    # #50: writes are never retried (avoid duplicate ingests).
+    monkeypatch.setenv("CITADEL_RETRY_BASE_DELAY_SECONDS", "0")
+    monkeypatch.setenv("CITADEL_RETRY_MAX_ATTEMPTS", "3")
+    attempts: list[int] = []
+
+    def fake_urlopen(request: Any, timeout: float) -> Any:
+        attempts.append(1)
+        raise HTTPError(request.full_url, 503, "busy", {}, BytesIO(b"{}"))
+
+    monkeypatch.setattr(mcp_server, "urlopen", fake_urlopen)
+    client = CitadelHttpClient(base_url="http://localhost:8000", access_token="ctdl_t")
+
+    with pytest.raises(CitadelMcpError):
+        client.post("/ingest", {"data": "x"}, tool_name="citadel_ingest")
+    assert len(attempts) == 1  # no retry on a write
+
+
 def test_http_client_request_honors_explicit_timeout_override(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

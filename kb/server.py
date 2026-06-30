@@ -86,6 +86,61 @@ _LAST_CANARY: dict[str, Any] | None = None
 _MIN_TRACKED_FOR_CORPUS = 10
 _INDEXED_FLOOR = 1
 
+# In-flight search count for the soft concurrency cap / 429 backpressure contract
+# (#50). Single-loop server → increment/decrement need no lock.
+_search_inflight = 0
+
+
+class _SearchSlot:
+    """Soft concurrency cap for the read path (#50).
+
+    At capacity, returns a 429 + Retry-After + X-RateLimit-* contract instead of
+    failing silently under load. Sync context manager so the slot is always
+    released, even when the search raises.
+    """
+
+    def __init__(self, limit: int) -> None:
+        self.limit = limit
+        self.remaining = limit
+
+    def __enter__(self) -> "_SearchSlot":
+        global _search_inflight
+        if _search_inflight >= self.limit:
+            raise HTTPException(
+                status_code=429,
+                detail="Search is at capacity; retry after a moment.",
+                headers={
+                    "Retry-After": "1",
+                    "X-RateLimit-Limit": str(self.limit),
+                    "X-RateLimit-Remaining": "0",
+                },
+            )
+        _search_inflight += 1
+        self.remaining = max(0, self.limit - _search_inflight)
+        return self
+
+    def __exit__(self, *exc: Any) -> None:
+        global _search_inflight
+        _search_inflight -= 1
+
+
+async def _search_within_budget(
+    citadel: Citadel, **kwargs: Any
+) -> tuple[list[tuple[str, Any]], bool]:
+    """Run search_across_datasets under the per-request time budget (#44).
+
+    Returns (merged, timed_out). On timeout, degrade to empty-fast rather than
+    hanging for 100s+ on a slow cognee recall.
+    """
+    try:
+        merged = await asyncio.wait_for(
+            search_across_datasets(citadel, **kwargs),
+            timeout=citadel.config.search_timeout_seconds,
+        )
+        return merged, False
+    except asyncio.TimeoutError:
+        return [], True
+
 mcp_server = create_mcp_server()
 mcp_app = mcp_server.streamable_http_app()
 
@@ -1124,15 +1179,23 @@ async def search_across_datasets(
     # secondary datasets when more than one is in scope. Sessions are resolved per
     # dataset: a seat's private session must not scope shared datasets like Central
     # (see resolve_search_sessions), or it would hide org-wide hits.
-    per_dataset: list[tuple[str, list[Any]]] = []
-    for dataset in datasets:
-        results = await citadel.search(
-            query,
-            dataset=dataset,
-            session_id=sessions.get(dataset),
-            top_k=top_k,
-        )
-        per_dataset.append((dataset, list(results)))
+    # Query datasets concurrently (the reads are independent and touch no Kuzu
+    # writer), so a 2-dataset seat search costs ~one recall, not two (#50). gather
+    # preserves order, so the primary-wins merge below is unchanged.
+    results_per = await asyncio.gather(
+        *[
+            citadel.search(
+                query,
+                dataset=dataset,
+                session_id=sessions.get(dataset),
+                top_k=top_k,
+            )
+            for dataset in datasets
+        ]
+    )
+    per_dataset: list[tuple[str, list[Any]]] = [
+        (dataset, list(results)) for dataset, results in zip(datasets, results_per)
+    ]
 
     merged: list[tuple[str, Any]] = []
     seen: set[str] = set()
@@ -3473,6 +3536,7 @@ def flat_knowledge_result(result: Any) -> dict[str, Any]:
 @app.get("/api/knowledge")
 async def knowledge(
     request: Request,
+    response: Response,
     q: str,
     limit: int = 10,
     dataset: str | None = None,
@@ -3488,17 +3552,22 @@ async def knowledge(
     mesh_state = get_mesh()
     search_datasets = resolve_search_datasets(identity, dataset, citadel.config)
     search_sessions = resolve_search_sessions(identity, None, search_datasets)
-    try:
-        merged = await search_across_datasets(
-            citadel,
-            query=query,
-            datasets=search_datasets,
-            sessions=search_sessions,
-            top_k=limit,
-        )
-    except Exception as exc:  # pragma: no cover - depends on runtime Cognee configuration.
-        await mesh_state.record_error(citadel.config, operation="search", error=str(exc))
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    max_concurrency = citadel.config.search_max_concurrency
+    timed_out = False
+    with _SearchSlot(max_concurrency) as slot:  # 429 here if at capacity
+        response.headers["X-RateLimit-Limit"] = str(max_concurrency)
+        response.headers["X-RateLimit-Remaining"] = str(slot.remaining)
+        try:
+            merged, timed_out = await _search_within_budget(
+                citadel,
+                query=query,
+                datasets=search_datasets,
+                sessions=search_sessions,
+                top_k=limit,
+            )
+        except Exception as exc:  # pragma: no cover - depends on runtime Cognee configuration.
+            await mesh_state.record_error(citadel.config, operation="search", error=str(exc))
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
     for search_dataset, _ in merged:
         await mesh_state.record_search(
             citadel.config,
@@ -3561,35 +3630,44 @@ async def optimize_learning_agent(body: OptimizeBody, request: Request) -> Any:
 
 
 @app.post("/search")
-async def search(body: SearchBody, request: Request) -> Any:
+async def search(body: SearchBody, request: Request, response: Response) -> Any:
     actor = require_access(request, "reader", "kb:search")
     citadel = get_citadel()
     mesh_state = get_mesh()
     search_datasets = resolve_search_datasets(actor, body.dataset, citadel.config)
     search_sessions = resolve_search_sessions(actor, body.session_id, search_datasets)
-    try:
-        merged = await search_across_datasets(
-            citadel,
-            query=body.query,
-            datasets=search_datasets,
-            sessions=search_sessions,
-            top_k=body.top_k,
+    limit = citadel.config.search_max_concurrency
+    timed_out = False
+    with _SearchSlot(limit) as slot:  # 429 here if at capacity
+        response.headers["X-RateLimit-Limit"] = str(limit)
+        response.headers["X-RateLimit-Remaining"] = str(slot.remaining)
+        try:
+            merged, timed_out = await _search_within_budget(
+                citadel,
+                query=body.query,
+                datasets=search_datasets,
+                sessions=search_sessions,
+                top_k=body.top_k,
+            )
+        except Exception as exc:  # pragma: no cover - depends on runtime Cognee configuration.
+            await mesh_state.record_error(citadel.config, operation="search", error=str(exc))
+            record_mcp_audit(
+                request,
+                actor=actor,
+                success=False,
+                dataset=search_datasets[0],
+                detail={
+                    "operation": "search",
+                    "query_sha256": hashlib.sha256(body.query.encode("utf-8")).hexdigest(),
+                    "query_length": len(body.query),
+                    "error_type": exc.__class__.__name__,
+                },
+            )
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
+    if timed_out:
+        await mesh_state.record_error(
+            citadel.config, operation="search", error="search budget exceeded"
         )
-    except Exception as exc:  # pragma: no cover - depends on runtime Cognee configuration.
-        await mesh_state.record_error(citadel.config, operation="search", error=str(exc))
-        record_mcp_audit(
-            request,
-            actor=actor,
-            success=False,
-            dataset=search_datasets[0],
-            detail={
-                "operation": "search",
-                "query_sha256": hashlib.sha256(body.query.encode("utf-8")).hexdigest(),
-                "query_length": len(body.query),
-                "error_type": exc.__class__.__name__,
-            },
-        )
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
 
     for search_dataset in search_datasets:
         await mesh_state.record_search(
@@ -3624,7 +3702,13 @@ async def search(body: SearchBody, request: Request) -> Any:
     }
     if len(search_datasets) > 1:
         payload["datasets"] = search_datasets
-    if not normalized and body.dataset is None:
+    if timed_out:
+        payload["note"] = (
+            f"Search exceeded the {citadel.config.search_timeout_seconds:.0f}s budget; "
+            "returning empty results — retry or narrow the query."
+        )
+        payload["timed_out"] = True
+    elif not normalized and body.dataset is None:
         payload["note"] = (
             "No results in the default dataset. Pass an explicit \"dataset\" to search a "
             "specific source; see known_datasets."

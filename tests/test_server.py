@@ -1494,6 +1494,76 @@ def test_readyz_ok_when_graph_populated() -> None:
     assert ready.json()["corpus"]["ok"] is True
 
 
+def test_search_across_datasets_runs_concurrently() -> None:
+    # #50: per-dataset recalls run concurrently, not serially.
+    import asyncio as aio
+
+    from kb.server import search_across_datasets
+
+    order: list[tuple[str, str]] = []
+
+    class ConcurrentCitadel:
+        config = FakeCitadel.config
+
+        async def search(self, query: str, *, dataset: str, session_id: Any, top_k: int) -> list[Any]:
+            order.append(("start", dataset))
+            await aio.sleep(0.05)
+            order.append(("end", dataset))
+            return [{"id": dataset}]
+
+    merged = aio.run(
+        search_across_datasets(
+            ConcurrentCitadel(), query="q", datasets=["a", "b"], sessions={}, top_k=10
+        )
+    )
+    # Concurrent: both datasets start before either finishes.
+    assert order[0][0] == "start" and order[1][0] == "start"
+    assert {d for d, _ in merged} == {"a", "b"}
+
+
+def test_search_returns_429_when_at_capacity(monkeypatch: Any) -> None:
+    # #50: at capacity the Node returns a 429 + Retry-After backpressure contract.
+    client = authed_client("test-reader")
+    monkeypatch.setattr(server_module, "_search_inflight", 9999)
+
+    r = client.post("/search", json={"query": "q", "top_k": 3})
+    assert r.status_code == 429
+    assert r.headers["Retry-After"] == "1"
+    assert r.headers["X-RateLimit-Remaining"] == "0"
+
+
+def test_search_sets_ratelimit_headers_when_served() -> None:
+    client = authed_client("test-reader")
+    r = client.post("/search", json={"query": "q", "top_k": 3})
+    assert r.status_code == 200
+    assert int(r.headers["X-RateLimit-Limit"]) >= 1
+    assert "X-RateLimit-Remaining" in r.headers
+
+
+def test_search_degrades_to_empty_on_timeout_budget() -> None:
+    # #44: a recall slower than the budget degrades to empty-fast with a note,
+    # instead of hanging for 100s+.
+    import asyncio as aio
+    import dataclasses
+
+    class SlowCitadel(FakeCitadel):
+        config = dataclasses.replace(FakeCitadel.config, search_timeout_seconds=0.01)
+
+        async def search(self, query: str, **kwargs: Any) -> list[Any]:
+            await aio.sleep(0.3)
+            return [{"id": "x"}]
+
+    client = authed_client("test-reader")
+    app.state.citadel = SlowCitadel()
+
+    r = client.post("/search", json={"query": "q", "top_k": 3})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["results"] == []
+    assert body.get("timed_out") is True
+    assert "budget" in body["note"]
+
+
 def test_document_endpoint_for_result_covers_real_ids_only() -> None:
     # #28: ghsync/doc_/cognee-UUID ids are drillable; synthetic chunk: ids are not.
     from kb.server import document_endpoint_for_result

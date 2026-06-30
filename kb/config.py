@@ -147,6 +147,11 @@ class CitadelConfig:
     audit_max_events: int = 1000
     default_dataset: str = CENTRAL_DATASET
     search_default_dataset: str | None = None
+    # Read-path bounds (#44/#50): a per-request search budget so a slow cognee
+    # recall degrades to empty-fast instead of a 100s+ hang, and a concurrency cap
+    # that yields a 429 + Retry-After backpressure contract instead of silent fails.
+    search_timeout_seconds: float = 20.0
+    search_max_concurrency: int = 8
     default_session: str = "personal-session"
     default_tags: tuple[str, ...] = field(default_factory=tuple)
     min_chars: int = 3
@@ -258,6 +263,12 @@ class CitadelConfig:
             audit_max_events=_int(os.getenv("CITADEL_AUDIT_MAX_EVENTS"), default=1000),
             default_dataset=os.getenv("CITADEL_DEFAULT_DATASET", CENTRAL_DATASET),
             search_default_dataset=os.getenv("CITADEL_SEARCH_DEFAULT_DATASET") or None,
+            search_timeout_seconds=_float(
+                os.getenv("CITADEL_SEARCH_TIMEOUT_SECONDS"), default=20.0
+            ),
+            search_max_concurrency=_int(
+                os.getenv("CITADEL_SEARCH_MAX_CONCURRENCY"), default=8
+            ),
             default_session=os.getenv("CITADEL_DEFAULT_SESSION", "personal-session"),
             default_tags=tuple(_csv(os.getenv("CITADEL_DEFAULT_TAGS"))),
             min_chars=int(os.getenv("CITADEL_MIN_CHARS", "3")),
