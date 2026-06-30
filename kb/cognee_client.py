@@ -366,10 +366,12 @@ class CogneePublicClient:
         return list(nodes), list(edges)
 
     async def delete_graph_nodes(self, node_ids: list[str]) -> int:
-        """Delete nodes by id from the graph store (admin cleanup, #15).
+        """Delete nodes by id from BOTH the graph and the chunk vector store (#15).
 
-        Serializes on the writer lock like cognify, since deletion is a graph
-        write on the single Kuzu writer (#47). Returns the count requested.
+        The same UUID identifies a DocumentChunk in the Kuzu graph AND in the
+        DocumentChunk_text vector collection that CHUNKS search reads — so deleting
+        only the graph node leaves the chunk searchable. Remove both. Serializes on
+        the writer lock like cognify (single Kuzu writer, #47).
         """
         if not node_ids:
             return 0
@@ -382,7 +384,26 @@ class CogneePublicClient:
         engine = await get_graph_engine()
         async with self.writer_lock:
             await engine.delete_nodes(node_ids)
+            await self._delete_vector_points(node_ids)
         return len(node_ids)
+
+    async def _delete_vector_points(self, node_ids: list[str]) -> None:
+        """Drop the same ids from the chunk vector collection (best-effort, #15)."""
+        try:
+            from uuid import UUID
+
+            from cognee.infrastructure.databases.vector import get_vector_engine
+
+            ids: list[Any] = []
+            for node_id in node_ids:
+                try:
+                    ids.append(UUID(str(node_id)))
+                except (ValueError, TypeError, AttributeError):
+                    continue
+            if ids:
+                await get_vector_engine().delete_data_points("DocumentChunk_text", ids)
+        except Exception:  # noqa: BLE001 - vector cleanup is best-effort
+            logger.warning("vector-store cleanup delete skipped/failed", exc_info=True)
 
     async def get_document(self, document_id: str) -> dict[str, Any] | None:
         """Resolve a search-hit node id back to its stored chunk text (#28).

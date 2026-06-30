@@ -303,14 +303,40 @@ class Citadel:
         nodes, _ = await self.cognee.graph_data()
         candidates: list[dict[str, Any]] = []
         counts: dict[str, int] = {}
+        seen: set[str] = set()
+
+        def _add(node_id: Any, kind: str, text: Any) -> None:
+            cid = str(node_id)
+            if cid in seen:
+                return
+            seen.add(cid)
+            candidates.append({"id": cid, "kind": kind, "preview": _normalize_text(text)[:120]})
+            counts[kind] = counts.get(kind, 0) + 1
+
         for node_id, properties in nodes:
             kind = _legacy_garbage_kind(node_id, properties)
-            if kind is None:
+            if kind is not None:
+                props = properties if isinstance(properties, dict) else {}
+                _add(node_id, kind, props.get("text") or props.get("name") or node_id)
+
+        # The same garbage was also cognified into the chunk vector store, which the
+        # graph scan can't see once the graph node is gone. Sweep it via search so
+        # orphaned [DataItem]/marker chunks are caught and purged too (#15).
+        for probe in ("[DataItem]", "COGNIFY_TEST_MARKER", "Session ID Question Answer"):
+            try:
+                hits = await self.search(probe, dataset=self.config.default_dataset, top_k=100)
+            except Exception:  # noqa: BLE001 - sweep is best-effort
                 continue
-            props = properties if isinstance(properties, dict) else {}
-            preview = _normalize_text(props.get("text") or props.get("name") or node_id)[:120]
-            candidates.append({"id": str(node_id), "kind": kind, "preview": preview})
-            counts[kind] = counts.get(kind, 0) + 1
+            for hit in hits:
+                if not isinstance(hit, dict):
+                    continue
+                hit_id = hit.get("id")
+                text = hit.get("text") or hit.get("answer") or ""
+                if hit_id:
+                    kind = _legacy_garbage_kind(hit_id, {"text": text})
+                    if kind is not None:
+                        _add(hit_id, kind, text)
+
         deleted = 0
         if not dry_run and candidates:
             deleted = await self.cognee.delete_graph_nodes([c["id"] for c in candidates])

@@ -373,6 +373,29 @@ async def test_cleanup_legacy_nodes_dry_run_then_delete() -> None:
 
 
 @pytest.mark.asyncio
+async def test_cleanup_sweeps_orphaned_vector_chunks() -> None:
+    # #15: garbage cognified into the chunk vector store is found via the search
+    # sweep even when its graph node is already gone (graph is empty here).
+    class SweepGateway(_GraphGateway):
+        def __init__(self) -> None:
+            super().__init__([])  # empty graph
+
+        async def recall(self, query: str, **kwargs: Any) -> list[dict[str, Any]]:
+            return [
+                {"id": "chunk-1", "text": "Session ID: x\n\nQuestion: \n\nAnswer: [DataItem]"},
+                {"id": "real-1", "text": "A genuine note about payments."},
+            ]
+
+    gw = SweepGateway()
+    kb = Citadel(CitadelConfig(), cognee=gw)
+
+    res = await kb.cleanup_legacy_nodes(dry_run=False)
+    assert "chunk-1" in gw.deleted  # garbage chunk purged via the sweep
+    assert "real-1" not in gw.deleted  # real content untouched
+    assert res["counts_by_kind"].get("dataitem", 0) >= 1
+
+
+@pytest.mark.asyncio
 async def test_cognify_verify_deletes_its_marker_node() -> None:
     # #15 backprop: the verify canary must not leave a marker node behind.
     class MarkerGateway(_GraphGateway):
