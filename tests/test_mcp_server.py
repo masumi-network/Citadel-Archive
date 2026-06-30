@@ -58,8 +58,11 @@ class FakeHttpClient:
         payload: dict[str, Any],
         *,
         tool_name: str | None = None,
+        timeout: float | None = None,
     ) -> dict[str, Any]:
-        self.posts.append({"path": path, "payload": payload, "tool_name": tool_name})
+        self.posts.append(
+            {"path": path, "payload": payload, "tool_name": tool_name, "timeout": timeout}
+        )
         return {"ok": True, "path": path, "payload": payload, "tool_name": tool_name}
 
 
@@ -258,6 +261,64 @@ def test_write_tools_reject_empty_or_oversized_payloads(monkeypatch: pytest.Monk
 
     with pytest.raises(ToolError, match="qa_id must not be empty"):
         run_tool(server, "citadel_record_feedback", "", None)
+
+
+def test_ingest_tool_requests_inline_cognify_by_default() -> None:
+    # #53: the MCP ingest tool must send cognify=true (parity with the CLI) so an
+    # agent-ingested note is searchable immediately, not stuck on background cognify.
+    client = FakeHttpClient()
+    server = create_mcp_server(client)
+
+    run_tool(server, "citadel_ingest", "a durable note", None)
+
+    assert len(client.posts) == 1
+    post = client.posts[0]
+    assert post["path"] == "/ingest"
+    assert post["payload"]["cognify"] is True
+    # Inline cognify can exceed the default 30s budget, so the tool extends the timeout.
+    assert post["timeout"] == mcp_server._INGEST_COGNIFY_TIMEOUT
+
+
+def test_ingest_tool_honors_cognify_opt_out() -> None:
+    client = FakeHttpClient()
+    server = create_mcp_server(client)
+
+    run_tool(server, "citadel_ingest", "a durable note", None, cognify=False)
+
+    post = client.posts[0]
+    assert post["payload"]["cognify"] is False
+    # No extended budget when not blocking on cognify.
+    assert post["timeout"] is None
+
+
+def test_http_client_request_honors_explicit_timeout_override(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, float] = {}
+
+    def fake_urlopen(request: Any, timeout: float) -> Any:
+        captured["timeout"] = timeout
+
+        class _Resp:
+            def __enter__(self) -> Any:
+                return self
+
+            def __exit__(self, *args: Any) -> None:
+                return None
+
+            def read(self) -> bytes:
+                return b"{}"
+
+        return _Resp()
+
+    monkeypatch.setattr(mcp_server, "urlopen", fake_urlopen)
+    client = CitadelHttpClient(base_url="http://localhost:8000", access_token="ctdl_t")
+
+    client.post("/ingest", {"data": "x"}, tool_name="citadel_ingest", timeout=180.0)
+    assert captured["timeout"] == 180.0
+
+    client.post("/ingest", {"data": "x"}, tool_name="citadel_ingest")
+    assert captured["timeout"] == client.timeout
 
 
 def test_remote_http_base_url_is_rejected_without_escape_hatch(

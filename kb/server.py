@@ -2501,6 +2501,22 @@ async def push_obsidian_sync(body: ObsidianPushBody, request: Request) -> Any:
             document_tags,
             citadel.config,
         )
+        # Enforce the same byte cap as /ingest and /api/contribute on the per-document
+        # obsidian write path (#51): an oversized note is rejected individually so it
+        # cannot bloat the index, without failing the rest of the vault sync.
+        try:
+            enforce_ingest_size(source_document.content)
+        except HTTPException as exc:
+            ingest_results.append(
+                {
+                    "document_id": accepted["document_id"],
+                    "accepted": False,
+                    "reason": exc.detail,
+                    "dataset": document_targets[0].dataset,
+                    "tags": list(document_tags),
+                }
+            )
+            continue
         try:
             outcome, _ = await execute_learning_writes(
                 learning,

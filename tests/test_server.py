@@ -531,6 +531,35 @@ def test_ingest_and_contribute_reject_oversized_payloads(monkeypatch: Any) -> No
     assert small.status_code == 200
 
 
+def test_obsidian_push_enforces_byte_cap_per_document(monkeypatch: Any, tmp_path: Any) -> None:
+    # #51: the obsidian sync push path must honor the same byte cap as /ingest. An
+    # oversized note is rejected individually without failing the rest of the sync.
+    monkeypatch.setenv("CITADEL_MCP_MAX_INGEST_BYTES", "32")
+    app.state.access_store = AccessStore(tmp_path / "access.json")
+    app.state.obsidian_sync = ObsidianSyncStore(tmp_path / "obsidian.json")
+    client = authed_client("test-writer")
+
+    vault_id = client.post("/api/obsidian/vaults", json={"vault_name": "V"}).json()["vault"]["id"]
+    pushed = client.post(
+        "/api/obsidian/sync/push",
+        json={
+            "vault_id": vault_id,
+            "documents": [
+                {"path": "small.md", "content": "tiny note"},
+                {"path": "big.md", "content": "x" * 200},
+            ],
+        },
+    )
+
+    assert pushed.status_code == 200
+    results = {r["document_id"]: r for r in pushed.json()["ingest_results"]}
+    by_path = {a["path"]: a["document_id"] for a in pushed.json()["accepted"]}
+    assert results[by_path["small.md"]]["accepted"] is True
+    big = results[by_path["big.md"]]
+    assert big["accepted"] is False
+    assert "limit is 32 bytes" in big["reason"]
+
+
 def test_writer_access_can_ingest_and_feedback_but_not_admin_actions() -> None:
     client = authed_client("test-writer")
 

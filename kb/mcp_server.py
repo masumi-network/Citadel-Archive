@@ -423,6 +423,12 @@ def _validate_ingest_size(data: str) -> None:
         )
 
 
+# Inline server-side cognify (the /ingest cognify=true path) can take well over the
+# default 30s client timeout, so the ingest tool extends its budget to match the
+# CLI's cognify timeout (kb.status._COGNIFY_TIMEOUT). Keep the two in sync.
+_INGEST_COGNIFY_TIMEOUT = 180.0
+
+
 class CitadelHttpClient:
     def __init__(
         self,
@@ -459,8 +465,9 @@ class CitadelHttpClient:
         payload: dict[str, Any],
         *,
         tool_name: str | None = None,
+        timeout: float | None = None,
     ) -> dict[str, Any]:
-        return self._request("POST", path, payload, tool_name=tool_name)
+        return self._request("POST", path, payload, tool_name=tool_name, timeout=timeout)
 
     def _request(
         self,
@@ -471,6 +478,7 @@ class CitadelHttpClient:
         tool_name: str | None = None,
         require_token: bool = True,
         extra_headers: dict[str, str] | None = None,
+        timeout: float | None = None,
     ) -> dict[str, Any]:
         if require_token and not self.access_token:
             raise CitadelMcpError("Set CITADEL_MCP_ACCESS_TOKEN to a Citadel access token.")
@@ -492,7 +500,9 @@ class CitadelHttpClient:
             headers=headers,
         )
         try:
-            with urlopen(request, timeout=self.timeout) as response:
+            with urlopen(
+                request, timeout=self.timeout if timeout is None else timeout
+            ) as response:
                 data = response.read().decode("utf-8")
         except HTTPError as exc:
             detail = redact_secrets(
@@ -711,6 +721,7 @@ def create_mcp_server(
         dataset: str | None = None,
         tags: list[str] | None = None,
         session_id: str | None = None,
+        cognify: bool = True,
     ) -> dict[str, Any]:
         """Stage durable context in the caller's personal seat node. Requires writer access.
 
@@ -719,7 +730,11 @@ def create_mcp_server(
         Seat-writer tokens: writes go to your personal node only (seat:{slug}). Do not
         pass `dataset` or Central/org tags — the server rejects them for seat MCP.
         Never ingest secrets, tokens, passwords, keys, seed phrases, PII, or raw logs.
-        Summarize and curate first; keep payloads small.
+        Summarize and curate first; keep payloads small (cap ~200 KB).
+
+        By default the note is cognified inline so it is searchable immediately (parity
+        with the `citadel ingest` CLI). Pass `cognify=false` to stage without the
+        blocking cognify when you will batch-cognify later.
 
         Shared Central is read-only from MCP. Org-wide memory updates via scheduled
         GitHub/Linear sync and selective promotion — not direct MCP ingest.
@@ -735,8 +750,10 @@ def create_mcp_server(
                     "dataset": dataset,
                     "tags": tags or [],
                     "session_id": session_id,
+                    "cognify": cognify,
                 },
                 tool_name="citadel_ingest",
+                timeout=_INGEST_COGNIFY_TIMEOUT if cognify else None,
             )
 
         return await _call_async(
