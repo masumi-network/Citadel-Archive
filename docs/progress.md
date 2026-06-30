@@ -2,23 +2,57 @@
 
 Last updated: 2026-06-30.
 
-## 2026-06-30 — Read-side hardening sprint (issues #25–#49)
+## 2026-06-30 — Read-side hardening sprint (issues #25–#53) — SHIPPED
 
 Heavy-user + pentest testing surfaced a broken read/write data plane behind green
 dashboards. Root cause: durable writes were routed through cognee's per-session
 cache, corrupting them to the literal `[DataItem]` and never indexing them.
 
-Shipped to prod (9 PRs, each tested): the data-plane root-cause fix (#54, #56,
+**First wave (9 PRs, each tested):** the data-plane root-cause fix (#54, #56,
 **node-verified**), MCP resource auth (#57), CLI false-green (#58), version
 single-sourcing (#55, #59), input validation (#60), sync-auth surfacing (#61),
-and repo auto-join (#62). **Closed: #26, #29, #30, #31, #32, #34, #37, #42, #49.**
+and repo auto-join (#62). Closed: #26, #29, #30, #31, #32, #34, #37, #42, #49.
 
-Remaining work + per-issue fix approach tracked in
-[`docs/read-side-hardening-sprint.md`](read-side-hardening-sprint.md): MCP
-406/tool-filter (#45, #33), drilldown (#28), Linear (#46), promotion (#39, #48),
-writer-seat (#40, #41), onboarding (#35, #36, #38, #43), and the design/high-risk
-items health gates (#27), search timeout (#44), Kuzu lock (#47), plus a
-legacy-garbage purge.
+**Batch 2 (PR #64) — all remaining issues, one reviewable branch, 598→601 tests.**
+11 commits resolving #51/#53 (MCP ingest inline cognify + byte cap), #45/#33 (MCP
+406 Accept shim + role/seat tools/list filter), #39/#48 (promotion read-timeout +
+admin-gated approve/reject — closed a seat self-promote-to-Central hole), #40/#41
+(durable feedback fallback + improve guards), #28 (get_document drilldown), #35/
+#36/#38/#43 (onboarding completeness), #27 (honest status/doctor/readyz +
+corpus-gate 503), #44/#50 (parallel search + timeout budget + 429/Retry-After/
+X-RateLimit contract + client retry), #46/#52 (Linear per-issue→Central +
+surfaced failures), #47 (Kuzu writer lock + cross-process cognify guard), #15
+(admin dry-run-first graph cleanup). Merged to main → Railway auto-deploy →
+live-verified on the node.
+
+**Follow-ups from live prod testing (PRs #65–#68):** live verification exposed
+gaps unit tests couldn't:
+- **#65 — completed #47.** The real hourly `Lock is held by PID` cause was
+  `remember()`'s per-ingest `cognee.remember(run_in_background=True)` cognify
+  firing in BOTH the web and the evolve Phase-1 subprocess. Now: subprocess is
+  add-only (`CITADEL_SUPPRESS_INLINE_COGNIFY`), web cognify is writer-lock-guarded.
+- **#66 — completed #46.** Auto-map Linear assignees→seats by member email
+  (`LinearClient.fetch_users`), no manual `CITADEL_LINEAR_USER_MAP`.
+- **#67 — the real #15/#52 fix.** The `[DataItem]` *in search* was cognee's
+  per-session QA cache (`source:session`), which `recall()` read FIRST; gated
+  behind `CITADEL_COGNEE_SESSION_RECALL` (default OFF).
+- **#68 — vector-store cleanup.** The scaffolds were also cognified into the
+  `DocumentChunk_text` vector store; `delete_graph_nodes` now also deletes vector
+  points + the cleanup adds a search sweep for orphaned chunks.
+
+**#15 DONE + node-verified clean:** ran the admin cleanup loop until dry (214
+garbage nodes/chunks purged across session cache + graph + vector); all prod
+searches return 0 `[DataItem]`/marker/session, 746 real docs indexed. **Lesson:
+the `[DataItem]` garbage lived in three distinct stores (session cache, Kuzu
+graph, pgvector chunks); graph deletion ≠ vector deletion ≠ session-cache, and
+live prod testing was essential — unit tests passed at every wrong layer.**
+
+**Status:** 16 issues closed and live-verified (#27, #28, #33, #35, #36, #38,
+#39, #40, #41, #43, #44, #45, #48, #51, #52, #53). 4 open: #47 (Kuzu) and #46
+(Linear mirrors) deployed + code-correct, pending the next hourly evolve pass to
+confirm at runtime; #50 (search latency) — backpressure done, raw ~6–9s latency
+is cognee-recall-bound (separate perf effort); #25 (umbrella) tracks those three.
+**Action: rotate `CITADEL_ADMIN_KEY`** (surfaced in-session during ops).
 
 ## 2026-06-29 — v0.2.0 + v0.2.1: CLI DX overhaul shipped (PyPI + Railway)
 

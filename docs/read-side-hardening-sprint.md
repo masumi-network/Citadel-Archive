@@ -26,7 +26,56 @@ routed through cognee's per-session cache, which corrupted them to the literal
 
 **Closed:** #26, #29, #30, #31, #32, #34, #37, #42, #49.
 
-## Remaining — fix specs generated (apply → test → merge, one PR each)
+## Batch 2 + follow-ups — SHIPPED (PRs #64–#68)
+
+A follow-up stress sweep added #50–#53. All remaining issues were investigated
+(grounded fix specs below, kept for reference), implemented, tested, merged, and
+**live-verified on the node**.
+
+**PR #64 — batch 2 (11 commits, 601 tests):** #51/#53 (MCP ingest inline cognify +
+byte cap), #45/#33 (MCP 406 Accept shim + role/seat `tools/list` filter), #39/#48
+(promotion read-timeout + **admin-gated** approve/reject — closed a seat
+self-promote-to-Central hole), #40/#41 (durable feedback + improve guards), #28
+(get_document drilldown), #35/#36/#38/#43 (onboarding), #27 (honest
+status/doctor/readyz + corpus-gate 503), #44/#50 (parallel search + timeout budget
++ 429/Retry-After/X-RateLimit + client retry), #46/#52 (Linear per-issue→Central +
+surfaced failures), #47 (Kuzu writer lock + cross-process cognify guard), #15
+(admin dry-run-first graph cleanup).
+
+**Follow-ups (live prod testing exposed gaps unit tests couldn't):**
+- **#65 — real #47 fix.** The hourly `Lock is held by PID` came from `remember()`'s
+  per-ingest `cognee.remember(run_in_background=True)` cognify firing in BOTH the
+  web and the evolve Phase-1 subprocess. Now: subprocess add-only
+  (`CITADEL_SUPPRESS_INLINE_COGNIFY`), web cognify writer-lock-guarded.
+- **#66 — real #46 fix.** Auto-map Linear assignees→seats by member email
+  (`LinearClient.fetch_users`), no manual `CITADEL_LINEAR_USER_MAP`.
+- **#67 — real #15/#52 fix.** The `[DataItem]` *in search* was cognee's per-session
+  QA cache (`source:session`), read FIRST by `recall()`; gated behind
+  `CITADEL_COGNEE_SESSION_RECALL` (default OFF).
+- **#68 — vector cleanup.** Scaffolds were also cognified into the
+  `DocumentChunk_text` vector store; `delete_graph_nodes` deletes vector points too
+  + the cleanup adds a search sweep for orphaned chunks.
+
+**Verification + status (2026-06-30):**
+- **16 closed + live-verified:** #27, #28, #33, #35, #36, #38, #39, #40, #41, #43,
+  #44, #45, #48, #51, #52, #53. Live: MCP 406→200, search + rate-limit headers,
+  get_document 200, promotion authz reader→403, readyz honest, search returns 0
+  `[DataItem]`.
+- **#15 DONE + verified clean:** admin cleanup looped to dry — 214 garbage
+  nodes/chunks purged across session cache + Kuzu graph + pgvector; all prod
+  searches return 0 `[DataItem]`/marker/session, 746 real docs indexed.
+- **Open, pending runtime verification (next hourly evolve pass):** #47 (Kuzu — no
+  `Lock is held by PID`), #46 (Linear `mirror_count`>0 after the auto-map sync;
+  the HTTP force-resync times out on ~200 inline writes — known perf gap).
+- **Open, partial:** #50 — backpressure/429 done; raw ~6–9s latency is
+  cognee-recall-bound (separate perf effort). #25 umbrella tracks #46/#47/#50.
+- **Lesson:** the `[DataItem]` garbage lived in three distinct stores (session
+  cache, Kuzu graph, pgvector chunks). Graph deletion ≠ vector deletion ≠
+  session-cache; **live prod testing was essential — unit tests passed at every
+  wrong layer.**
+- **Action:** rotate `CITADEL_ADMIN_KEY` (surfaced in-session during ops).
+
+## Fix specs (shipped in batch 2 above — kept for reference)
 
 Each was investigated and has a concrete, conservative fix. Approach summary:
 
@@ -78,7 +127,7 @@ Each was investigated and has a concrete, conservative fix. Approach summary:
   `claude mcp add --scope user` handler + pi/keychain note rewording (#36). MED,
   largest item.
 
-## Remaining — design/high-risk (do carefully, verify on node)
+## Design/high-risk specs (shipped — kept for reference)
 
 - **#27 health gates** (`kb/status.py`, `kb/service.py`, `kb/server.py`): make
   `check_search` honest (`ok = count > 0`) and fold it into `report.healthy`;
@@ -96,12 +145,15 @@ Each was investigated and has a concrete, conservative fix. Approach summary:
   collide. HIGH — concurrency, live graph. See memory
   `citadel-evolve-cognify-concurrency`.
 
-## Follow-up
+## Follow-up — #15 DONE (verified clean)
 
-- **#15 (no issue) purge legacy garbage**: #54/#56 fix *new* writes, but the live
-  graph still holds old `[DataItem]` + `user_sessions_from_cache` entries
-  (confirmed via node search). Add an admin cleanup that deletes those nodes,
-  then re-run github/linear/repo-content sync to repopulate real content.
+- **#15 purge legacy garbage** — DONE (PRs #67/#68 + admin cleanup loop). The
+  `[DataItem]` garbage lived in THREE stores: cognee's per-session QA cache (the
+  search-visible source — recall read it first; fixed by disabling that read), the
+  Kuzu graph, and the `DocumentChunk_text` pgvector store. The admin cleanup
+  (`POST /api/admin/graph/cleanup`) now deletes from graph + vector and sweeps via
+  search; looped to dry — 214 nodes/chunks purged. All prod searches return 0
+  `[DataItem]`/marker/session; 746 real docs indexed.
 
 ## Working agreement for this sprint
 

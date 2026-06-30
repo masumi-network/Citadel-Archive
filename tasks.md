@@ -1,26 +1,33 @@
 # Citadel Tasks
 
-## Read-side hardening sprint (issues #25–#49) — IN PROGRESS
+## Read-side hardening sprint (issues #25–#53) — ~SHIPPED (16 closed, 4 pending verify)
 
 Plan + full status: [`docs/read-side-hardening-sprint.md`](docs/read-side-hardening-sprint.md)
 
-- [x] #26, #32 — `[DataItem]` data-plane root cause (PR #54) + ingest latency (PR #56); **node-verified**
-- [x] #29 — MCP `citadel://` resource auth (PR #57)
-- [x] #31 — CLI false-green on cognify (PR #58)
-- [x] #37 — service version single-sourced (PR #55, #59)
-- [x] #49 — search `top_k` clamp + ingest byte cap (PR #60)
-- [x] #30, #42 — sync auth surfaced; stop masking 403s (PR #61)
-- [x] #34 — marker-based repo auto-join (PR #62)
-- [ ] #45, #33 — MCP 406 `Accept` + admin-tool listing filter
-- [ ] #28 — `get_document` drilldown for cognee chunk hits
-- [ ] #46 — Linear sync failure (needs `LINEAR_API_KEY` + diagnostics)
-- [ ] #39, #48 — promotion traceback/exit-0 + approve/reject authz (404→403)
-- [ ] #40, #41 — writer-seat feedback no-op + improve crashes (false-green)
-- [ ] #35, #36, #38, #43 — onboarding: capture roots, LLM key, hooks, Claude global scope
-- [ ] #27 — retrieval health gates (status/doctor/readyz) **[design]**
-- [ ] #44 — `citadel_search` timeout **[high-risk; re-measure post-#26]**
-- [ ] #47 — Kuzu single-writer lock contention **[high-risk]**
-- [ ] cleanup — purge legacy `[DataItem]`/`user_sessions_from_cache` from live graph + re-sync
+First wave (closed): #26, #29, #30, #31, #32, #34, #37, #42, #49 (PRs #54–#62).
+
+Batch 2 + follow-ups (PRs #64–#68), **closed + live-verified on the node:**
+- [x] #51, #53 — MCP ingest inline cognify + byte cap (PR #64)
+- [x] #45, #33 — MCP 406 `Accept` shim + role/seat `tools/list` filter (PR #64); 406→200 live
+- [x] #28 — `get_document` drilldown for cognee chunk hits (PR #64); 200 live
+- [x] #39, #48 — promotion read-timeout + **admin-gated** approve/reject (PR #64); reader→403 live
+- [x] #40, #41 — durable feedback fallback + improve guards (PR #64)
+- [x] #35, #36, #38, #43 — onboarding: capture root, LLM key, user-scope hooks, Claude/pi MCP (PR #64)
+- [x] #27 — honest status/doctor/readyz + corpus-gate 503 (PR #64); readyz ok live
+- [x] #44 — search timeout budget + parallel per-dataset recall (PR #64); live
+- [x] #52 — Linear `[DataItem]` leak gone (PR #64 + #67 + #68); search returns 0 `[DataItem]` live
+- [x] #15 — purge legacy garbage: **DONE + verified clean** (214 nodes/chunks purged across
+      session cache + Kuzu graph + pgvector; PRs #64/#67/#68 + admin cleanup loop)
+
+Still open (deployed + code-correct, pending runtime verification):
+- [ ] #47 — Kuzu single-writer lock (PR #65 real fix: subprocess add-only + web lock-guarded);
+      **verify on next hourly evolve pass** (no `Lock is held by PID` in logs)
+- [ ] #46 — Linear seat mirrors (PR #66 auto-map by member email); **verify `mirror_count`>0 after
+      the next evolve Linear sync** (HTTP force-resync times out on ~200 inline writes)
+- [ ] #50 — search latency: backpressure/429 done; raw ~6–9s latency is cognee-recall-bound (separate perf)
+- [ ] #25 — umbrella; closes when #46/#47/#50 resolve
+
+**Action:** rotate `CITADEL_ADMIN_KEY` (surfaced in-session during ops).
 
 ## ADR-0007 execution — seat capture, promotion, write policy (~100% — shipped)
 
