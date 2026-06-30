@@ -20,6 +20,14 @@ from kb.tags import merge_tags
 
 logger = logging.getLogger(__name__)
 
+# Upper bound for search breadth. The HTTP /search route (SearchBody) already rejects
+# top_k outside [1, 100] and the MCP layer clamps to 25, but this is the single
+# chokepoint every read path funnels through (search, the /api/knowledge alias,
+# promotion/learning-agent lookups, the cognify marker probe). Clamping here floors
+# negatives/zero to 1 and caps absurd values so no caller — present, future, or one that
+# bypasses pydantic — can drive an unbounded recall into the search-backend timeout.
+MAX_SEARCH_TOP_K = 100
+
 
 class Citadel:
     def __init__(
@@ -112,6 +120,7 @@ class Citadel:
         session_id: str | None = None,
         top_k: int = 10,
     ) -> list[Any]:
+        top_k = min(max(int(top_k), 1), MAX_SEARCH_TOP_K)
         target_dataset = dataset or self.config.default_dataset
         results = await self.cognee.recall(
             query,

@@ -515,6 +515,21 @@ def test_ingest_inline_cognify_flag() -> None:
     assert with_cognify.json()["cognified"] is True
 
 
+def test_ingest_and_contribute_reject_oversized_payloads(monkeypatch: Any) -> None:
+    monkeypatch.setenv("CITADEL_MCP_MAX_INGEST_BYTES", "16")
+    client = authed_client()
+
+    big = "x" * 50
+    ingest = client.post("/ingest", json={"data": big})
+    contribute = client.post("/api/contribute", json={"title": "T", "content": big})
+    small = client.post("/ingest", json={"data": "ok"})
+
+    assert ingest.status_code == 413
+    assert "limit is 16 bytes" in ingest.json()["detail"]
+    assert contribute.status_code == 413
+    assert small.status_code == 200
+
+
 def test_writer_access_can_ingest_and_feedback_but_not_admin_actions() -> None:
     client = authed_client("test-writer")
 
