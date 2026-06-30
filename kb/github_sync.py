@@ -262,6 +262,7 @@ class GitHubOrgSyncer:
             "tracked_repositories": len(state.get("repos") or {}),
             "seen_events": len(state.get("seen_event_ids") or []),
             "tracked_commit_repositories": len(state.get("commits") or {}),
+            "authenticated": bool(getattr(self.client, "token", None)),
             "include_commits": self.include_commits,
             "include_private": self.include_private,
             "repo_allowlist": list(self.repo_allowlist),
@@ -277,6 +278,13 @@ class GitHubOrgSyncer:
 
     async def run(self, *, force: bool = False, dry_run: bool = False) -> dict[str, Any]:
         checked_at = utc_now()
+        authenticated = bool(getattr(self.client, "token", None))
+        if not authenticated:
+            logger.warning(
+                "GitHub sync for org %s is running UNAUTHENTICATED (no GITHUB_TOKEN); GitHub "
+                "throttles anonymous requests to 60/hr and will 403 across an org-wide sync.",
+                self.org,
+            )
         logger.info(
             "GitHub sync starting for org %s (force=%s, dry_run=%s)", self.org, force, dry_run
         )
@@ -382,6 +390,7 @@ class GitHubOrgSyncer:
         )
         return {
             "ok": True,
+            "authenticated": authenticated,
             "org": self.org,
             "source_url": SOURCE_URL_TEMPLATE.format(org=self.org),
             "checked_at": checked_at,

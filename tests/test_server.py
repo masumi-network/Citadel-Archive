@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import hmac
 import json
@@ -2620,6 +2621,22 @@ def _webhook_citadel(secret: str, *, enabled: bool = True) -> FakeCitadel:
         github_webhook_secret=secret,
     )
     return citadel
+
+
+def test_webhook_reingest_records_mesh_error_on_failure(tmp_path: Path) -> None:
+    app.state.citadel = _webhook_citadel(secrets.token_hex(16))
+    mesh = MeshState()
+    app.state.mesh = mesh
+
+    class _FailingSyncer:
+        async def run(self, *, force: bool = False) -> dict[str, Any]:
+            raise RuntimeError("GitHub API returned 403: rate limit exceeded")
+
+    asyncio.run(server_module._run_webhook_reingest(_FailingSyncer()))
+
+    # The fire-and-forget webhook re-ingest used to swallow failures to a log
+    # line; it now records the error on the mesh so a 403 is visible.
+    assert mesh.errors == 1
 
 
 def _sign(secret: str, body: bytes) -> str:
