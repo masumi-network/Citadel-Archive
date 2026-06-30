@@ -10,13 +10,16 @@ from kb.config import CitadelConfig
 from kb.github_sync import GitHubAPIError
 from kb.models import IngestResult
 from kb.repo_content_sync import (
+    DEFAULT_REPO_CONTENT_AUTOJOIN_MARKERS,
     RepoContentFile,
     RepoContentGitHubClient,
     RepoContentSyncer,
+    discover_org_repos,
     discover_repo_paths,
     format_repo_content_document,
     resolve_repo_full_name,
 )
+from kb.repository_update import GitHubRepo
 
 
 class FakeCitadel:
@@ -211,3 +214,92 @@ async def test_repo_content_syncer_marks_failure_when_all_repos_error(tmp_path: 
     assert result["repos_errored"] == 2
     assert result["files_ingested"] == 0
     assert all(repo["errors"] for repo in result["repositories"])
+
+
+class FakeAutoJoinClient(RepoContentGitHubClient):
+    """Org with: a marker repo, a markerless repo, and an archived marker repo."""
+
+    def __init__(self) -> None:
+        super().__init__(token=None)
+        self.markers: set[str] = {
+            "masumi-network/masumi-agent-messenger/AGENTS.md",
+            "masumi-network/archived-repo/AGENTS.md",
+            "masumi-network/sokosumi-cli/SKILL.md",
+        }
+
+    def _repo(self, name: str, *, archived: bool = False, branch: str | None = "main") -> GitHubRepo:
+        return GitHubRepo(
+            name=name,
+            full_name=f"masumi-network/{name}",
+            html_url="",
+            description=None,
+            language=None,
+            pushed_at=None,
+            updated_at=None,
+            default_branch=branch,
+            visibility="public",
+            archived=archived,
+            stargazers_count=0,
+            forks_count=0,
+            open_issues_count=0,
+            topics=(),
+            license_name=None,
+        )
+
+    def fetch_repos(self, org: str, *, max_repos: int, include_private: bool = True) -> list[GitHubRepo]:
+        return [
+            self._repo("masumi-agent-messenger"),
+            self._repo("no-markers-here"),
+            self._repo("archived-repo", archived=True),
+            self._repo("sokosumi-cli"),
+        ][:max_repos]
+
+    def file_exists(self, full_name: str, path: str, *, ref: str) -> bool:
+        return f"{full_name}/{path}" in self.markers
+
+
+def test_discover_org_repos_joins_only_non_archived_marker_repos() -> None:
+    joined = discover_org_repos(
+        FakeAutoJoinClient(),
+        "masumi-network",
+        markers=DEFAULT_REPO_CONTENT_AUTOJOIN_MARKERS,
+        max_repos=50,
+    )
+    assert joined == [
+        "masumi-network/masumi-agent-messenger",
+        "masumi-network/sokosumi-cli",
+    ]
+
+
+def test_resolved_repos_unions_autojoin_with_dedup() -> None:
+    config = CitadelConfig(
+        repo_content_sync_repos=("sokosumi-cli",),
+        repo_content_sync_autojoin_enabled=True,
+        repo_content_sync_autojoin_markers=("AGENTS.md",),
+        repo_content_sync_autojoin_max_repos=50,
+    )
+    syncer = RepoContentSyncer(
+        FakeCitadel(config),
+        client=FakeAutoJoinClient(),
+        state_path="unused",
+    )
+    resolved = syncer._resolved_repos()
+    assert resolved == [
+        "masumi-network/sokosumi-cli",
+        "masumi-network/masumi-agent-messenger",
+    ]
+
+
+def test_resolved_repos_autojoin_disabled_skips_discovery() -> None:
+    config = CitadelConfig(repo_content_sync_repos=("sokosumi-cli",))
+
+    fetch_calls: list[int] = []
+
+    class TrackingClient(FakeAutoJoinClient):
+        def fetch_repos(self, org: str, *, max_repos: int, include_private: bool = True) -> list[GitHubRepo]:
+            fetch_calls.append(1)
+            return super().fetch_repos(org, max_repos=max_repos, include_private=include_private)
+
+    syncer = RepoContentSyncer(FakeCitadel(config), client=TrackingClient(), state_path="unused")
+    assert syncer._resolved_repos() == ["masumi-network/sokosumi-cli"]
+    assert fetch_calls == []
