@@ -151,6 +151,46 @@ def test_discovery_resource_reads_public_manifest_only() -> None:
     assert client.gets == []
 
 
+def test_authed_resource_uses_caller_token_on_hosted_transport(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from types import SimpleNamespace
+
+    # Hosted (HTTP) transport has no fallback client, so an authed resource MUST
+    # read the caller's bearer token from the live request context. Regression
+    # for #29: the resource handlers passed resolve_client(None) and always
+    # raised "No access token" on the hosted /mcp endpoint while tools worked.
+    server = create_mcp_server()
+
+    fake_ctx = SimpleNamespace(
+        request_context=SimpleNamespace(
+            request=SimpleNamespace(
+                headers={"authorization": "Bearer ctdl_resourcetoken"}
+            )
+        )
+    )
+    monkeypatch.setattr(server, "get_context", lambda: fake_ctx)
+
+    captured: dict[str, Any] = {}
+
+    class StubClient:
+        def __init__(self, *, base_url: str | None = None, access_token: str = "") -> None:
+            captured["token"] = access_token
+
+        def get(self, path: str, **kwargs: Any) -> dict[str, Any]:
+            captured["path"] = path
+            return {"ok": True, "path": path}
+
+    monkeypatch.setattr(mcp_server, "CitadelHttpClient", StubClient)
+
+    resource = asyncio.run(server._resource_manager.get_resource("citadel://indexes"))
+    payload = json.loads(resource.fn())
+
+    assert captured["token"] == "ctdl_resourcetoken"
+    assert captured["path"] == "/api/indexes"
+    assert payload == {"ok": True, "path": "/api/indexes"}
+
+
 def test_search_clamps_top_k_and_tracks_tool_name() -> None:
     client = FakeHttpClient()
     server = create_mcp_server(client)

@@ -967,7 +967,7 @@ def create_mcp_server(
     @mcp.resource("citadel://session")
     def session_resource() -> str:
         """Current Citadel role, actor, and capabilities."""
-        return json.dumps(resolve_client(None).get("/api/session"), indent=2, default=str)
+        return json.dumps(resolve_client(mcp.get_context()).get("/api/session"), indent=2, default=str)
 
     @mcp.resource("citadel://discovery")
     def discovery_resource() -> str:
@@ -977,17 +977,17 @@ def create_mcp_server(
     @mcp.resource("citadel://sources")
     def sources_resource() -> str:
         """Configured source-learning status."""
-        return json.dumps(resolve_client(None).get("/api/learning-agent"), indent=2, default=str)
+        return json.dumps(resolve_client(mcp.get_context()).get("/api/learning-agent"), indent=2, default=str)
 
     @mcp.resource("citadel://indexes")
     def indexes_resource() -> str:
         """Current Citadel index status."""
-        return json.dumps(resolve_client(None).get("/api/indexes"), indent=2, default=str)
+        return json.dumps(resolve_client(mcp.get_context()).get("/api/indexes"), indent=2, default=str)
 
     @mcp.resource("citadel://events/recent")
     def recent_events_resource() -> str:
         """Recent mesh events."""
-        mesh = resolve_client(None).get("/api/mesh")
+        mesh = resolve_client(mcp.get_context()).get("/api/mesh")
         return json.dumps({"events": mesh.get("events", [])}, indent=2, default=str)
 
     @mcp.prompt()
