@@ -192,7 +192,14 @@ class CogneePublicClient:
         data = self._data_with_metadata(data, metadata)
 
         if hasattr(cognee, "remember"):
-            return await cognee.remember(data, dataset_name=dataset_name)
+            # Cognify in the background so the write returns promptly. cognee's
+            # default inline cognify runs the LLM graph-extraction synchronously,
+            # which blocked interactive ingest long enough to time out the MCP /
+            # HTTP request. run_in_background stages the add+cognify as a task on
+            # the server loop (the sole Kuzu writer) and returns immediately.
+            return await cognee.remember(
+                data, dataset_name=dataset_name, run_in_background=True
+            )
 
         kwargs = {"dataset_name": dataset_name}
         if metadata:

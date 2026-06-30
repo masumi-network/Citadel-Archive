@@ -128,6 +128,7 @@ async def test_cognee_public_client_does_not_pass_external_metadata_keyword(
 
     assert received["kwargs"] == {
         "dataset_name": "notes",
+        "run_in_background": True,
     }
 
 
@@ -189,7 +190,12 @@ async def test_durable_writes_bypass_session_cache(monkeypatch: Any) -> None:
         tags=("github",),
     )
     assert "session_id" not in captured["kwargs"]
-    assert captured["kwargs"] == {"dataset_name": "masumi-network"}
+    # Durable path: no session routing, and cognify runs in the background so the
+    # write returns promptly instead of blocking on inline LLM cognify.
+    assert captured["kwargs"] == {
+        "dataset_name": "masumi-network",
+        "run_in_background": True,
+    }
     assert isinstance(captured["data"], DataItem)
     assert captured["data"].data == "real digest"
     assert captured["data"].external_metadata == {"citadel_tags": ["github"]}
