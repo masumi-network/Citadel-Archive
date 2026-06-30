@@ -531,6 +531,45 @@ def test_ingest_and_contribute_reject_oversized_payloads(monkeypatch: Any) -> No
     assert small.status_code == 200
 
 
+def test_mcp_accept_shim_advertises_both_content_types() -> None:
+    # #45: minimal MCP clients (json-only / no Accept / */*) must reach the
+    # streamable-HTTP transport, which 406s unless Accept lists both types.
+    from kb.server import _McpAcceptShim
+
+    captured: dict[str, Any] = {}
+
+    async def inner(scope: Any, receive: Any, send: Any) -> None:
+        captured["scope"] = scope
+
+    shim = _McpAcceptShim(inner)
+
+    def accept_after(headers: list[tuple[bytes, bytes]]) -> list[str]:
+        captured.clear()
+        asyncio.run(shim({"type": "http", "headers": headers}, None, None))
+        return [
+            v.decode("latin-1")
+            for n, v in captured["scope"]["headers"]
+            if n.lower() == b"accept"
+        ]
+
+    both = "application/json, text/event-stream"
+    assert accept_after([]) == [both]
+    assert accept_after([(b"accept", b"*/*")]) == [both]
+    assert accept_after([(b"accept", b"application/json, text/event-stream")]) == [both]
+
+    json_only = accept_after([(b"accept", b"application/json")])
+    assert len(json_only) == 1
+    assert "application/json" in json_only[0] and "text/event-stream" in json_only[0]
+
+    sse_only = accept_after([(b"accept", b"text/event-stream")])
+    assert "application/json" in sse_only[0] and "text/event-stream" in sse_only[0]
+
+    # Non-http scopes pass through untouched.
+    captured.clear()
+    asyncio.run(shim({"type": "lifespan"}, None, None))
+    assert captured["scope"]["type"] == "lifespan"
+
+
 def test_obsidian_push_enforces_byte_cap_per_document(monkeypatch: Any, tmp_path: Any) -> None:
     # #51: the obsidian sync push path must honor the same byte cap as /ingest. An
     # oversized note is rejected individually without failing the rest of the sync.

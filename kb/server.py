@@ -73,6 +73,47 @@ mcp_server = create_mcp_server()
 mcp_app = mcp_server.streamable_http_app()
 
 
+class _McpAcceptShim:
+    """Augment the Accept header so minimal MCP clients reach the transport.
+
+    The mcp>=1.23 StreamableHTTP transport answers a POST with HTTP 406 unless
+    ``Accept`` lists BOTH ``application/json`` and ``text/event-stream`` (``*/*``
+    is deliberately not honored). Minimal clients (e.g. the Raspberry Pi MCP
+    bridge) send ``application/json`` only, or omit Accept, and cannot connect.
+    This shim rewrites the header in-flight to advertise both content types
+    before delegating to the mounted streamable-HTTP app, leaving callers that
+    already send both untouched.
+    """
+
+    _BOTH = "application/json, text/event-stream"
+    _REQUIRED = ("application/json", "text/event-stream")
+
+    def __init__(self, app: Any) -> None:
+        self.app = app
+
+    async def __call__(self, scope: Any, receive: Any, send: Any) -> None:
+        if scope.get("type") != "http":
+            await self.app(scope, receive, send)
+            return
+        raw_headers = scope.get("headers") or []
+        kept = [(name, value) for name, value in raw_headers if name.lower() != b"accept"]
+        existing = (
+            b", ".join(value for name, value in raw_headers if name.lower() == b"accept")
+            .decode("latin-1")
+            .strip()
+        )
+        if not existing or existing == "*/*":
+            merged = self._BOTH
+        else:
+            merged = existing
+            lowered = existing.lower()
+            for needed in self._REQUIRED:
+                if needed not in lowered:
+                    merged = f"{merged}, {needed}"
+        kept.append((b"accept", merged.encode("latin-1")))
+        await self.app({**scope, "headers": kept}, receive, send)
+
+
 async def _evolve_scheduler_loop(interval_seconds: int) -> None:
     """Run the evolve cycle every ``interval_seconds``: heavy stages in a
     subprocess, then cognify in-loop.
@@ -213,7 +254,7 @@ async def mcp_trailing_slash_redirect() -> RedirectResponse:
     return RedirectResponse(url=MCP_ENDPOINT_PATH, status_code=307)
 
 
-app.mount("/mcp", mcp_app)
+app.mount("/mcp", _McpAcceptShim(mcp_app))
 ADMIN_COOKIE = "citadel_admin"
 MCP_TOOL_HEADER = "x-citadel-mcp-tool"
 AUDIT_VIEWS = frozenset({"all", "mcp", "access", "failures"})

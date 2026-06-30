@@ -321,6 +321,93 @@ def test_http_client_request_honors_explicit_timeout_override(
     assert captured["timeout"] == client.timeout
 
 
+_ADMIN_TOOLS = {
+    "citadel_audit_events",
+    "citadel_improve",
+    "citadel_backup_mirror_status",
+    "citadel_run_learning_agent",
+    "citadel_run_repo_content_sync",
+    "citadel_run_backup_mirror",
+}
+
+
+def test_tools_list_filters_by_role_and_seat() -> None:
+    # #33: tools/list must not advertise tools the caller's role/seat cannot use.
+    from kb.mcp_server import _filter_tools_for_session
+
+    server = create_mcp_server(FakeHttpClient())
+    all_tools = asyncio.run(server.list_tools())
+    names = {t.name for t in all_tools}
+    assert _ADMIN_TOOLS <= names  # sanity: unfiltered list has the admin tools
+
+    def visible(session: Any) -> set[str]:
+        return {t.name for t in _filter_tools_for_session(all_tools, session)}
+
+    # Non-seat writer: admin tools hidden; contribute + ingest visible.
+    writer = visible({"role": "writer", "seat_slug": None})
+    assert not (_ADMIN_TOOLS & writer)
+    assert {"citadel_contribute", "citadel_ingest"} <= writer
+
+    # Seat writer: contribute additionally hidden (Central read-only from seat MCP).
+    seat = visible({"role": "writer", "seat_slug": "sarthi"})
+    assert "citadel_contribute" not in seat
+    assert "citadel_ingest" in seat
+
+    # Reader: writer + admin tools hidden; read tools visible.
+    reader = visible({"role": "reader", "seat_slug": None})
+    assert not (_ADMIN_TOOLS & reader)
+    assert "citadel_ingest" not in reader
+    assert "citadel_search" in reader
+
+    # Admin: full set.
+    assert _ADMIN_TOOLS <= visible({"role": "admin", "seat_slug": None})
+
+    # Fail open: a missing or unknown-role session never blanks the tool list.
+    assert _filter_tools_for_session(all_tools, None) == all_tools
+    assert _filter_tools_for_session(all_tools, {"role": "bogus"}) == all_tools
+
+
+def test_tools_list_protocol_handler_applies_role_filter(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # #33: prove the override is wired into the live tools/list protocol handler
+    # (not just the pure helper) and resolves the caller's session to filter.
+    from mcp import types as mcp_types
+
+    server = create_mcp_server(FakeHttpClient())
+
+    monkeypatch.setattr(server, "get_context", lambda: object())
+    monkeypatch.setattr(mcp_server, "_bearer_from_context", lambda ctx: "ctdl_tok")
+
+    class _SessionClient:
+        def __init__(self, **_: Any) -> None: ...
+
+        def get(self, path: str, **_: Any) -> dict[str, Any]:
+            assert path == "/api/session"
+            return {"role": "writer", "seat_slug": "sarthi"}
+
+    monkeypatch.setattr(mcp_server, "CitadelHttpClient", _SessionClient)
+
+    handler = server._mcp_server.request_handlers[mcp_types.ListToolsRequest]
+    result = asyncio.run(handler(mcp_types.ListToolsRequest(method="tools/list")))
+    names = {t.name for t in result.root.tools}
+
+    assert not (_ADMIN_TOOLS & names)
+    assert "citadel_contribute" not in names  # seat writer
+    assert "citadel_ingest" in names
+
+
+def test_tools_list_protocol_handler_fails_open_without_context() -> None:
+    # No HTTP request context (stdio) → unfiltered, since call-time authz applies.
+    from mcp import types as mcp_types
+
+    server = create_mcp_server(FakeHttpClient())
+    handler = server._mcp_server.request_handlers[mcp_types.ListToolsRequest]
+    result = asyncio.run(handler(mcp_types.ListToolsRequest(method="tools/list")))
+    names = {t.name for t in result.root.tools}
+    assert _ADMIN_TOOLS <= names
+
+
 def test_remote_http_base_url_is_rejected_without_escape_hatch(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
