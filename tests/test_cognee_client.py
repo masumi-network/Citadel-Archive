@@ -128,8 +128,71 @@ async def test_cognee_public_client_does_not_pass_external_metadata_keyword(
 
     assert received["kwargs"] == {
         "dataset_name": "notes",
-        "session_id": None,
     }
+
+
+@pytest.mark.asyncio
+async def test_durable_writes_bypass_session_cache(monkeypatch: Any) -> None:
+    """Durable writes never route through cognee's session cache.
+
+    Passing a session_id used to divert the write into the per-session cache,
+    which stored the payload as the literal "[DataItem]" placeholder, never
+    cognified it (ingest items_processed:0), and re-embedded a growing
+    scaffolded blob each cycle. remember() now always sends the write to the
+    permanent add+cognify path: cognee.remember is called WITHOUT a session_id,
+    and the payload is DataItem-wrapped so citadel_tags metadata survives.
+    """
+    from dataclasses import dataclass, field
+
+    @dataclass
+    class DataItem:
+        data: Any
+        label: Any = None
+        external_metadata: Any = field(default=None)
+        data_id: Any = None
+
+    for parent in ("cognee.tasks", "cognee.tasks.ingestion"):
+        monkeypatch.setitem(sys.modules, parent, SimpleNamespace())
+    monkeypatch.setitem(
+        sys.modules,
+        "cognee.tasks.ingestion.data_item",
+        SimpleNamespace(DataItem=DataItem),
+    )
+
+    captured: dict[str, Any] = {}
+
+    async def run_startup_migrations() -> None:
+        return None
+
+    async def remember(data: Any, **kwargs: Any) -> dict[str, Any]:
+        captured["data"] = data
+        captured["kwargs"] = kwargs
+        return {"ok": True}
+
+    monkeypatch.setitem(
+        sys.modules,
+        "cognee",
+        SimpleNamespace(
+            run_startup_migrations=run_startup_migrations,
+            remember=remember,
+        ),
+    )
+    client = CogneePublicClient()
+
+    # Even with a session_id supplied, the write must NOT be diverted into the
+    # session cache: no session_id reaches cognee.remember, and the payload is
+    # DataItem-wrapped (carrying citadel_tags) for the permanent graph.
+    await client.remember(
+        "real digest",
+        dataset_name="masumi-network",
+        session_id="masumi-github-daily",
+        tags=("github",),
+    )
+    assert "session_id" not in captured["kwargs"]
+    assert captured["kwargs"] == {"dataset_name": "masumi-network"}
+    assert isinstance(captured["data"], DataItem)
+    assert captured["data"].data == "real digest"
+    assert captured["data"].external_metadata == {"citadel_tags": ["github"]}
 
 
 @pytest.mark.asyncio

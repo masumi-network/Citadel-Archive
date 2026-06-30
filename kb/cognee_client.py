@@ -180,19 +180,19 @@ class CogneePublicClient:
 
         await self._ensure_cognee_ready(cognee)
         metadata = {"citadel_tags": list(tags)} if tags else None
+        # Durable knowledge writes always go to cognee's permanent graph
+        # (add+cognify), never its per-session cache. When a session_id was
+        # supplied, cognee routed the write into the session cache, which (a)
+        # stored an unserializable payload as the literal "[DataItem]"
+        # placeholder instead of the real text, (b) never cognified it inline so
+        # ingest reported items_processed:0, and (c) re-embedded a growing
+        # scaffolded "Session ID:/Question:/Answer:" blob every sync cycle.
+        # session_id is still accepted (callers pass it as provenance) but no
+        # longer diverts the write away from the durable path.
         data = self._data_with_metadata(data, metadata)
 
         if hasattr(cognee, "remember"):
-            kwargs: dict[str, Any] = {
-                "dataset_name": dataset_name,
-                "session_id": session_id,
-            }
-            if session_id:
-                kwargs["self_improvement"] = False
-            return await cognee.remember(
-                data,
-                **kwargs,
-            )
+            return await cognee.remember(data, dataset_name=dataset_name)
 
         kwargs = {"dataset_name": dataset_name}
         if metadata:
