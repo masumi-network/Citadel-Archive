@@ -1,5 +1,27 @@
 # Citadel Tasks
 
+## Read-side hardening sprint (issues #25–#49) — IN PROGRESS
+
+Plan + full status: [`docs/read-side-hardening-sprint.md`](docs/read-side-hardening-sprint.md)
+
+- [x] #26, #32 — `[DataItem]` data-plane root cause (PR #54) + ingest latency (PR #56); **node-verified**
+- [x] #29 — MCP `citadel://` resource auth (PR #57)
+- [x] #31 — CLI false-green on cognify (PR #58)
+- [x] #37 — service version single-sourced (PR #55, #59)
+- [x] #49 — search `top_k` clamp + ingest byte cap (PR #60)
+- [x] #30, #42 — sync auth surfaced; stop masking 403s (PR #61)
+- [x] #34 — marker-based repo auto-join (PR #62)
+- [ ] #45, #33 — MCP 406 `Accept` + admin-tool listing filter
+- [ ] #28 — `get_document` drilldown for cognee chunk hits
+- [ ] #46 — Linear sync failure (needs `LINEAR_API_KEY` + diagnostics)
+- [ ] #39, #48 — promotion traceback/exit-0 + approve/reject authz (404→403)
+- [ ] #40, #41 — writer-seat feedback no-op + improve crashes (false-green)
+- [ ] #35, #36, #38, #43 — onboarding: capture roots, LLM key, hooks, Claude global scope
+- [ ] #27 — retrieval health gates (status/doctor/readyz) **[design]**
+- [ ] #44 — `citadel_search` timeout **[high-risk; re-measure post-#26]**
+- [ ] #47 — Kuzu single-writer lock contention **[high-risk]**
+- [ ] cleanup — purge legacy `[DataItem]`/`user_sessions_from_cache` from live graph + re-sync
+
 ## ADR-0007 execution — seat capture, promotion, write policy (~100% — shipped)
 
 **Plan:** [`docs/adr-0007-shipping-plan.md`](docs/adr-0007-shipping-plan.md)  
