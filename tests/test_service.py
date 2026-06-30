@@ -8,7 +8,7 @@ import pytest
 from kb.config import CitadelConfig
 from kb.models import FeedbackRequest
 from kb.security_scan import SecretContentError
-from kb.service import Citadel
+from kb.service import MAX_SEARCH_TOP_K, Citadel
 
 
 class FakeCognee:
@@ -235,6 +235,18 @@ async def test_cognify_dataset_verify_failure_propagates_top_level_ok() -> None:
 
     assert result["verification"]["ok"] is False
     assert result["ok"] is False
+
+
+@pytest.mark.asyncio
+async def test_search_clamps_top_k_to_safe_bounds() -> None:
+    fake = FakeCognee()
+    kb = Citadel(CitadelConfig(default_dataset="notes"), cognee=fake)
+
+    huge = await kb.search("anything", top_k=100_000)
+    negative = await kb.search("anything", top_k=-1)
+
+    assert huge[0]["top_k"] == MAX_SEARCH_TOP_K
+    assert negative[0]["top_k"] == 1
 
 
 @pytest.mark.asyncio

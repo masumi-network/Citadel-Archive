@@ -44,7 +44,7 @@ from kb.knowledge_mesh import KnowledgeMesh
 from kb.learning import LearningOutcome, LearningProcess
 from kb.learning_agent import LearningAgent
 from kb.logging_utils import configure_logging
-from kb.mcp_server import TOOL_POLICIES, create_mcp_server
+from kb.mcp_server import TOOL_POLICIES, _max_ingest_bytes, create_mcp_server
 from kb.mesh import MeshState
 from kb.models import FeedbackRequest
 from kb.obsidian_sync import ObsidianSyncStore, SyncPushDocument, normalize_path
@@ -1342,6 +1342,23 @@ def audit_limit_value(limit: int | None) -> int | None:
             detail=f"Audit limit must be between 1 and {AUDIT_LIMIT_MAX}.",
         )
     return limit
+
+
+def enforce_ingest_size(text: str) -> None:
+    """Reject oversized write payloads at the HTTP boundary.
+
+    Mirrors the MCP write tools' byte cap (kb.mcp_server._validate_ingest_size) so a
+    direct HTTP caller (or autosync) that bypasses the MCP layer cannot push an
+    unbounded body into seat-scoped storage. Shares the MCP limit/env so the two
+    surfaces never drift.
+    """
+    max_bytes = _max_ingest_bytes()
+    byte_count = len(text.encode("utf-8"))
+    if byte_count > max_bytes:
+        raise HTTPException(
+            status_code=413,
+            detail=f"Payload is {byte_count} bytes; limit is {max_bytes} bytes.",
+        )
 
 
 def known_datasets(config: Any) -> list[str]:
@@ -3061,6 +3078,7 @@ async def events(request: Request) -> StreamingResponse:
 @app.post("/ingest")
 async def ingest(body: IngestBody, request: Request) -> Any:
     actor = require_access(request, "writer", "kb:ingest")
+    enforce_ingest_size(body.data)
     citadel = get_citadel()
     learning = get_learning_process()
     write_targets = resolve_write_targets(actor, body.dataset, body.tags, citadel.config)
@@ -3170,6 +3188,7 @@ async def contribute(body: ContributeBody, request: Request) -> Any:
     like any other accepted Source Material.
     """
     actor = require_access(request, "writer", "kb:ingest")
+    enforce_ingest_size(body.content)
     guard_seat_write_policy(
         actor,
         operation="contribute",
