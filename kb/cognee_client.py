@@ -8,6 +8,24 @@ from urllib.parse import unquote, urlparse
 
 logger = logging.getLogger(__name__)
 
+# Strong refs to detached background cognify tasks so the loop does not GC them
+# mid-flight (and so they can be awaited/observed in tests).
+_BACKGROUND_COGNIFY_TASKS: set[Any] = set()
+
+
+def _suppress_inline_cognify() -> bool:
+    """True when this process must ADD only and never cognify (Kuzu write).
+
+    Set on the evolve Phase-1 subprocess so it cannot write Kuzu while the web
+    process owns the single writer (#47); the web cognifies in Phase 2.
+    """
+    return os.getenv("CITADEL_SUPPRESS_INLINE_COGNIFY", "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
 
 class CogneeGateway(Protocol):
     async def remember(
@@ -209,23 +227,50 @@ class CogneePublicClient:
         # longer diverts the write away from the durable path.
         data = self._data_with_metadata(data, metadata)
 
-        if hasattr(cognee, "remember"):
-            # Cognify in the background so the write returns promptly. cognee's
-            # default inline cognify runs the LLM graph-extraction synchronously,
-            # which blocked interactive ingest long enough to time out the MCP /
-            # HTTP request. run_in_background stages the add+cognify as a task on
-            # the server loop (the sole Kuzu writer) and returns immediately.
-            return await cognee.remember(
-                data, dataset_name=dataset_name, run_in_background=True
-            )
+        # Add is a fast write to the relational + vector stores; it does NOT touch
+        # the Kuzu graph (cognify is the graph write). Metadata rides in the
+        # DataItem (external_metadata) via _data_with_metadata, never as an add()
+        # keyword — cognee rejects external_metadata as a kwarg.
+        added = await cognee.add(data, dataset_name=dataset_name)
 
-        kwargs = {"dataset_name": dataset_name}
-        if metadata:
-            kwargs["metadata"] = metadata
+        # The cognify is a single-writer Kuzu write, so it must be coordinated (#47).
+        # We previously used cognee.remember(run_in_background=True), but that
+        # fire-and-forget cognify is NOT behind our writer lock and fires in EVERY
+        # process — so the evolve Phase-1 subprocess and the web cognified Kuzu at
+        # the same time, the hourly "Lock is held by PID N" crash.
+        #
+        # 1) In the Phase-1 evolve subprocess (CITADEL_SUPPRESS_INLINE_COGNIFY=true)
+        #    we ADD ONLY and never write Kuzu — the web cognifies everything in
+        #    Phase 2 as the sole writer.
+        # 2) Otherwise we schedule our OWN background cognify that serializes on the
+        #    writer lock (kept non-blocking for the caller, #56), so concurrent
+        #    in-process ingests and the evolve scheduler never collide.
+        if _suppress_inline_cognify():
+            return {"added": added, "cognify": "suppressed"}
+        self._schedule_background_cognify(dataset_name)
+        return {"added": added, "background_cognify": True}
 
-        added = await cognee.add(data, **kwargs)
-        cognified = await cognee.cognify(datasets=[dataset_name])
-        return {"added": added, "cognified": cognified}
+    def _schedule_background_cognify(self, dataset_name: str) -> None:
+        """Schedule a tracked, writer-lock-guarded cognify so ingest stays fast.
+
+        Replaces cognee's fire-and-forget run_in_background cognify with one that
+        acquires our writer lock (via cognify()) — serializing the Kuzu write and
+        surfacing failures instead of swallowing them (#47/#56).
+        """
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return  # no running loop (sync caller); nothing to schedule
+
+        async def _run() -> None:
+            try:
+                await self.cognify(datasets=[dataset_name])
+            except Exception:  # noqa: BLE001 - background task: log, never crash the loop
+                logger.exception("background cognify for dataset %s failed", dataset_name)
+
+        task = loop.create_task(_run())
+        _BACKGROUND_COGNIFY_TASKS.add(task)
+        task.add_done_callback(_BACKGROUND_COGNIFY_TASKS.discard)
 
     async def recall(
         self,

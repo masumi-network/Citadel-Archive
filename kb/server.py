@@ -229,6 +229,10 @@ async def _evolve_scheduler_loop(interval_seconds: int) -> None:
                     **os.environ,
                     "CITADEL_RUN_MODE": "evolve",
                     "CITADEL_EVOLVE_COGNIFY_ENABLED": "false",
+                    # Add-only in Phase 1: the per-ingest background cognify is a
+                    # Kuzu write, so suppress it here and let the web cognify in
+                    # Phase 2 as the sole writer — no cross-process collision (#47).
+                    "CITADEL_SUPPRESS_INLINE_COGNIFY": "true",
                 },
             )
             code = await proc.wait()
