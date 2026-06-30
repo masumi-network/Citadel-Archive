@@ -49,10 +49,12 @@ def test_discovery_manifest_is_public_and_verifiable() -> None:
     assert response.headers["cache-control"] == "public, max-age=300"
     payload = response.json()
     assert payload["ok"] is True
+    from kb.server import _SERVICE_VERSION
+
     assert payload["service"] == {
         "name": "Citadel Archive",
         "kind": "organization_vault",
-        "version": "0.1.0",
+        "version": _SERVICE_VERSION,
         "base_url": "https://citadel.example",
     }
     assert payload["public_endpoints"]["discovery"] == (
