@@ -150,6 +150,78 @@ async def test_linear_sync_ingests_central_and_mirror(
     assert len(syncer.issues_for_scope(scope="org", seat_dataset_name=None)) == 2
 
 
+@pytest.mark.asyncio
+async def test_linear_sync_writes_each_issue_to_central(
+    tmp_path: Any,
+    sample_issues: list[dict[str, Any]],
+    monkeypatch: Any,
+) -> None:
+    # #52: each issue's full text (not just the digest of titles) must reach
+    # Central so linear_search returns real issues org-wide.
+    config = CitadelConfig(
+        linear_api_key="lin_test",
+        linear_sync_state_path=str(tmp_path / "s.json"),
+        access_store_path=str(tmp_path / "a.json"),
+    )
+    citadel = Citadel(config)
+    ingests: list[dict[str, Any]] = []
+
+    async def fake_learn(self: Any, data: str, *, dataset: str | None = None, tags: list[str] | None = None, **_: Any) -> Any:
+        ingests.append({"dataset": dataset, "tags": tags or [], "data": data})
+
+        class Outcome:
+            class ingest:
+                accepted = True
+
+        return Outcome()
+
+    monkeypatch.setattr("kb.linear_sync.LearningProcess.learn", fake_learn)
+    syncer = LinearSyncer(citadel, client=FakeLinearClient(sample_issues))
+
+    result = await syncer.run(force=True)
+    assert result["ok"] is True
+
+    central_issue_writes = [
+        i for i in ingests if i["dataset"] == "masumi-network" and "linear-issue" in i["tags"]
+    ]
+    id_tags = {tag for i in central_issue_writes for tag in i["tags"] if tag.startswith("linear:")}
+    assert "linear:ENG-1" in id_tags
+    assert "linear:ENG-2" in id_tags
+    # The full description reaches Central, not just the title.
+    assert any("Implement workspace sync." in i["data"] for i in central_issue_writes)
+
+
+@pytest.mark.asyncio
+async def test_linear_sync_surfaces_api_error(tmp_path: Any) -> None:
+    # #46: an API failure returns ok:False with a reason and is persisted so
+    # status()/list_sources stop showing a stale green last_synced_at.
+    from kb.linear_sync import LinearAPIError
+
+    config = CitadelConfig(
+        linear_api_key="lin_test",
+        linear_sync_state_path=str(tmp_path / "s.json"),
+    )
+    citadel = Citadel(config)
+
+    class BrokenClient(LinearClient):
+        def __init__(self) -> None:
+            super().__init__(api_key="x")
+
+        def fetch_issues(self, *, max_issues: int) -> list[LinearIssue]:
+            raise LinearAPIError("401 Unauthorized")
+
+    syncer = LinearSyncer(citadel, client=BrokenClient())
+
+    result = await syncer.run(force=True)
+    assert result["ok"] is False
+    assert result["reason"] == "linear_api_error"
+    assert "401" in result["error"]
+
+    status = await syncer.status()
+    assert status["last_error"] == "401 Unauthorized"
+    assert status["last_attempt_at"]
+
+
 def test_linear_sync_status_disabled(tmp_path: Any) -> None:
     config = CitadelConfig(
         linear_sync_state_path=str(tmp_path / "linear_state.json"),
