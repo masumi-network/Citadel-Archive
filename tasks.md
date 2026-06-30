@@ -25,7 +25,8 @@ Still open (deployed + code-correct, pending runtime verification):
 - [ ] #46 — Linear seat mirrors (PR #66 auto-map by member email); **verify `mirror_count`>0 after
       the next evolve Linear sync** (HTTP force-resync times out on ~200 inline writes)
 - [ ] #50 — search latency: backpressure/429 done; raw ~6–9s latency is cognee-recall-bound (separate perf)
-- [ ] #25 — umbrella; closes when #46/#47/#50 resolve
+- [x] #25 — umbrella diagnostic CLOSED: version skew + [DataItem] + health gates + ingest→index all
+      resolved & verified (#46/#47/#50 are later-sweep findings, not part of #25)
 
 **Action:** rotate `CITADEL_ADMIN_KEY` (surfaced in-session during ops).
 

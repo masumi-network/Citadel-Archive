@@ -68,7 +68,11 @@ surfaced failures), #47 (Kuzu writer lock + cross-process cognify guard), #15
   `Lock is held by PID`), #46 (Linear `mirror_count`>0 after the auto-map sync;
   the HTTP force-resync times out on ~200 inline writes — known perf gap).
 - **Open, partial:** #50 — backpressure/429 done; raw ~6–9s latency is
-  cognee-recall-bound (separate perf effort). #25 umbrella tracks #46/#47/#50.
+  cognee-recall-bound (separate perf effort).
+- **#25 (umbrella) CLOSED:** its defects — version skew, `[DataItem]` search,
+  doctor/status, ingest→index, sync/cognify/get_document/resource-auth,
+  onboarding/MCP — are all resolved & verified. #46/#47/#50 are later-sweep
+  findings tracked separately, not part of #25.
 - **Lesson:** the `[DataItem]` garbage lived in three distinct stores (session
   cache, Kuzu graph, pgvector chunks). Graph deletion ≠ vector deletion ≠
   session-cache; **live prod testing was essential — unit tests passed at every

@@ -47,12 +47,13 @@ the `[DataItem]` garbage lived in three distinct stores (session cache, Kuzu
 graph, pgvector chunks); graph deletion ≠ vector deletion ≠ session-cache, and
 live prod testing was essential — unit tests passed at every wrong layer.**
 
-**Status:** 16 issues closed and live-verified (#27, #28, #33, #35, #36, #38,
-#39, #40, #41, #43, #44, #45, #48, #51, #52, #53). 4 open: #47 (Kuzu) and #46
-(Linear mirrors) deployed + code-correct, pending the next hourly evolve pass to
-confirm at runtime; #50 (search latency) — backpressure done, raw ~6–9s latency
-is cognee-recall-bound (separate perf effort); #25 (umbrella) tracks those three.
-**Action: rotate `CITADEL_ADMIN_KEY`** (surfaced in-session during ops).
+**Status:** 17 issues closed and live-verified (#25, #27, #28, #33, #35, #36, #38,
+#39, #40, #41, #43, #44, #45, #48, #51, #52, #53) — incl. the #25 umbrella
+diagnostic (version skew + `[DataItem]` + health gates + ingest→index all
+resolved). 3 open: #47 (Kuzu) and #46 (Linear mirrors) deployed + code-correct,
+pending the next hourly evolve pass to confirm at runtime; #50 (search latency) —
+backpressure done, raw ~6–9s latency is cognee-recall-bound (separate perf
+effort). **Action: rotate `CITADEL_ADMIN_KEY`** (surfaced in-session during ops).
 
 ## 2026-06-29 — v0.2.0 + v0.2.1: CLI DX overhaul shipped (PyPI + Railway)
 
