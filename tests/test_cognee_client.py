@@ -191,16 +191,27 @@ async def test_improve_raises_without_llm_key(monkeypatch: Any) -> None:
 
 
 @pytest.mark.asyncio
-async def test_delete_graph_nodes_calls_engine(monkeypatch: Any) -> None:
-    # #15: delete_graph_nodes forwards ids to the graph engine.
+async def test_delete_graph_nodes_clears_graph_and_vector(monkeypatch: Any) -> None:
+    # #15: delete_graph_nodes removes ids from BOTH the graph and the chunk vector
+    # collection (search reads the vector store, so graph-only deletion isn't enough).
+    from uuid import UUID
+
     captured: dict[str, Any] = {}
 
-    class FakeEngine:
+    class FakeGraphEngine:
         async def delete_nodes(self, node_ids: list[str]) -> None:
-            captured["ids"] = list(node_ids)
+            captured["graph"] = list(node_ids)
 
-    async def get_graph_engine() -> FakeEngine:
-        return FakeEngine()
+    class FakeVectorEngine:
+        async def delete_data_points(self, collection: str, ids: list[UUID]) -> None:
+            captured["collection"] = collection
+            captured["vector"] = list(ids)
+
+    async def get_graph_engine() -> FakeGraphEngine:
+        return FakeGraphEngine()
+
+    def get_vector_engine() -> FakeVectorEngine:
+        return FakeVectorEngine()
 
     async def run_startup_migrations() -> None:
         return None
@@ -213,6 +224,11 @@ async def test_delete_graph_nodes_calls_engine(monkeypatch: Any) -> None:
         "cognee.infrastructure.databases.graph",
         SimpleNamespace(get_graph_engine=get_graph_engine),
     )
+    monkeypatch.setitem(
+        sys.modules,
+        "cognee.infrastructure.databases.vector",
+        SimpleNamespace(get_vector_engine=get_vector_engine),
+    )
 
     client = CogneePublicClient()
     monkeypatch.setattr(client, "_prepare_cognee_environment", lambda: None)
@@ -222,8 +238,12 @@ async def test_delete_graph_nodes_calls_engine(monkeypatch: Any) -> None:
 
     monkeypatch.setattr(client, "_ensure_cognee_ready", _ready)
 
-    assert await client.delete_graph_nodes(["a", "b"]) == 2
-    assert captured["ids"] == ["a", "b"]
+    uuid_a = "9dbe579d-eccb-51b6-9bba-13982cbaf69f"
+    uuid_b = "43fdc0c1-b319-51d3-8fc2-2b670c2acc54"
+    assert await client.delete_graph_nodes([uuid_a, uuid_b]) == 2
+    assert captured["graph"] == [uuid_a, uuid_b]
+    assert captured["collection"] == "DocumentChunk_text"
+    assert captured["vector"] == [UUID(uuid_a), UUID(uuid_b)]
     assert await client.delete_graph_nodes([]) == 0  # no-op
 
 
