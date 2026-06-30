@@ -207,12 +207,34 @@ async def test_cognify_dataset_verify_ingests_marker_and_confirms_hit() -> None:
     assert result["verification"]["search_hit"] is True
     assert result["verification"]["graph_grew"] is True
     assert result["verification"]["ok"] is True
+    assert result["ok"] is True
     # verify is a superset: recovery cognify + an explicit cognify of the marker
     # (remember does not cognify inline on the modern Cognee path).
     assert fake.cognify_calls == [
         {"datasets": ["masumi-network"], "force": False},
         {"datasets": ["masumi-network"], "force": False},
     ]
+
+
+@pytest.mark.asyncio
+async def test_cognify_dataset_verify_failure_propagates_top_level_ok() -> None:
+    """A failed verify canary must set top-level ok=False (CLI exit code)."""
+
+    class StuckCognee(FakeCognee):
+        async def recall(self, query: str, **kwargs: Any) -> list[dict[str, Any]]:
+            return []  # the marker is never retrievable
+
+        async def cognify(self, **kwargs: Any) -> dict[str, Any]:
+            self.cognify_calls.append(kwargs)
+            return {"cognified": True}  # ...and the graph never grows
+
+    fake = StuckCognee()
+    kb = Citadel(CitadelConfig(default_dataset="masumi-network"), cognee=fake)
+
+    result = await kb.cognify_dataset(verify=True)
+
+    assert result["verification"]["ok"] is False
+    assert result["ok"] is False
 
 
 @pytest.mark.asyncio

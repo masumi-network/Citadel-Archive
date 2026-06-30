@@ -204,7 +204,10 @@ class Citadel:
             verification["ok"] = bool(verification["search_hit"] or graph_grew)
 
         return {
-            "ok": True,
+            # Surface the verify canary verdict at the top level so the CLI exit
+            # code (and API callers) go red when an end-to-end check fails,
+            # instead of always reporting ok=True (false-green).
+            "ok": True if verification is None else bool(verification["ok"]),
             "dataset": target_dataset,
             "graph_before": before,
             "graph_after": after,
