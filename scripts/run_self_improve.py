@@ -8,7 +8,6 @@ falls back to an in-process pass otherwise.
 
 from __future__ import annotations
 
-import asyncio
 import json
 import logging
 import os
@@ -16,6 +15,8 @@ import sys
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
+
+from scripts.stage_loop import run_async
 
 logging.basicConfig(
     level=logging.INFO,
@@ -147,7 +148,9 @@ def run() -> int:
             return 1
     else:
         logger.info("Starting scheduled self-improvement in-process")
-        result = asyncio.run(_run_local(dry_run=dry_run))
+        # run_async shares the evolve chain's single loop so cognee's cached engine
+        # is not bound to a throwaway loop (#69); standalone it is asyncio.run.
+        result = run_async(_run_local(dry_run=dry_run))
 
     if result.get("ok") is False:
         logger.error("Self-improvement pass failed: %s", result)

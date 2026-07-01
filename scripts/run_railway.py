@@ -25,11 +25,12 @@ Modes (via ``CITADEL_RUN_MODE``):
 
 from __future__ import annotations
 
-import asyncio
 import logging
 import os
 import sys
 from typing import Callable
+
+from scripts.stage_loop import run_async, stage_loop
 
 logger = logging.getLogger("citadel.pipeline")
 
@@ -89,7 +90,7 @@ def _repo_content_sync_stage() -> int:
     from kb.repo_content_sync import RepoContentSyncer
     from kb.service import Citadel
 
-    result = asyncio.run(RepoContentSyncer(Citadel.from_env()).run())
+    result = run_async(RepoContentSyncer(Citadel.from_env()).run())
     if not result.get("ok"):
         return 1
     if result.get("enabled") is False:
@@ -109,7 +110,7 @@ def _cognify_mode(*, verify: bool) -> int:
     from kb.service import Citadel
 
     dataset = os.getenv("CITADEL_COGNIFY_DATASET") or None
-    result = asyncio.run(Citadel.from_env().cognify_dataset(dataset=dataset, verify=verify))
+    result = run_async(Citadel.from_env().cognify_dataset(dataset=dataset, verify=verify))
     logger.info(
         "Cognify finished: dataset=%s graph_before=%s graph_after=%s grew=%s verify=%s",
         result.get("dataset"),
@@ -262,7 +263,7 @@ def _promotion_stage() -> int:
             promoted += result.get("promoted") or 0
         return promoted, failures
 
-    promoted, failures = asyncio.run(_run())
+    promoted, failures = run_async(_run())
     logger.info(
         "Promotion stage finished: seats=%s promoted=%s failures=%s dry_run=%s",
         len(seats),
@@ -327,7 +328,13 @@ def _linear_sync_stage() -> int:
         access_store = AccessStore(citadel.config.access_store_path)
         result = await LinearSyncer(citadel, access_store=access_store).run(force=False)
         if not result.get("ok"):
-            logger.error("Linear sync stage failed: %s", result.get("reason"))
+            # Surface the actual failure reason + detail, not just the stage name in
+            # the _run_stages `failed=linear_sync` summary (#46).
+            logger.error(
+                "Linear sync stage failed: reason=%s error=%s",
+                result.get("reason"),
+                result.get("error"),
+            )
             return 1
         logger.info(
             "Linear sync stage finished: issues=%s mirrored=%s",
@@ -336,7 +343,7 @@ def _linear_sync_stage() -> int:
         )
         return 0
 
-    return asyncio.run(_run())
+    return run_async(_run())
 
 
 def evolve_stages() -> list[tuple[str, bool, Callable[[], int]]]:
@@ -441,7 +448,16 @@ def run_pipeline() -> int:
 
 
 def run_evolve() -> int:
-    return _run_stages(evolve_stages(), label="Evolve")
+    # One shared event loop for the whole chain: cognee caches its async DB engine
+    # on the first loop and raises "got Future attached to a different loop" on any
+    # later loop, so every cognee-touching stage (github_sync, repo_content_sync,
+    # self_improve, promotion, linear_sync) must run on the SAME loop or all but the
+    # first silently fail while the pass still exits 0 (#69). Pipeline mode keeps its
+    # per-stage loops: it is not the evolve subprocess and does not set
+    # CITADEL_SUPPRESS_INLINE_COGNIFY, so a shared loop there could let one stage's
+    # background cognify straddle into the next stage.
+    with stage_loop():
+        return _run_stages(evolve_stages(), label="Evolve")
 
 
 def run(mode: str | None = None) -> int:
@@ -476,7 +492,11 @@ def run(mode: str | None = None) -> int:
                 access_store=access_store,
             ).run(force=True)
             if not result.get("ok"):
-                logger.error("Linear sync failed: %s", result.get("reason"))
+                logger.error(
+                    "Linear sync failed: reason=%s error=%s",
+                    result.get("reason"),
+                    result.get("error"),
+                )
                 return 1
             logger.info(
                 "Linear sync finished: issues=%s mirrored=%s",
@@ -485,7 +505,7 @@ def run(mode: str | None = None) -> int:
             )
             return 0
 
-        return asyncio.run(_run())
+        return run_async(_run())
     print(f"Unsupported CITADEL_RUN_MODE: {resolved_mode}", file=sys.stderr)
     return 1
 
