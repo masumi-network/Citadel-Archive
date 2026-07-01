@@ -1,6 +1,6 @@
 # Citadel Tasks
 
-## Read-side hardening sprint (issues #25–#53) — ~SHIPPED (16 closed, 4 pending verify)
+## Read-side hardening sprint (issues #25–#53) — SHIPPED (18 closed; #69/#46/#50 fixed via PR #71, pending node verify)
 
 Plan + full status: [`docs/read-side-hardening-sprint.md`](docs/read-side-hardening-sprint.md)
 
@@ -25,16 +25,41 @@ Batch 2 + follow-ups (PRs #64–#68), **closed + live-verified on the node:**
 - [x] #25 — umbrella diagnostic CLOSED: version skew + [DataItem] + health gates + ingest→index all
       resolved & verified.
 
-Still open (root-caused; need node-testable fixes, not blind deploys):
-- [ ] #69 (NEW) — evolve subprocess runs each stage in its own `asyncio.run()` → cognee loop-binding
-      breaks `github_sync` + `linear_sync` every pass ("got Future attached to a different loop").
-      The recurring GitHub/Linear sync isn't actually running. Fix: run stages in one event loop.
-- [ ] #46 — Linear seat mirrors: auto-map deployed (PR #66) but blocked by #69 (recurring sync) +
-      HTTP resync timeout (#52's 200 per-issue cognifies starve the request).
-- [ ] #50 — search latency: backpressure/429 done; raw ~6–9s is cognee's per-search pipeline
-      (Q&A caching + possibly remote embedding), needs node profiling.
+Fixes shipped 2026-07-01 (PR #71 → deploy `06856836`), **pending node verification**:
+- [~] #69 (NEW) — one shared event loop for the evolve chain (`scripts/stage_loop.py`).
+      Verify: next hourly evolve pass logs `github_sync` + `linear_sync` ok, no "got Future
+      attached to a different loop". Pipeline mode confirmed unused (only cron = GitHub-Sync).
+- [~] #46 — Linear resync: add-only + ONE coalesced cognify (was ~200 → timeout); standalone
+      awaits cognify; per-team Central tag. Verify: force-resync returns 200 in budget,
+      `mirror_count > 0`.
+- [~] #50 — search latency: `only_context` verified unsafe (breaks provenance) → not applied;
+      added opt-in `CITADEL_SEARCH_TIMING` instrument. Raw ~6–9s (cognee `log_query`/`log_result`
+      history writes) still unresolved — profile on node with the instrument. **Main scale risk.**
 
 **Action:** rotate `CITADEL_ADMIN_KEY` (surfaced in-session during ops).
+
+## Cross-department shared brain (2026-07-01) — DESIGNED (Release B pending)
+
+`/grill-with-docs` locked the model for cross-department collaboration (marketing/design/
+HR/finance — everyone, mostly agent users). Full record: **ADR-0008** + `CONTEXT.md` terms
+**Contribution Type**, **Quarantine**. Key decisions:
+- One shared **Central**, no department scopes; topics = filterable views by **Contribution Type**.
+- "feedback" stays QA-only; product-feedback/ideas/campaigns/design = typed **Vault Contributions**.
+- Promotion by **Contribution Type** (non-code reaches Central without a repo ref).
+- Two-layer filter: hard `personal`/secret floor + LLM relevance above it.
+- Poison-safe: orphan (unlinkable) content → **Quarantine** → admin keep/delete (never auto-delete).
+- Design/brand **specs** = canonical living docs; ideas/pain-points = searchable contributions.
+- Non-dev capture = agent-mediated (MCP `citadel_ingest` + user-scope SessionEnd), not git.
+
+**Release A (current product: MCP search + capture) serves the team today. Release B build (not started):**
+- [ ] **Contribution Type** on contributions + promotion routing by type
+- [ ] **Quarantine** store + admin dashboard keep/delete + orphan/connectivity detection on cognify
+- [ ] Lean no-repo `citadel onboard` mode (token + user-scope MCP + SessionEnd, skip git hook/roots)
+- [ ] Typed-contribution dashboard form (pick type, paste, save) for non-devs
+- [ ] (optional) canonical design/brand spec docs indexed as Source Material
+
+**Release gates for 20–30 users:** verify #69 (in progress) · rotate 4 secrets · profile #50 (search
+latency = main scale risk) · then onboard (stagger).
 
 ## ADR-0007 execution — seat capture, promotion, write policy (~100% — shipped)
 

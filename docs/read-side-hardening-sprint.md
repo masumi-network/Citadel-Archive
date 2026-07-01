@@ -71,16 +71,18 @@ surfaced failures), #47 (Kuzu writer lock + cross-process cognify guard), #15
   ingest→index, sync/cognify/get_document/resource-auth, onboarding/MCP — all
   resolved & verified.
 
-**Open (root-caused during verification; need node-testable fixes):**
-- **#69 (NEW)** — the evolve subprocess runs each stage in its own `asyncio.run()`,
-  so cognee's engine loop-binding makes `github_sync` AND `linear_sync` fail every
-  pass (`got Future attached to a different loop`) — the recurring GitHub/Linear
-  sync isn't actually running. Fix: run the stages in one event loop.
-- **#46 (Linear mirrors)** — auto-map deployed (PR #66) but blocked by #69 +
-  the HTTP resync timeout (#52's 200 per-issue cognifies starve the request).
-- **#50 (search latency)** — backpressure/429 done; raw ~6–9s is cognee's
-  per-search pipeline (Q&A caching + possibly remote embedding), needs node
-  profiling.
+**Fixes shipped 2026-07-01 (PR #71 → deploy `06856836`) — pending node verification:**
+- **#69 (NEW)** — one shared `asyncio.Runner` for the whole evolve chain
+  (`scripts/stage_loop.py`), so cognee binds its engine once. Verify on the node:
+  next hourly evolve pass logs `github_sync` + `linear_sync` ok, no "got Future
+  attached to a different loop". Pipeline mode confirmed unused (only cron = GitHub-Sync).
+- **#46 (Linear mirrors)** — resync is add-only + ONE coalesced writer-lock-guarded
+  cognify (was ~200 per-issue → timeout); standalone awaits cognify; per-team Central
+  tag. Verify: force-resync 200 in budget, `mirror_count > 0`.
+- **#50 (search latency)** — `only_context` verified unsafe (breaks `_citadel`
+  provenance, doesn't remove the write-per-read) → not applied; added opt-in
+  `CITADEL_SEARCH_TIMING`. Raw ~6–9s (cognee `log_query`/`log_result` history writes)
+  still unresolved — profile on the node. **Main scale risk for 20–30 users.**
 - **Lesson:** the `[DataItem]` garbage lived in three distinct stores (session
   cache, Kuzu graph, pgvector chunks). Graph deletion ≠ vector deletion ≠
   session-cache; **live prod testing was essential — unit tests passed at every

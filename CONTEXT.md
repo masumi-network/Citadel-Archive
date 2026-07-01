@@ -84,6 +84,10 @@ _Avoid_: background magic, unrestricted automation
 Structured or source-linked knowledge added to an **Organization Vault** by an actor with write permission.
 _Avoid_: chat message, random update, raw agent conversation
 
+**Contribution Type**:
+The kind of knowledge a **Vault Contribution** carries — e.g. `pain-point`, `idea`, `campaign`, `roadmap`, `design`, `brand`. Type lets non-code knowledge participate in **Promotion** (an org-work `idea` or `design` may reach **Central** by type, with no GitHub repo reference) and lets an agent filter discovery ("show campaign ideas"). Distinct from **feedback**, which is the QA/retrieval signal on a search result, not durable knowledge.
+_Avoid_: feedback (the QA signal), free-form dump, folder, tag-into-Central
+
 **Promotion**:
 A curated copy of content from a seat **Node** into **Central**. Dual-write: the original stays in the **Node**; the copy goes to **Central**. Runs on a schedule (operator cron) and via an LLM **Promotion Agent** that cross-references the note against org projects and **Structured Knowledge** already in **Central** — not a direct seat write.
 _Avoid_: move, delete original, automatic merge, direct seat ingest to Central
@@ -151,6 +155,10 @@ _Avoid_: secret dump, raw match, vague warning
 **Knowledge Conflict**:
 A visible disagreement between pieces of **Structured Knowledge** or their supporting **Source Snapshots**.
 _Avoid_: merge, overwrite, silent correction
+
+**Quarantine**:
+A holding state for an **Orphan Contribution** — **Structured Knowledge** that connects to nothing in the **Knowledge Mesh** and matches no known or plausible org project — kept out of active **Central** retrieval to prevent **Context Poisoning** (unrelatable or junk content diluting shared knowledge). The **Promotion Agent** flags and quarantines; an admin decides *keep* or *delete* in the **Operations Dashboard**. Deletion is **never automatic** — agent proposes, admin disposes.
+_Avoid_: auto-delete, LLM-only removal, silent purge, drop on ingest
 
 ## Relationships
 
@@ -289,3 +297,9 @@ All/My Node/Central scope toggle — org memory is one connected view.
 - "member adds then rejects promotion items" was confused with queue ownership; resolved: the **Promotion Agent** queues **New Org Project** proposals automatically; **Promotion Approval** is the member's approve/reject response.
 - "org-ready tag promotes seat MCP writes to Central" (ADR-0003 era); resolved: **Seat Node Write Policy** — seat writes stay on the **Node**; **Central** only via **Promotion Agent**, org sync, or service accounts (ADR-0007).
 - "who gates promotion to Central?" (2026-06-27 grill); resolved: known masumi-org work auto-promotes after secret scan + LLM; **New Org Project** requires **Vault Member** **Promotion Approval** (admin may delegate with audit); admin governs org repos and operator cron, not every member note.
+- "feedback vs product feedback" (2026-07-01 grill); resolved: **feedback** stays the QA/retrieval signal on a search result; product pain points, ideas, campaigns, and design/brand are **Vault Contributions** distinguished by **Contribution Type**.
+- "is Central code-only?" (2026-07-01 grill); resolved: no — cross-department knowledge (marketing, design, branding) reaches **Central** as typed **Vault Contributions** via **Promotion** by **Contribution Type**; teammates from any department share one **Central** (no department scope, per the earlier v1 decision).
+- "per-department 'nodes'" (2026-07-01 grill); resolved: **Node** stays a *seat's private staging* — seats never read each other's Nodes and there are no per-department stores. Topic areas (design, marketing, HR, finance…) are *filterable views over the one **Central*** by **Contribution Type**, not separate storage; a seat's shareable knowledge reaches **Central** via the **Learning Process** (restructure, chunk, index for retrieval).
+- "is the LLM the only promotion filter?" (2026-07-01 grill); resolved: no — **two-layer**: a deterministic floor (content tagged `personal` + **Security Finding** / secret-scan hits) never reaches **Central**; the LLM filters *relevance* (org-related only) above that floor. Trust the LLM for relevance, not as the sole guard for privacy.
+- "what about unrelatable / poison content?" (2026-07-01 grill); resolved: content that connects to nothing in the **Knowledge Mesh** and matches no plausible org project is an **Orphan Contribution** → **Quarantine** (never auto-deleted); an admin keeps or deletes it from the **Operations Dashboard** (yes/no), mirroring **Promotion Approval** in reverse.
+- "how do non-developers capture without git push?" (2026-07-01 grill); resolved: capture is agent-mediated — deliberate **MCP** `citadel_ingest` ("save this") plus the user-scope **SessionEnd hook** (auto per-session); the git-push hook is a *developer convenience*, not the capture path. Non-devs onboard in a lean no-repo mode (token + user-scope MCP + SessionEnd hook).

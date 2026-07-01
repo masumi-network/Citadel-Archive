@@ -1,6 +1,44 @@
 # Citadel Progress
 
-Last updated: 2026-06-30.
+Last updated: 2026-07-01.
+
+## 2026-07-01 — #69/#46/#50 fixes shipped + cross-department design
+
+**Fixes (PR #71 → main `2f13a80` → Railway deploy `06856836`; live, booted clean).**
+The three issues left open at the end of the read-side sprint got node-testable fixes:
+- **#69 — evolve loop-binding (root).** New `scripts/stage_loop.py` runs the whole
+  evolve chain on one shared `asyncio.Runner`, so cognee binds its async engine once
+  instead of failing every stage after the first (`got Future attached to a different
+  loop`). Pipeline mode deliberately keeps per-stage loops (no suppress-inline there).
+- **#46 — Linear resync timeout / empty mirrors.** `POST /api/linear-sync/run` now
+  writes add-only + ONE coalesced writer-lock-guarded cognify per batch (was ~200
+  per-issue cognifies that starved the request). Standalone `linear-sync` awaits its
+  cognify; failure reason surfaced; each issue tagged with its Linear team on Central.
+- **#50 — search latency.** `only_context=True` was **verified unsafe** for the CHUNKS
+  query type (flips the return to a joined string, breaks `_citadel` provenance, doesn't
+  remove the write-per-read) — not applied. Added opt-in `CITADEL_SEARCH_TIMING` to
+  attribute setup/recall/total per search. Raw ~6–9s (cognee `log_query`/`log_result`
+  history writes, no public off-switch) still unresolved — needs node profiling.
+
+Tests 607 pass / 1 pre-existing env fail. **Pending node verification** (these modes only
+reproduce live): #69 via the next hourly evolve pass (github_sync + linear_sync ok, no
+loop-binding); #46 via a force-resync (200 in budget, `mirror_count > 0`); #50 via
+`CITADEL_SEARCH_TIMING`. Pipeline mode confirmed unused (only cron = `Citadel-GitHub-Sync`).
+
+**Cross-department design grill (`/grill-with-docs`).** Locked the model for making Citadel
+a cross-department shared brain (marketing/design/HR/finance, not just dev) — see **ADR-0008**
+and the new `CONTEXT.md` terms **Contribution Type** and **Quarantine**. One shared **Central**
+(no department scopes); everything except a hard private/secret floor promotes via the LLM
+(two-layer filter); non-code knowledge reaches Central by **Contribution Type**; orphan
+content is **Quarantined** for admin keep/delete (never auto-deleted); non-devs capture through
+their agent (MCP + SessionEnd), not git. **Designed, not built (Release B).**
+
+**Release readiness / scale (20–30 users).** Deploy healthy; the current product (Release A:
+MCP search + capture) serves the team. Gates before onboarding: verify #69 (in progress),
+**rotate the 4 surfaced secrets** (admin key, GitHub PAT, OpenRouter key, Postgres password),
+and **profile #50** — search latency (~6–9s, ~16s at 5 concurrent) is the main scale risk;
+backpressure prevents collapse but it feels slow at peaks. Single Kuzu writer + single `/data`
+volume ⇒ scale up, not out.
 
 ## 2026-06-30 — Read-side hardening sprint (issues #25–#53) — SHIPPED
 
