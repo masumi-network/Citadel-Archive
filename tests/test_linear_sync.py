@@ -120,6 +120,7 @@ async def test_linear_sync_ingests_central_and_mirror(
         run_improve: bool = False,
         detect_conflicts: bool = True,
         tier: str = "full",
+        defer_cognify: bool = False,
     ) -> Any:
         ingests.append(
             {
@@ -128,6 +129,7 @@ async def test_linear_sync_ingests_central_and_mirror(
                 "operation": operation,
                 "tier": tier,
                 "data": data[:80],
+                "defer_cognify": defer_cognify,
             }
         )
 
@@ -140,6 +142,12 @@ async def test_linear_sync_ingests_central_and_mirror(
         return Outcome()
 
     monkeypatch.setattr("kb.linear_sync.LearningProcess.learn", fake_learn)
+    # #46: the resync must coalesce ONE cognify over the datasets it touched
+    # (Central + mirrors) instead of one-per-issue — capture it here.
+    scheduled: list[list[str]] = []
+    monkeypatch.setattr(
+        citadel.cognee, "schedule_cognify", lambda datasets: scheduled.append(list(datasets))
+    )
 
     syncer = LinearSyncer(
         citadel,
@@ -152,6 +160,10 @@ async def test_linear_sync_ingests_central_and_mirror(
     assert result["mirrored_count"] == 1
     assert any(item["dataset"] == "masumi-network" for item in ingests)
     assert any(item["dataset"] == seat_dataset("john") for item in ingests)
+    # Every write is add-only (deferred), and exactly one coalesced cognify is
+    # scheduled over Central + the seat mirror.
+    assert all(item["defer_cognify"] is True for item in ingests)
+    assert scheduled == [["masumi-network", seat_dataset("john")]]
     assert syncer.issues_for_scope(scope="my", seat_dataset_name=seat_dataset("john"))
     assert len(syncer.issues_for_scope(scope="org", seat_dataset_name=None)) == 2
 
@@ -182,6 +194,7 @@ async def test_linear_sync_writes_each_issue_to_central(
         return Outcome()
 
     monkeypatch.setattr("kb.linear_sync.LearningProcess.learn", fake_learn)
+    monkeypatch.setattr(citadel.cognee, "schedule_cognify", lambda datasets: None)
     syncer = LinearSyncer(citadel, client=FakeLinearClient(sample_issues))
 
     result = await syncer.run(force=True)
@@ -195,6 +208,10 @@ async def test_linear_sync_writes_each_issue_to_central(
     assert "linear:ENG-2" in id_tags
     # The full description reaches Central, not just the title.
     assert any("Implement workspace sync." in i["data"] for i in central_issue_writes)
+    # Each Central issue carries a structured team tag so issues are filterable by
+    # team (both sample issues are on team ENG).
+    team_tags = {tag for i in central_issue_writes for tag in i["tags"] if tag.startswith("team:")}
+    assert team_tags == {"team:ENG"}
 
 
 @pytest.mark.asyncio
@@ -236,6 +253,7 @@ async def test_linear_sync_auto_maps_assignee_by_member_email(
         return Outcome()
 
     monkeypatch.setattr("kb.linear_sync.LearningProcess.learn", fake_learn)
+    monkeypatch.setattr(citadel.cognee, "schedule_cognify", lambda datasets: None)
     syncer = LinearSyncer(
         citadel, client=FakeLinearClient(issues, users=members), access_store=store
     )
@@ -245,6 +263,81 @@ async def test_linear_sync_auto_maps_assignee_by_member_email(
     assert result["auto_mapped_assignees"] == 1
     assert result["mirrored_count"] == 1
     assert seat_dataset("john") in result["mirrors"]
+
+
+@pytest.mark.asyncio
+async def test_linear_sync_defers_coalesced_cognify_when_inline_suppressed(
+    tmp_path: Any, sample_issues: list[dict[str, Any]], monkeypatch: Any
+) -> None:
+    # #46/#47: in the evolve Phase-1 subprocess (CITADEL_SUPPRESS_INLINE_COGNIFY=true)
+    # the resync is add-only and the web cognifies in Phase 2 as the sole Kuzu
+    # writer — so the coalesced cognify must NOT be scheduled here.
+    monkeypatch.setenv("CITADEL_SUPPRESS_INLINE_COGNIFY", "true")
+    config = CitadelConfig(
+        linear_api_key="lin_test",
+        linear_sync_state_path=str(tmp_path / "s.json"),
+        access_store_path=str(tmp_path / "a.json"),
+    )
+    citadel = Citadel(config)
+
+    async def fake_learn(self: Any, data: str, **_: Any) -> Any:
+        class Outcome:
+            class ingest:
+                accepted = True
+
+        return Outcome()
+
+    monkeypatch.setattr("kb.linear_sync.LearningProcess.learn", fake_learn)
+    scheduled: list[list[str]] = []
+    monkeypatch.setattr(
+        citadel.cognee, "schedule_cognify", lambda datasets: scheduled.append(list(datasets))
+    )
+    syncer = LinearSyncer(citadel, client=FakeLinearClient(sample_issues))
+
+    result = await syncer.run(force=True)
+    assert result["ok"] is True
+    assert scheduled == []  # suppressed: Phase 2 cognifies, not the subprocess
+
+
+@pytest.mark.asyncio
+async def test_linear_sync_awaits_coalesced_cognify_when_requested(
+    tmp_path: Any, sample_issues: list[dict[str, Any]], monkeypatch: Any
+) -> None:
+    # #46/standalone: CITADEL_RUN_MODE=linear-sync passes await_cognify=True so a
+    # manual forced run AWAITS the single coalesced cognify (indexing the issues)
+    # instead of scheduling a task that asyncio.run cancels on teardown.
+    config = CitadelConfig(
+        linear_api_key="lin_test",
+        linear_sync_state_path=str(tmp_path / "s.json"),
+        access_store_path=str(tmp_path / "a.json"),
+    )
+    citadel = Citadel(config)
+
+    async def fake_learn(self: Any, data: str, **_: Any) -> Any:
+        class Outcome:
+            class ingest:
+                accepted = True
+
+        return Outcome()
+
+    monkeypatch.setattr("kb.linear_sync.LearningProcess.learn", fake_learn)
+    awaited: list[list[str]] = []
+    scheduled: list[list[str]] = []
+
+    async def fake_cognify(*, datasets: Any, force: bool = False) -> dict[str, Any]:
+        awaited.append(list(datasets))
+        return {"ok": True}
+
+    monkeypatch.setattr(citadel.cognee, "cognify", fake_cognify)
+    monkeypatch.setattr(
+        citadel.cognee, "schedule_cognify", lambda datasets: scheduled.append(list(datasets))
+    )
+    syncer = LinearSyncer(citadel, client=FakeLinearClient(sample_issues))
+
+    result = await syncer.run(force=True, await_cognify=True)
+    assert result["ok"] is True
+    assert awaited == [["masumi-network"]]  # awaited inline over Central (no mirrors)
+    assert scheduled == []  # awaited, not backgrounded
 
 
 @pytest.mark.asyncio

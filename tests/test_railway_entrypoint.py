@@ -431,3 +431,51 @@ def test_cognify_via_api_posts_to_endpoint(monkeypatch: Any) -> None:
 def test_cognify_via_api_fails_without_admin_key(monkeypatch: Any) -> None:
     monkeypatch.delenv("CITADEL_ADMIN_KEY", raising=False)
     assert run_railway._cognify_via_api("http://localhost:8080", force=False) == 1
+
+
+# --- Evolve single-loop restructure (#69) ----------------------------------
+
+
+def test_stage_loop_shares_one_event_loop() -> None:
+    # #69: cognee binds its async engine to the first loop, so every cognee-touching
+    # stage body must run on ONE shared loop. run_async provides it; outside a shared
+    # loop it falls back to asyncio.run (a fresh loop per call, the old behaviour).
+    import asyncio
+
+    from scripts.stage_loop import run_async, stage_loop
+
+    async def running_loop() -> asyncio.AbstractEventLoop:
+        return asyncio.get_running_loop()
+
+    with stage_loop():
+        first = run_async(running_loop())
+        second = run_async(running_loop())
+    assert first is second  # both stage bodies ran on the SAME loop object
+
+    # With no shared loop active, run_async still works (asyncio.run fallback).
+    assert run_async(running_loop()) is not None
+
+
+def test_evolve_runs_cognee_stage_bodies_on_one_loop(monkeypatch: Any) -> None:
+    # #69 (integration): the whole evolve chain shares one loop, so two stage bodies
+    # dispatched through run_async observe the SAME running loop — the fix that stops
+    # "got Future attached to a different loop" on every cognee stage after the first.
+    import asyncio
+
+    _clear_evolve_env(monkeypatch)
+    seen: list[int] = []
+
+    async def _record() -> int:
+        seen.append(id(asyncio.get_running_loop()))
+        return 0
+
+    monkeypatch.setattr(run_railway, "_github_sync_stage", lambda: 0)
+    monkeypatch.setattr(run_railway, "_repo_content_sync_stage", lambda: run_railway.run_async(_record()))
+    monkeypatch.setattr(run_railway, "_self_improve_stage", lambda: 0)
+    monkeypatch.setattr(run_railway, "_promotion_stage", lambda: 0)
+    monkeypatch.setattr(run_railway, "_linear_sync_stage", lambda: run_railway.run_async(_record()))
+    monkeypatch.setattr(run_railway, "_cognify_stage", lambda: 0)
+
+    assert run_railway.run("evolve") == 0
+    assert len(seen) == 2
+    assert seen[0] == seen[1]  # repo_content_sync and linear_sync shared one loop

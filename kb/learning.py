@@ -83,6 +83,7 @@ class LearningProcess:
         run_improve: bool = False,
         detect_conflicts: bool = True,
         tier: Literal["full", "light"] = "full",
+        defer_cognify: bool = False,
     ) -> LearningOutcome:
         """Filter, optionally enrich/chunk, ingest, record mesh activity,
         detect conflicts, and optionally run improvement for one piece of
@@ -128,6 +129,7 @@ class LearningProcess:
                     dataset=dataset,
                     tags=chunk_tags,
                     session_id=session_id,
+                    defer_cognify=defer_cognify,
                 )
             except Exception as exc:
                 if self.mesh:

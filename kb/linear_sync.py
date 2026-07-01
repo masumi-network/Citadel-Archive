@@ -17,6 +17,7 @@ from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 from kb.access import CENTRAL_DATASET, SEAT_DATASET_PREFIX, AccessStore, seat_dataset
+from kb.cognee_client import _suppress_inline_cognify
 from kb.learning import LearningProcess
 from kb.service import Citadel
 
@@ -320,7 +321,7 @@ class LinearSyncer:
             ]
         return []
 
-    async def run(self, *, force: bool = False) -> dict[str, Any]:
+    async def run(self, *, force: bool = False, await_cognify: bool = False) -> dict[str, Any]:
         if not self.config.linear_api_key:
             return {"ok": False, "enabled": False, "reason": "linear_api_key_missing"}
 
@@ -376,6 +377,12 @@ class LinearSyncer:
         central_dataset = self.config.linear_sync_dataset or CENTRAL_DATASET
         session_id = self.config.linear_sync_session
 
+        # Coalesce cognify (#46/#52): a full resync writes the digest + ~200 issues +
+        # seat mirrors. Each write used to schedule its OWN background cognify, so
+        # the on-demand POST /api/linear-sync/run fired ~200 Kuzu-writing cognifies
+        # that stormed the writer lock and starved the request into a timeout. Write
+        # ADD-ONLY here (defer_cognify=True) and schedule ONE cognify over every
+        # dataset touched after the loop instead.
         digest = format_workspace_digest(issues)
         central_outcome = await learning.learn(
             digest,
@@ -385,6 +392,7 @@ class LinearSyncer:
             operation="linear_sync",
             run_improve=self.config.linear_sync_run_improve,
             tier="full",
+            defer_cognify=True,
         )
 
         mirrored = 0
@@ -400,12 +408,17 @@ class LinearSyncer:
                     "linear-issue",
                     "linear-sync",
                     f"linear:{issue.identifier}",
-                    issue.team_key or "linear",
+                    # Team as a structured, filterable metadata tag so Central issues
+                    # are discoverable by team (e.g. "what is the marketing team
+                    # working on?"). The human team NAME also rides in the note body
+                    # (format_issue_note) for semantic search.
+                    f"team:{issue.team_key}" if issue.team_key else "linear",
                 ],
                 session_id=session_id,
                 operation="linear_sync",
                 run_improve=False,
                 tier="light",
+                defer_cognify=True,
             )
             mirror_dataset = resolve_mirror_dataset(issue, email_index, linear_user_map=user_map)
             if not mirror_dataset:
@@ -418,15 +431,37 @@ class LinearSyncer:
                     "linear-assignee",
                     "linear-issue",
                     f"linear:{issue.identifier}",
-                    issue.team_key or "linear",
+                    f"team:{issue.team_key}" if issue.team_key else "linear",
                 ],
                 session_id=f"linear-{mirror_dataset.removeprefix(SEAT_DATASET_PREFIX)}",
                 operation="linear_mirror",
                 run_improve=False,
                 tier="light",
+                defer_cognify=True,
             )
             mirrors.setdefault(mirror_dataset, []).append(issue.identifier)
             mirrored += 1
+
+        # One coalesced cognify over Central + every seat mirror we wrote — unless
+        # inline cognify is suppressed (the evolve Phase-1 subprocess is add-only and
+        # the web cognifies in Phase 2 as the sole Kuzu writer, #47).
+        if not _suppress_inline_cognify():
+            cognify_datasets = list(dict.fromkeys([central_dataset, *mirrors.keys()]))
+            if await_cognify:
+                # Standalone CITADEL_RUN_MODE=linear-sync: AWAIT the single coalesced
+                # cognify so a manual forced run actually indexes the issues, instead
+                # of scheduling a task that asyncio.run cancels on teardown. Best-effort
+                # — the writes already landed in Postgres, so a cognify failure (e.g. a
+                # cross-process Kuzu lock if the web is writing, #47) is logged, not
+                # raised; the next evolve pass folds the data into the graph.
+                try:
+                    await self.citadel.cognee.cognify(datasets=cognify_datasets)
+                except Exception:  # noqa: BLE001 - writes succeeded; cognify is a follow-on
+                    logger.exception("Linear sync coalesced cognify failed")
+            else:
+                # On-demand endpoint / evolve: background it so the request returns
+                # without waiting on the graph write.
+                self.citadel.cognee.schedule_cognify(cognify_datasets)
 
         payload = {
             "version": STATE_VERSION,

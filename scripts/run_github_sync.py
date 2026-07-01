@@ -7,7 +7,6 @@ non-zero when the scheduler should mark the run as failed.
 
 from __future__ import annotations
 
-import asyncio
 import json
 import logging
 import os
@@ -15,6 +14,8 @@ import sys
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
+
+from scripts.stage_loop import run_async
 
 logging.basicConfig(
     level=logging.INFO,
@@ -266,7 +267,10 @@ def run() -> int:
             return 1
     else:
         logger.info("Starting scheduled GitHub sync in-process")
-        result = asyncio.run(
+        # run_async, not asyncio.run: in the evolve chain this shares the one stage
+        # loop so cognee's cached engine is not bound to a throwaway loop (#69).
+        # Standalone (no shared loop) it falls back to asyncio.run.
+        result = run_async(
             _run_local(
                 force=force,
                 dry_run=dry_run,

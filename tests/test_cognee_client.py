@@ -386,6 +386,42 @@ async def test_remember_schedules_lock_guarded_background_cognify(monkeypatch: A
 
 
 @pytest.mark.asyncio
+async def test_schedule_cognify_runs_one_cognify_over_all_datasets(monkeypatch: Any) -> None:
+    # #46/#52: the coalesced cognify is ONE background task over every dataset the
+    # bulk write touched (de-duplicated), not one-per-write.
+    import asyncio
+
+    import kb.cognee_client as cc
+
+    monkeypatch.setenv("LLM_API_KEY", "k")
+    cognified: list[list[str]] = []
+
+    async def run_startup_migrations() -> None:
+        return None
+
+    async def cognify(*, datasets: Any, incremental_loading: bool) -> dict[str, Any]:
+        cognified.append(list(datasets))
+        return {"ok": True}
+
+    monkeypatch.setitem(
+        sys.modules,
+        "cognee",
+        SimpleNamespace(run_startup_migrations=run_startup_migrations, cognify=cognify),
+    )
+    client = CogneePublicClient()
+
+    client.schedule_cognify(["central", "seat:a", "central"])  # duplicate central
+    await asyncio.gather(*list(cc._BACKGROUND_COGNIFY_TASKS), return_exceptions=True)
+    assert cognified == [["central", "seat:a"]]  # one cognify, de-duplicated
+
+    # No datasets → no task scheduled.
+    cognified.clear()
+    client.schedule_cognify([])
+    await asyncio.gather(*list(cc._BACKGROUND_COGNIFY_TASKS), return_exceptions=True)
+    assert cognified == []
+
+
+@pytest.mark.asyncio
 async def test_cognee_public_client_uses_chunk_search_by_default(monkeypatch: Any) -> None:
     received: dict[str, Any] = {}
 
@@ -562,6 +598,75 @@ async def test_cognee_public_client_cognify_wraps_cognee_cognify(monkeypatch: An
 
     assert result == {"cognified": True}
     assert received["kwargs"] == {"datasets": ["masumi-network"], "incremental_loading": True}
+
+
+@pytest.mark.asyncio
+async def test_recall_does_not_pass_only_context(monkeypatch: Any) -> None:
+    # #50: cognee's only_context=True flips the CHUNKS result from the list-of-dicts
+    # the callers rely on (result_provenance/_citadel envelope, dedup, drill-down) to
+    # a single newline-joined string, and does NOT suppress the per-read history write
+    # for CHUNKS. So it must never be passed on the read path — the result shape stays.
+    received: dict[str, Any] = {}
+
+    async def run_startup_migrations() -> None:
+        return None
+
+    async def search(**kwargs: Any) -> list[dict[str, Any]]:
+        received["search"] = kwargs
+        return [{"ok": True}]
+
+    monkeypatch.setitem(
+        sys.modules,
+        "cognee",
+        SimpleNamespace(
+            SearchType=SimpleNamespace(CHUNKS="chunks"),
+            run_startup_migrations=run_startup_migrations,
+            search=search,
+        ),
+    )
+    client = CogneePublicClient()
+
+    result = await client.recall("note", dataset="notes")
+
+    assert result == [{"ok": True}]  # list-of-dicts shape preserved
+    assert "only_context" not in received["search"]
+
+
+@pytest.mark.asyncio
+async def test_search_timing_logs_only_when_enabled(monkeypatch: Any, caplog: Any) -> None:
+    # #50: an opt-in, lightweight per-search wall-time line (setup/recall/total) so the
+    # residual node latency can be attributed later. Off by default, INFO when enabled.
+    import logging
+
+    async def run_startup_migrations() -> None:
+        return None
+
+    async def search(**kwargs: Any) -> list[dict[str, Any]]:
+        return [{"ok": True}]
+
+    monkeypatch.setitem(
+        sys.modules,
+        "cognee",
+        SimpleNamespace(
+            SearchType=SimpleNamespace(CHUNKS="chunks"),
+            run_startup_migrations=run_startup_migrations,
+            search=search,
+        ),
+    )
+    client = CogneePublicClient()
+
+    monkeypatch.delenv("CITADEL_SEARCH_TIMING", raising=False)
+    with caplog.at_level(logging.INFO, logger="kb.cognee_client"):
+        await client.recall("note", dataset="notes")
+    assert "search timing:" not in caplog.text  # silent by default
+
+    caplog.clear()
+    monkeypatch.setenv("CITADEL_SEARCH_TIMING", "true")
+    with caplog.at_level(logging.INFO, logger="kb.cognee_client"):
+        await client.recall("note", dataset="notes", top_k=7)
+    assert "search timing:" in caplog.text
+    assert "query_type=chunks" in caplog.text
+    assert "top_k=7" in caplog.text
 
 
 def test_cognee_public_client_derives_db_env_from_database_url(monkeypatch: Any) -> None:

@@ -61,6 +61,7 @@ class Citadel:
         dataset: str | None = None,
         tags: Iterable[str] | None = None,
         session_id: str | None = None,
+        defer_cognify: bool = False,
     ) -> IngestResult:
         target_dataset = dataset or self.config.default_dataset
         merged_tags = merge_tags(self.config.default_tags, tags)
@@ -86,6 +87,7 @@ class Citadel:
             dataset_name=target_dataset,
             session_id=session_id,
             tags=merged_tags,
+            defer_cognify=defer_cognify,
         )
         return IngestResult(True, "accepted", target_dataset, merged_tags, result)
 
