@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+from time import perf_counter
 from typing import Any, Protocol
 from urllib.parse import unquote, urlparse
 
@@ -43,6 +44,24 @@ def _session_recall_enabled() -> bool:
     }
 
 
+def _search_timing_enabled() -> bool:
+    """Whether to log a per-search wall-time breakdown (#50, node profiling).
+
+    Off by default; set ``CITADEL_SEARCH_TIMING=true`` to emit setup vs recall vs
+    total elapsed ms per search at INFO so the ~6-9s node latency can be attributed
+    on the live node later. Embedding + vector recall + cognee's per-read history
+    writes all happen INSIDE the single ``cognee.search`` call, so they are lumped
+    into the ``recall`` bucket — splitting them further needs cognee-internal
+    instrumentation, not something the client boundary can see.
+    """
+    return os.getenv("CITADEL_SEARCH_TIMING", "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+
 class CogneeGateway(Protocol):
     async def remember(
         self,
@@ -51,7 +70,11 @@ class CogneeGateway(Protocol):
         dataset_name: str,
         session_id: str | None = None,
         tags: tuple[str, ...] = (),
+        defer_cognify: bool = False,
     ) -> Any:
+        ...
+
+    def schedule_cognify(self, datasets: list[str]) -> None:
         ...
 
     async def recall(
@@ -226,6 +249,7 @@ class CogneePublicClient:
         dataset_name: str,
         session_id: str | None = None,
         tags: tuple[str, ...] = (),
+        defer_cognify: bool = False,
     ) -> Any:
         self._prepare_cognee_environment()
         import cognee
@@ -263,6 +287,13 @@ class CogneePublicClient:
         #    in-process ingests and the evolve scheduler never collide.
         if _suppress_inline_cognify():
             return {"added": added, "cognify": "suppressed"}
+        if defer_cognify:
+            # The caller (e.g. a bulk Linear resync) coalesces ONE cognify over every
+            # dataset it touched at the end, instead of scheduling one-per-write — a
+            # 200-issue resync otherwise fires 200 background cognifies that storm the
+            # writer lock and starve the request (#46/#52). Add-only here; the caller
+            # calls schedule_cognify() once when the batch is done.
+            return {"added": added, "cognify": "deferred"}
         self._schedule_background_cognify(dataset_name)
         return {"added": added, "background_cognify": True}
 
@@ -273,6 +304,20 @@ class CogneePublicClient:
         acquires our writer lock (via cognify()) — serializing the Kuzu write and
         surfacing failures instead of swallowing them (#47/#56).
         """
+        self.schedule_cognify([dataset_name])
+
+    def schedule_cognify(self, datasets: list[str]) -> None:
+        """Schedule ONE tracked, writer-lock-guarded background cognify.
+
+        Lets a bulk writer (the Linear resync) coalesce a single cognify over every
+        dataset it touched instead of one-per-write, so the request is not starved by
+        a storm of per-issue cognifies (#46/#52). The single cognify still serializes
+        on the writer lock (single Kuzu writer, #47) and logs — never crashes — on
+        failure. No-op with no running loop (sync caller) or no datasets.
+        """
+        wanted = list(dict.fromkeys(datasets))  # de-dup, preserve order
+        if not wanted:
+            return
         try:
             loop = asyncio.get_running_loop()
         except RuntimeError:
@@ -280,9 +325,9 @@ class CogneePublicClient:
 
         async def _run() -> None:
             try:
-                await self.cognify(datasets=[dataset_name])
+                await self.cognify(datasets=wanted)
             except Exception:  # noqa: BLE001 - background task: log, never crash the loop
-                logger.exception("background cognify for dataset %s failed", dataset_name)
+                logger.exception("background cognify for datasets %s failed", wanted)
 
         task = loop.create_task(_run())
         _BACKGROUND_COGNIFY_TASKS.add(task)
@@ -296,10 +341,13 @@ class CogneePublicClient:
         session_id: str | None = None,
         top_k: int = 10,
     ) -> list[Any]:
+        timing = _search_timing_enabled()
+        t_start = perf_counter() if timing else 0.0
         self._prepare_cognee_environment()
         import cognee
 
         await self._ensure_cognee_ready(cognee)
+        t_ready = perf_counter() if timing else 0.0
         # The per-session QA cache is the deprecated pre-#54 path and now serves only
         # stale "[DataItem]" scaffolds, so it is OFF by default — durable recall goes
         # straight to the chunk/vector store (#15/#52). Re-enable per-session reads
@@ -322,7 +370,7 @@ class CogneePublicClient:
         query_type = self._configured_search_type(cognee)
         if query_type is None and hasattr(cognee, "recall"):
             try:
-                return await cognee.recall(
+                results = await cognee.recall(
                     query,
                     datasets=[dataset],
                     session_id=session_id,
@@ -330,9 +378,24 @@ class CogneePublicClient:
                 )
             except Exception as exc:
                 if self._is_no_data_error(exc):
-                    return []
-                raise
+                    results = []
+                else:
+                    raise
+            if timing:
+                self._log_search_timing(
+                    t_start, t_ready, dataset=dataset, top_k=top_k, query_type=None
+                )
+            return results
 
+        # NOTE (#50): we deliberately do NOT pass cognee's only_context=True here.
+        # For the CHUNKS query_type this node uses, only_context flips the return
+        # value from the list-of-chunk-payload dicts the callers rely on
+        # (result_provenance/_citadel envelope, dedup, drill-down) to a single
+        # newline-joined string — a real shape change (verified against cognee 1.2.2
+        # source). It also would NOT remove the write-per-read: for CHUNKS cognee
+        # persists no session QA at all, and the per-search writes that remain
+        # (log_query/log_result history) are unconditional and not gated by
+        # only_context. See the timing instrument to attribute the residual latency.
         search_kwargs = {
             "query_text": query,
             "datasets": [dataset],
@@ -342,11 +405,43 @@ class CogneePublicClient:
         if query_type is not None:
             search_kwargs["query_type"] = query_type
         try:
-            return await cognee.search(**search_kwargs)
+            results = await cognee.search(**search_kwargs)
         except Exception as exc:
             if self._is_no_data_error(exc):
-                return []
-            raise
+                results = []
+            else:
+                raise
+        if timing:
+            self._log_search_timing(
+                t_start, t_ready, dataset=dataset, top_k=top_k, query_type=query_type
+            )
+        return results
+
+    def _log_search_timing(
+        self,
+        t_start: float,
+        t_ready: float,
+        *,
+        dataset: str,
+        top_k: int,
+        query_type: Any,
+    ) -> None:
+        """Emit one setup/recall/total wall-time line for a search (#50).
+
+        ``setup`` = env prep + cognee import + startup migrations; ``recall`` = the
+        single cognee search/recall call (embedding + vector recall + cognee's
+        per-read history writes, not separable from here); ``total`` = both.
+        """
+        now = perf_counter()
+        logger.info(
+            "search timing: setup=%.1fms recall=%.1fms total=%.1fms dataset=%s top_k=%s query_type=%s",
+            (t_ready - t_start) * 1000.0,
+            (now - t_ready) * 1000.0,
+            (now - t_start) * 1000.0,
+            dataset,
+            top_k,
+            getattr(query_type, "name", query_type),
+        )
 
     async def graph_data(self) -> tuple[list[Any], list[Any]]:
         """Return raw nodes and edges from Cognee's graph engine.
