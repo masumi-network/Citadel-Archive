@@ -17,6 +17,7 @@ from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 from kb.access import CENTRAL_DATASET, SEAT_DATASET_PREFIX, AccessStore, seat_dataset
+from kb.cognee_client import _suppress_inline_cognify
 from kb.learning import LearningProcess
 from kb.service import Citadel
 
@@ -376,6 +377,12 @@ class LinearSyncer:
         central_dataset = self.config.linear_sync_dataset or CENTRAL_DATASET
         session_id = self.config.linear_sync_session
 
+        # Coalesce cognify (#46/#52): a full resync writes the digest + ~200 issues +
+        # seat mirrors. Each write used to schedule its OWN background cognify, so
+        # the on-demand POST /api/linear-sync/run fired ~200 Kuzu-writing cognifies
+        # that stormed the writer lock and starved the request into a timeout. Write
+        # ADD-ONLY here (defer_cognify=True) and schedule ONE cognify over every
+        # dataset touched after the loop instead.
         digest = format_workspace_digest(issues)
         central_outcome = await learning.learn(
             digest,
@@ -385,6 +392,7 @@ class LinearSyncer:
             operation="linear_sync",
             run_improve=self.config.linear_sync_run_improve,
             tier="full",
+            defer_cognify=True,
         )
 
         mirrored = 0
@@ -406,6 +414,7 @@ class LinearSyncer:
                 operation="linear_sync",
                 run_improve=False,
                 tier="light",
+                defer_cognify=True,
             )
             mirror_dataset = resolve_mirror_dataset(issue, email_index, linear_user_map=user_map)
             if not mirror_dataset:
@@ -424,9 +433,17 @@ class LinearSyncer:
                 operation="linear_mirror",
                 run_improve=False,
                 tier="light",
+                defer_cognify=True,
             )
             mirrors.setdefault(mirror_dataset, []).append(issue.identifier)
             mirrored += 1
+
+        # One coalesced cognify over Central + every seat mirror we wrote — unless
+        # inline cognify is suppressed (the evolve Phase-1 subprocess is add-only and
+        # the web cognifies in Phase 2 as the sole Kuzu writer, #47). Backgrounded, so
+        # the request returns without waiting on the graph write.
+        if not _suppress_inline_cognify():
+            self.citadel.cognee.schedule_cognify([central_dataset, *mirrors.keys()])
 
         payload = {
             "version": STATE_VERSION,
