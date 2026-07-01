@@ -487,10 +487,13 @@ def run(mode: str | None = None) -> int:
         async def _run() -> int:
             citadel = Citadel.from_env()
             access_store = AccessStore(citadel.config.access_store_path)
+            # Standalone forced sync: AWAIT the coalesced cognify so a manual run
+            # actually indexes the issues (the scheduled background cognify would be
+            # cancelled when this asyncio.run loop tears down at process exit) (#46).
             result = await LinearSyncer(
                 citadel,
                 access_store=access_store,
-            ).run(force=True)
+            ).run(force=True, await_cognify=True)
             if not result.get("ok"):
                 logger.error(
                     "Linear sync failed: reason=%s error=%s",
