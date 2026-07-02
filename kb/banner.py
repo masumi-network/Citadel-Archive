@@ -56,13 +56,20 @@ def _lerp_rgb(start: tuple[int, int, int], end: tuple[int, int, int], t: float) 
     return tuple(round(s + (e - s) * t) for s, e in zip(start, end))
 
 
-def _gradient_line(line: str, *, width: int) -> str:
+def _ansi256(rgb: tuple[int, int, int]) -> int:
+    """Nearest xterm-256 color-cube index for an RGB triple."""
+    r, g, b = (round(c / 255 * 5) for c in rgb)
+    return 16 + 36 * r + 6 * g + b
+
+
+def _gradient_line(line: str, *, width: int, truecolor: bool) -> str:
     """Paint one wordmark row with the brand gradient, column by column."""
     out: list[str] = [_ANSI["bold"]]
     for column, char in enumerate(line):
         if char != " ":
-            r, g, b = _lerp_rgb(_BRAND_MAGENTA, _BRAND_CYAN, column / max(width - 1, 1))
-            out.append(f"\033[38;2;{r};{g};{b}m")
+            rgb = _lerp_rgb(_BRAND_MAGENTA, _BRAND_CYAN, column / max(width - 1, 1))
+            code = f"38;2;{rgb[0]};{rgb[1]};{rgb[2]}" if truecolor else f"38;5;{_ansi256(rgb)}"
+            out.append(f"\033[{code}m")
         out.append(char)
     out.append(_ANSI["reset"])
     return "".join(out)
@@ -127,12 +134,15 @@ def mark(ok: bool, *, enable: bool = True) -> str:
 
 def banner_large(*, color: bool = True) -> str:
     """The big hero: the CITADEL wordmark in brand colors — a magenta→cyan
-    gradient on truecolor terminals, bold cyan elsewhere, plain when piped."""
+    gradient (24-bit, or the xterm-256 approximation), bold cyan on basic
+    terminals, plain when piped."""
     width = max(len(line) for line in _WORDMARK)
+    truecolor = supports_truecolor()
+    gradient = truecolor or "256color" in os.getenv("TERM", "")
     out: list[str] = []
     for line in _WORDMARK:
-        if color and supports_truecolor():
-            out.append(_HERO_INDENT + _gradient_line(line, width=width))
+        if color and gradient:
+            out.append(_HERO_INDENT + _gradient_line(line, width=width, truecolor=truecolor))
         else:
             out.append(_HERO_INDENT + paint(line, "bold", "cyan", enable=color))
     return "\n".join(out)

@@ -12,8 +12,13 @@ def test_banner_large_is_the_brand_wordmark(monkeypatch) -> None:
     assert len(plain.splitlines()) == 5  # just the wordmark, nothing else
 
     monkeypatch.delenv("COLORTERM", raising=False)
+    monkeypatch.setenv("TERM", "xterm")
     basic = banner_large(color=True)
     assert "\033[1m" in basic and "\033[36m" in basic  # bold cyan fallback
+
+    monkeypatch.setenv("TERM", "xterm-256color")
+    approx = banner_large(color=True)
+    assert "\033[38;5;" in approx  # 256-color gradient approximation
 
     monkeypatch.setenv("COLORTERM", "truecolor")
     gradient = banner_large(color=True)
