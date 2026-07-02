@@ -4,6 +4,44 @@ All notable changes to `citadel-archive` are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses
 [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+
+- **`citadel token set [TOKEN]`** — set/rotate the seat token this machine uses
+  without re-running onboard: verifies the token against the Node first (a
+  rejected token writes **nothing**; `--skip-verify` overrides), then updates
+  the shell rc in place and reminds you to `source` it.
+- **`citadel update`** (alias `upgrade`) — self-update that answers pipx's
+  "already seems to be installed" dead end: pipx installs run
+  `pipx upgrade --pip-args=--no-cache-dir`, editable/source checkouts are left
+  alone (told to `git pull`), anything else gets printed instructions.
+
+- **Checkbox tool selection on onboard** — the coding-tools step is one
+  arrow-key multi-select (↑/↓ · space · enter; numeric fallback off-TTY)
+  instead of a Y/n question per tool, with the spinner while the selection is
+  wired.
+- **Stale-shell auth hint** — when `ingest`/`search`/`capture` get a 401/403
+  and the shell rc holds a different token than the env, the error now says
+  the actual fix: `source ~/.zshrc`.
+
+### Changed
+
+- **`citadel onboard` token flow** — an already-configured token (env or shell
+  rc, detected even in a fresh shell) is shown masked with a keep-or-replace
+  prompt instead of being silently reused; verification + the identity panel
+  moved to the *front* of the run; a Node-rejected token offers an immediate
+  re-paste loop instead of "saved anyway" after all the other prompts.
+- **Capture-roots wizard defaults** — the dir you ran `citadel` from (repo
+  toplevel on onboard, cwd on setup) is offered as an explicit press-Enter
+  yes/no (declinable), and a root like `/masumi` that doesn't exist offers the
+  home-relative dir that does (`~/masumi`) instead of recording a dead root.
+- **Brand-color hero** — the opening art is now just the CITADEL wordmark in
+  brand colors: a Masumi-magenta → cyan gradient on truecolor terminals, bold
+  cyan elsewhere. The compact castle banner (the mark) stays as the in-command
+  header and gains an arched gate; the home screen falls back to it on narrow
+  terminals and shows the installed version.
+
 ## [0.2.1] — 2026-06-29
 
 ### Added

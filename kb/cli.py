@@ -10,9 +10,11 @@ import json
 import os
 import re
 import shutil
+import subprocess
 import sys
 import threading
 import urllib.error
+import urllib.parse
 from collections.abc import Awaitable, Callable
 from datetime import datetime, timezone
 from importlib.metadata import PackageNotFoundError
@@ -46,8 +48,9 @@ from kb.onboard import (
     mask_token,
     merge_claude_settings,
     merge_mcp_config,
+    read_token_from_rc,
 )
-from kb.banner import SKIP, banner, banner_large, mark, paint, supports_color
+from kb.banner import HERO_WIDTH, SKIP, banner, banner_large, mark, paint, supports_color
 from kb.access_client import (
     AccessClientError,
     create_seat,
@@ -149,6 +152,47 @@ def _needs_server(
     return wrapper
 
 
+def _prompt(text: str) -> str:
+    """input() that treats Ctrl-D (EOF) as an empty answer, not a traceback."""
+    try:
+        return input(text)
+    except EOFError:
+        print()
+        return ""
+
+
+def _stale_env_hint(status_code: int) -> str | None:
+    """The fix-it line for an auth-rejected command run from a stale shell.
+
+    After `citadel onboard`/`token set` rotate the token in the shell rc, the
+    *current* shell still exports the old value — and env is what commands
+    send. When the Node rejects it (401/403) and the rc disagrees with env,
+    the fix is `source <rc>`, so say exactly that instead of a bare 401.
+    """
+    if status_code not in (401, 403):
+        return None
+    rc_path = detect_shell_rc()
+    rc_token = read_token_from_rc(rc_path)
+    env_token = (os.environ.get(TOKEN_ENV) or "").strip()
+    if "$" in rc_token:
+        # Variable indirection (export TOKEN="$OTHER") — we can't evaluate it,
+        # so a textual mismatch proves nothing; stay quiet rather than send
+        # the user on a `source` loop that can never fix a real 401.
+        return None
+    if rc_token and rc_token != env_token:
+        return (
+            f"this shell's {TOKEN_ENV} is out of date with {rc_path} — "
+            f"run `source {rc_path}` (or open a new shell) and retry."
+        )
+    return None
+
+
+def _print_auth_hint(command: str, status_code: int) -> None:
+    hint = _stale_env_hint(status_code)
+    if hint:
+        print(f"citadel {command}: hint: {hint}", file=sys.stderr)
+
+
 def _result_exit(value: Any) -> int:
     """Exit 1 when a result payload carries ``ok: False``; else 0.
 
@@ -187,6 +231,7 @@ async def _ingest(args: argparse.Namespace) -> int:
     except urllib.error.HTTPError as exc:
         detail = exc.read().decode(errors="replace")[:200] if exc.fp else exc.reason
         print(f"citadel ingest: HTTP {exc.code} {detail}", file=sys.stderr)
+        _print_auth_hint("ingest", exc.code)
         return 1
     except TimeoutError:
         print(
@@ -293,6 +338,7 @@ async def _search(args: argparse.Namespace) -> int:
     except urllib.error.HTTPError as exc:
         detail = exc.read().decode(errors="replace")[:200] if exc.fp else exc.reason
         print(f"citadel search: HTTP {exc.code} {detail}", file=sys.stderr)
+        _print_auth_hint("search", exc.code)
         return 1
     except (urllib.error.URLError, OSError, ValueError, http.client.HTTPException) as exc:
         print(f"citadel search: {exc}", file=sys.stderr)
@@ -412,24 +458,51 @@ def _parse_root_arg(raw: str) -> tuple[str, tuple[str, ...]]:
     return path, tags
 
 
-def _wizard_roots(config: CaptureConfig) -> CaptureConfig:
+def _ask_root_tags() -> tuple[str, ...]:
     print(
-        "\nAdd Approved Capture Roots — folders auto-captured to your Node.\n"
-        "Leave the path empty to finish."
+        f"  Tags — presets: {', '.join(PRESET_ROOT_TAGS)}; "
+        f"'personal' never promotes. Default: {DEFAULT_ROOT_TAG}."
     )
+    tags_raw = _prompt("  Tags (comma-separated): ").strip()
+    return tuple(tags_raw.split(",")) if tags_raw else (DEFAULT_ROOT_TAG,)
+
+
+def _wizard_roots(config: CaptureConfig, default_root: str | None = None) -> CaptureConfig:
+    print("\nAdd Approved Capture Roots — folders auto-captured to your Node.")
+    # The dir the user ran `citadel` from is offered as an explicit yes/no —
+    # Enter accepts, `n` declines. A separate question (not a prefilled path
+    # prompt) so declining is always possible and "empty to finish" below
+    # keeps meaning finish.
+    default = normalize_path(default_root) if default_root else None
+    if default and any(root.path == default for root in config.roots):
+        default = None  # already approved — nothing to offer
+    if default:
+        answer = _prompt(f"  Add {default} (this folder)? [Y/n]: ").strip().lower()
+        if answer in ("", "y", "yes"):
+            tags = _ask_root_tags()
+            config = config.with_root(default, tags)
+            print(f"  + {default}  [{', '.join(normalize_tags(tags))}]")
     while True:
-        raw = input("  Root path: ").strip()
+        raw = _prompt("  Root path (empty to finish): ").strip()
         if not raw:
             break
         normalized = normalize_path(raw)
         if not Path(normalized).exists():
-            print(f"  ! {normalized} does not exist yet (added anyway)")
-        print(
-            f"  Tags — presets: {', '.join(PRESET_ROOT_TAGS)}; "
-            f"'personal' never promotes. Default: {DEFAULT_ROOT_TAG}."
-        )
-        tags_raw = input("  Tags (comma-separated): ").strip()
-        tags = tuple(tags_raw.split(",")) if tags_raw else (DEFAULT_ROOT_TAG,)
+            # A leading-slash typo for a home dir ("/masumi" for ~/masumi) is the
+            # common miss — offer the home-relative match instead of silently
+            # recording a root that will never capture anything.
+            guess = Path.home() / raw.lstrip("/") if raw.startswith("/") else None
+            if guess is not None and guess.exists():
+                answer = _prompt(
+                    f"  ! {normalized} does not exist — did you mean {guess}? [Y/n]: "
+                ).strip().lower()
+                if answer in ("", "y", "yes"):
+                    normalized = normalize_path(str(guess))
+                else:
+                    print(f"  ! keeping {normalized} (does not exist yet)")
+            else:
+                print(f"  ! {normalized} does not exist yet (added anyway)")
+        tags = _ask_root_tags()
         config = config.with_root(normalized, tags)
         print(f"  + {normalized}  [{', '.join(normalize_tags(tags))}]")
     return config
@@ -474,7 +547,7 @@ async def _setup(args: argparse.Namespace) -> int:
             path, tags = _parse_root_arg(raw)
             config = config.with_root(path, tags or (DEFAULT_ROOT_TAG,))
     elif interactive:
-        config = _wizard_roots(config)
+        config = _wizard_roots(config, default_root=str(Path.cwd()))
 
     written = save_capture_config(
         config, path=config_path, updated_at=datetime.now(timezone.utc).isoformat()
@@ -530,6 +603,7 @@ async def _capture(args: argparse.Namespace) -> int:
     as_json = getattr(args, "json", False)
     results: list[dict[str, Any]] = []
     failures = 0
+    auth_fail_code = 0
     for root, payload in payloads:
         try:
             response = post_capture(config.node_url, token, payload)
@@ -539,6 +613,7 @@ async def _capture(args: argparse.Namespace) -> int:
                 print(f"OK  {root.path} ({status})")
         except urllib.error.HTTPError as exc:
             failures += 1
+            auth_fail_code = auth_fail_code or exc.code
             detail = exc.read().decode(errors="replace")[:200]
             results.append({"root": root.path, "ok": False, "error": f"HTTP {exc.code} {detail}"})
             if not as_json:
@@ -549,6 +624,8 @@ async def _capture(args: argparse.Namespace) -> int:
             results.append({"root": root.path, "ok": False, "error": str(exc)})
             if not as_json:
                 print(f"FAIL {root.path}: {exc}", file=sys.stderr)
+    if not as_json and auth_fail_code:
+        _print_auth_hint("capture", auth_fail_code)  # once, not per failing root
     if as_json:
         _print_json({"ok": failures == 0, "results": results})
     # Human mode already printed a per-root OK/FAIL line during the loop.
@@ -804,42 +881,109 @@ async def _token_revoke(args: argparse.Namespace) -> int:
     return 0 if result.get("ok") else 1
 
 
+async def _token_set(args: argparse.Namespace) -> int:
+    """Set/rotate the seat token this machine uses — verify it, then write the rc.
+
+    The teammate-facing counterpart to the admin mint commands: paste a new
+    token (e.g. after `citadel seat token <slug>`) without re-running the whole
+    onboard flow. A token the Node rejects is NOT written (--skip-verify
+    overrides), so rotation can't silently break a working setup.
+    """
+    color = supports_color()
+    node_url = node_base_url(getattr(args, "node_url", None))
+    rc_path = Path(args.shell_rc).expanduser() if args.shell_rc else detect_shell_rc()
+
+    token = (args.token or "").strip()
+    if not token:
+        if not sys.stdin.isatty():
+            print("citadel token set: pass the token as an argument (no TTY to prompt on).", file=sys.stderr)
+            return 2
+        token = _prompt_hidden("Paste the new seat token (ctdl_…): ")
+    if not token:
+        print("citadel token set: no token given.", file=sys.stderr)
+        return 1
+
+    if not getattr(args, "skip_verify", False):
+        from kb.status import check_auth
+
+        with _Spinner("Verifying the token against your Node…"):
+            auth = await asyncio.to_thread(check_auth, node_url, token)
+        if not auth.ok:
+            print(
+                f"  {mark(False, enable=color)} token not verified ({auth.detail}) — nothing written.",
+                file=sys.stderr,
+            )
+            print(paint("  (pass --skip-verify to write it anyway)", "dim", enable=color), file=sys.stderr)
+            return 1
+        print()
+        print(_render_identity(auth, node_url, color))
+        print()
+
+    previous = read_token_from_rc(rc_path)
+    status = ensure_token_in_rc(rc_path, token)
+    detail = status + (f" · replaced {mask_token(previous)}" if previous and previous != token else "")
+    print(f"  {mark(True, enable=color)} token {mask_token(token)} → {rc_path}  {paint(detail, 'dim', enable=color)}")
+    if (os.environ.get(TOKEN_ENV) or "").strip() != token:
+        print(
+            paint(f"  ! this shell still has the old value — run `source {rc_path}` or open a new shell.", "yellow", enable=color)
+        )
+    return 0
+
+
 def _indent(text: str, prefix: str = "    ") -> str:
     return "\n".join(prefix + line for line in text.splitlines())
 
 
 def _wire_detected_tools(node_url: str, *, color: bool) -> None:
-    """Interactive: offer to add Citadel's MCP server to each detected tool.
+    """Interactive: one checkbox list of detected tools, then wire the selection.
 
-    Write-tier tools (token stays in the rc via an env reference) are merged on
-    confirmation; snippet-tier tools print a paste-in block on request; Pi gets
-    a note. Used only on an interactive `citadel onboard`.
+    Write-tier tools (token stays in the rc via an env reference) are merged;
+    snippet-tier tools print a paste-in block; Pi gets a note. Preselection
+    mirrors the old per-tool defaults: write-tier on, snippet-tier off. Used
+    only on an interactive `citadel onboard`.
     """
     from kb import tool_detect
+    from kb.prompt import checkbox_select
 
     detected = tool_detect.detect()
     if not detected:
         return
-    print("\n" + paint("Coding tools", "bold", enable=color))
-    for name in detected:
+    selectable = [name for name in detected if tool_detect.SPECS[name].mode != "note"]
+    notes = [name for name in detected if tool_detect.SPECS[name].mode == "note"]
+
+    chosen: list[str] = []
+    if selectable:
+        labels = [
+            tool_detect.SPECS[name].label
+            + (paint("  (paste-in snippet)", "dim", enable=color) if tool_detect.SPECS[name].mode == "snippet" else "")
+            for name in selectable
+        ]
+        preselected = {i for i, name in enumerate(selectable) if tool_detect.SPECS[name].mode == "write"}
+        print()
+        picked = checkbox_select(
+            paint("Coding tools", "bold", enable=color)
+            + paint(" — add Citadel MCP to:", "dim", enable=color),
+            labels,
+            preselected,
+        )
+        chosen = [selectable[i] for i in sorted(picked)] if picked else []
+
+    results: list[tuple[str, Any]] = []
+    if chosen:
+        with _Spinner(f"Wiring {len(chosen)} tool(s)…"):
+            results = [(name, tool_detect.apply(name, node_url=node_url)) for name in chosen]
+    for name, result in results:
         spec = tool_detect.SPECS[name]
         if spec.mode == "write":
-            answer = input(f"  Add Citadel MCP to {spec.label}? [Y/n]: ").strip().lower()
-            if answer not in ("", "y", "yes"):
-                continue
-            result = tool_detect.apply(name, node_url=node_url)
             sigil = mark(result.action != "error", enable=color)
             print(f"  {sigil} {spec.label}  {paint(f'{result.action} · {result.detail}', 'dim', enable=color)}")
-        elif spec.mode == "snippet":
-            answer = input(f"  Show paste-in MCP snippet for {spec.label}? [y/N]: ").strip().lower()
-            if answer not in ("y", "yes"):
-                continue
-            result = tool_detect.apply(name, node_url=node_url)
-            print(paint(f"    → {spec.config_hint}", "dim", enable=color))
+        else:  # snippet
+            print(f"  {paint(spec.label, 'bold', enable=color)} — paste into {paint(spec.config_hint, 'dim', enable=color)}:")
             print(_indent(result.snippet or ""))
-        else:  # note (e.g. Pi)
-            result = tool_detect.apply(name, node_url=node_url)
-            print(f"  {paint('•', 'dim', enable=color)} {spec.label}: {paint(result.detail, 'dim', enable=color)}")
+    for name in notes:
+        result = tool_detect.apply(name, node_url=node_url)
+        spec = tool_detect.SPECS[name]
+        print(f"  {paint('•', 'dim', enable=color)} {spec.label}: {paint(result.detail, 'dim', enable=color)}")
 
 
 async def _mcp_add(args: argparse.Namespace) -> int:
@@ -1116,14 +1260,8 @@ def _print_banner_animated(text: str, color: bool) -> None:
         time.sleep(0.035)
 
 
-def _render_onboard_identity(auth: Any, node_url: str, color: bool) -> str:
-    """Who this token belongs to — seat, role, access — shown on onboard."""
-    if not getattr(auth, "ok", False):
-        detail = getattr(auth, "detail", "could not verify")
-        return (
-            f"  {mark(False, enable=color)} "
-            + paint(f"token not verified ({detail}) — saved anyway; run `citadel status` to recheck.", "yellow", enable=color)
-        )
+def _render_identity(auth: Any, node_url: str, color: bool) -> str:
+    """Who a verified token belongs to — seat, role, access (onboard/token set)."""
     ident = getattr(auth, "data", None) or {}
     seat = ident.get("seat_slug") or ident.get("actor") or "—"
     caps = ident.get("capabilities") or {}
@@ -1141,17 +1279,60 @@ def _render_onboard_identity(auth: Any, node_url: str, color: bool) -> str:
     ])
 
 
-async def _onboard(args: argparse.Namespace) -> int:
-    repo = Path(args.repo).expanduser() if args.repo else git_root_or_cwd()
-    as_json = getattr(args, "json", False)
-    interactive = sys.stdin.isatty() and not args.non_interactive and not as_json
-    color = supports_color() and not as_json
-    node_url = (getattr(args, "node_url", None) or DEFAULT_NODE_URL).rstrip("/")
+def _prompt_hidden(prompt: str) -> str:
+    """getpass wrapper: the pasted secret is never echoed; Ctrl-D → ""."""
+    try:
+        return getpass.getpass(prompt).strip()
+    except EOFError:
+        print()
+        return ""
 
-    if interactive:
-        _print_banner_animated(banner(color=color), color)
 
-    token = (args.token or os.environ.get(TOKEN_ENV) or "").strip()
+async def _resolve_onboard_token(
+    args: argparse.Namespace, rc_path: Path, node_url: str, *, interactive: bool, color: bool
+) -> str:
+    """Pick the token to onboard with, then verify it. Returns "" when absent.
+
+    Interactive flow: an already-configured token (shell rc first — it's the
+    durable value every new shell exports — then env) is shown masked with a
+    keep-or-replace choice; a token the Node rejects offers an immediate
+    re-paste instead of burying the failure at the end of the run.
+    Non-interactive: --token or env only, no verification (scripts/CI stay
+    offline).
+    """
+    token = (args.token or "").strip()
+    if not token:
+        env_token = (os.environ.get(TOKEN_ENV) or "").strip()
+        # rc wins over env: a stale shell's env must not silently revert a
+        # rotation that `citadel token set` already wrote to the rc.
+        rc_token = read_token_from_rc(rc_path) if interactive else ""
+        if rc_token:
+            existing, source = rc_token, str(rc_path)
+        else:
+            existing, source = env_token, "this shell's env"
+        if existing and interactive:
+            print(
+                f"\nAccess token already configured: "
+                f"{paint(mask_token(existing), 'bold', enable=color)}  "
+                f"{paint(f'(from {source})', 'dim', enable=color)}"
+            )
+            if env_token and rc_token and env_token != rc_token:
+                print(
+                    paint(
+                        f"  (this shell's env exports a different token {mask_token(env_token)} — "
+                        f"`source {rc_path}` after onboarding aligns it)",
+                        "dim",
+                        enable=color,
+                    )
+                )
+            answer = _prompt("  Keep it? [Y/n — n to paste a new one]: ").strip().lower()
+            token = existing
+            if answer in ("n", "no"):
+                token = _prompt_hidden("  Paste the new seat token (ctdl_…): ") or existing
+                if token == existing:
+                    print(paint("  (nothing pasted — keeping the existing token)", "dim", enable=color))
+        else:
+            token = existing
     if not token and interactive:
         # Guide the new user to the token instead of dead-ending on an error.
         print(
@@ -1159,11 +1340,57 @@ async def _onboard(args: argparse.Namespace) -> int:
             f"{paint(node_url, 'cyan', enable=color)}\n"
             "  (log in with the admin key → Create Seat → copy the ctdl_… token)\n"
         )
-        try:
-            # getpass: the pasted secret is not echoed to the screen/scrollback.
-            token = getpass.getpass("Paste your Citadel seat token (ctdl_…): ").strip()
-        except (EOFError, KeyboardInterrupt):
+        token = _prompt_hidden("Paste your Citadel seat token (ctdl_…): ")
+    if not token:
+        return ""
+
+    # Verify the token + show its identity (seat / role / access) up front, so a
+    # rejected token is fixable now — not discovered after every other prompt.
+    auth = None
+    if interactive:
+        from kb.status import check_auth
+
+        while True:
+            with _Spinner("Verifying your token…"):
+                auth = await asyncio.to_thread(check_auth, node_url, token)
             print()
+            if auth.ok:
+                print(_render_identity(auth, node_url, color))
+                break
+            detail = str(getattr(auth, "detail", "")) or "could not verify"
+            if not any(code in detail for code in ("401", "403")):
+                # Node unreachable / network error — a new token won't help.
+                print(
+                    f"  {paint('!', 'yellow', enable=color)} "
+                    + paint(f"could not verify the token ({detail}) — continuing; run `citadel status` later.", "yellow", enable=color)
+                )
+                break
+            print(f"  {mark(False, enable=color)} the Node rejected this token ({detail})")
+            answer = _prompt("  Paste a different token? [y/N]: ").strip().lower()
+            if answer not in ("y", "yes"):
+                print(paint("  (keeping it anyway — fix it later with `citadel token set`)", "dim", enable=color))
+                break
+            new_token = _prompt_hidden("  Paste the new seat token (ctdl_…): ")
+            if not new_token:
+                break
+            token = new_token
+    return token
+
+
+async def _onboard(args: argparse.Namespace) -> int:
+    repo = Path(args.repo).expanduser() if args.repo else git_root_or_cwd()
+    as_json = getattr(args, "json", False)
+    interactive = sys.stdin.isatty() and not args.non_interactive and not as_json
+    color = supports_color() and not as_json
+    node_url = (getattr(args, "node_url", None) or DEFAULT_NODE_URL).rstrip("/")
+    rc_path = Path(args.shell_rc).expanduser() if args.shell_rc else detect_shell_rc()
+
+    if interactive:
+        _print_banner_animated(banner(color=color), color)
+
+    token = await _resolve_onboard_token(
+        args, rc_path, node_url, interactive=interactive, color=color
+    )
     if not token:
         print(
             "citadel onboard: no token — pass --token or set CITADEL_MCP_ACCESS_TOKEN.",
@@ -1171,16 +1398,6 @@ async def _onboard(args: argparse.Namespace) -> int:
         )
         return 1
 
-    # Verify the token + resolve its identity (seat / role / access) to show the
-    # user who they're onboarding as. Interactive-only: keeps scripts/CI offline.
-    auth = None
-    if interactive:
-        from kb.status import check_auth
-
-        with _Spinner("Verifying your token…"):
-            auth = await asyncio.to_thread(check_auth, node_url, token)
-
-    rc_path = Path(args.shell_rc).expanduser() if args.shell_rc else detect_shell_rc()
     steps: list[tuple[str, str]] = []
     try:
         steps.append((f"token → {rc_path}", ensure_token_in_rc(rc_path, token)))
@@ -1214,13 +1431,9 @@ async def _onboard(args: argparse.Namespace) -> int:
     # and proactive-ingest work out of the box (#35). Interactive-only; written
     # to the shell rc next to the seat token.
     if interactive:
-        try:
-            llm_key = getpass.getpass(
-                "Optional: paste an OpenRouter API key for local cognify "
-                "(enter to skip): "
-            ).strip()
-        except (EOFError, KeyboardInterrupt):
-            llm_key = ""
+        llm_key = _prompt_hidden(
+            "Optional: paste an OpenRouter API key for local cognify (enter to skip): "
+        )
         if llm_key:
             steps.append(
                 (
@@ -1237,18 +1450,19 @@ async def _onboard(args: argparse.Namespace) -> int:
             "  (local cognify also needs: pipx install 'citadel-archive[server]')"
         )
 
-    # Always seed the repo toplevel as a capture root (unless --no-capture) so the
-    # pre-push hook is not a guaranteed no-op out of the box (#43/#35). The wizard
-    # only runs interactively, but a default root is persisted either way.
+    # Capture roots (unless --no-capture): the wizard asks about the repo
+    # toplevel explicitly (declinable); if the config still ends up empty, it
+    # is seeded with the repo toplevel so the pre-push hook is not a
+    # guaranteed no-op out of the box (#43/#35).
     if not args.no_capture:
         cfg_path = capture_config_path()
         cfg = load_capture_config(cfg_path)
+        if interactive:
+            answer = _prompt("\nSet up Approved Capture Roots now? [Y/n]: ").strip().lower()
+            if answer in ("", "y", "yes"):
+                cfg = _wizard_roots(cfg, default_root=str(repo))
         if not cfg.roots:
             cfg = cfg.with_root(str(repo), (DEFAULT_ROOT_TAG,))  # 'personal' never promotes
-        if interactive:
-            answer = input("\nSet up Approved Capture Roots now? [Y/n]: ").strip().lower()
-            if answer in ("", "y", "yes"):
-                cfg = _wizard_roots(cfg)
         save_capture_config(
             cfg, path=cfg_path, updated_at=datetime.now(timezone.utc).isoformat()
         )
@@ -1271,9 +1485,6 @@ async def _onboard(args: argparse.Namespace) -> int:
 
     if not interactive:
         print(banner(color=color))
-    if auth is not None:
-        print()
-        print(_render_onboard_identity(auth, node_url, color))
     print(f"\nCitadel onboarding for {repo}  (token {mask_token(token)}):")
     for label, status in steps:
         text, ok, skipped = _humanize_status(status)
@@ -1289,11 +1500,86 @@ async def _onboard(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cli_version() -> str:
+    try:
+        return _pkg_version("citadel-archive")
+    except PackageNotFoundError:
+        from kb import __version__
+
+        return __version__
+
+
+def _install_channel() -> tuple[str, str]:
+    """How this CLI was installed: ("editable", src) | ("pipx", bin) | ("other", "").
+
+    Drives `citadel update`: editable/source checkouts must never be clobbered
+    by an upgrade, pipx installs know their own upgrade command, anything else
+    gets printed instructions.
+    """
+    try:
+        from importlib.metadata import distribution
+
+        direct = distribution("citadel-archive").read_text("direct_url.json")
+        if direct:
+            info = json.loads(direct)
+            if info.get("dir_info", {}).get("editable"):
+                return "editable", str(info.get("url") or "")
+    except (PackageNotFoundError, ValueError, OSError):
+        pass
+    pipx = shutil.which("pipx")
+    if pipx and "pipx" in Path(sys.prefix).parts:
+        return "pipx", pipx
+    return "other", ""
+
+
+async def _update(args: argparse.Namespace) -> int:
+    """Update citadel in place — the answer to `pipx install` saying
+    "already seems to be installed"; no --force incantations needed."""
+    color = supports_color()
+    channel, detail = _install_channel()
+    if channel == "editable":
+        src = urllib.parse.unquote(detail.removeprefix("file://")) or "the source checkout"
+        print(f"You're running from source (editable install) — update with `git pull` in {src}.")
+        return 0
+    if channel != "pipx":
+        print(
+            "citadel update: this install isn't managed by pipx. Upgrade it with:\n"
+            "  pipx:  pipx install citadel-archive\n"
+            f"  pip:   {sys.executable} -m pip install --upgrade citadel-archive"
+        )
+        return 0
+    current = _cli_version()
+    try:
+        with _Spinner("Checking PyPI for the latest release…"):
+            proc = await asyncio.to_thread(
+                subprocess.run,
+                # --no-cache-dir: never "upgrade" onto a stale cached wheel.
+                [detail, "upgrade", "--pip-args=--no-cache-dir", "citadel-archive"],
+                capture_output=True,
+                text=True,
+                timeout=300,
+            )
+    except (OSError, subprocess.SubprocessError) as exc:
+        print(f"citadel update: pipx upgrade failed: {exc}", file=sys.stderr)
+        return 1
+    out = ((proc.stdout or "") + (proc.stderr or "")).strip()
+    if proc.returncode != 0:
+        print(f"citadel update: pipx upgrade failed:\n{out}", file=sys.stderr)
+        return 1
+    if "already at latest" in out:
+        print(f"  {mark(True, enable=color)} already up to date — citadel {current}")
+    else:
+        upgraded = next((line for line in out.splitlines() if "upgraded" in line.lower()), out)
+        print(f"  {mark(True, enable=color)} {upgraded.strip()}")
+    return 0
+
+
 _HOME_MENU = (
     ("Get started", (
         ("onboard", "one-command setup — token · hooks · MCP · capture roots"),
         ("status", "connection · identity · local setup (--json for agents)"),
         ("doctor", "diagnose setup problems · --fix to repair"),
+        ("update", "update citadel to the latest release"),
     )),
     ("Capture", (
         ("setup", "declare Approved Capture Roots (~/.citadel/capture.json)"),
@@ -1307,7 +1593,7 @@ _HOME_MENU = (
     ("Connect & admin", (
         ("mcp", "add Citadel MCP to Claude · Cursor · Codex · …"),
         ("seat", "create · list seats and mint tokens (admin)"),
-        ("token", "create · revoke standalone tokens (admin)"),
+        ("token", "set this machine's seat token · admin create/revoke"),
     )),
 )
 
@@ -1339,9 +1625,15 @@ def _already_onboarded() -> bool:
 
 def _print_home() -> None:
     color = supports_color()
-    print(banner_large(color=color))
-    print()
-    print("  " + paint("the organization vault", "dim", enable=color))
+    cols = shutil.get_terminal_size((80, 24)).columns
+    if cols >= HERO_WIDTH + 2:
+        print(banner_large(color=color))
+        print()
+        print("  " + paint("the organization vault", "dim", enable=color))
+    else:
+        # Narrow terminal: the compact castle (wordmark + tagline inline)
+        # instead of a wrapped, mangled hero.
+        print(banner(color=color))
     if _already_onboarded():
         state = mark(True, enable=color) + " " + paint("set up", "green", enable=color)
     else:
@@ -1352,7 +1644,7 @@ def _print_home() -> None:
             + paint(" — run ", "dim", enable=color)
             + paint("citadel onboard", "cyan", enable=color)
         )
-    print("  " + state)
+    print("  " + state + paint(f"  ·  v{_cli_version()}", "dim", enable=color))
     print()
     # Pad command names to the widest, so descriptions form a clean column.
     pad = max(len(name) for _, rows in _HOME_MENU for name, _ in rows) + 2
@@ -1455,11 +1747,7 @@ def build_parser() -> argparse.ArgumentParser:
         epilog="Run `citadel` with no command for the guided home screen, "
         "or `citadel <command> --help` for any command.",
     )
-    try:
-        _version = _pkg_version("citadel-archive")
-    except PackageNotFoundError:
-        from kb import __version__ as _version
-    parser.add_argument("--version", action="version", version=f"citadel {_version}")
+    parser.add_argument("--version", action="version", version=f"citadel {_cli_version()}")
     parser.add_argument(
         "--no-onboard",
         action="store_true",
@@ -1490,6 +1778,13 @@ def build_parser() -> argparse.ArgumentParser:
     doctor.add_argument("--repo", help="Repo to check (default: git toplevel or cwd)")
     doctor.add_argument("--config", help="Override capture config path")
     doctor.set_defaults(handler=_doctor)
+
+    update = subcommands.add_parser(
+        "update",
+        aliases=["upgrade"],
+        help="Update citadel to the latest release (pipx-aware)",
+    )
+    update.set_defaults(handler=_update)
 
     onboard = subcommands.add_parser(
         "onboard",
@@ -1641,9 +1936,21 @@ def build_parser() -> argparse.ArgumentParser:
 
     token = subcommands.add_parser(
         "token",
-        help="Manage standalone tokens (admin — reads CITADEL_ADMIN_KEY)",
+        help="Set this machine's seat token, or manage standalone tokens (admin)",
     )
     token_sub = token.add_subparsers(dest="token_command", required=True)
+
+    token_set = token_sub.add_parser(
+        "set",
+        help="Set/rotate the seat token this machine uses (verifies, then writes your shell rc)",
+    )
+    token_set.add_argument("token", nargs="?", help="Seat token (omit to paste it hidden)")
+    token_set.add_argument("--shell-rc", help="Shell rc file for the token export")
+    token_set.add_argument("--node-url", help="Override Node URL")
+    token_set.add_argument(
+        "--skip-verify", action="store_true", help="Write without checking the token against the Node"
+    )
+    token_set.set_defaults(handler=_token_set)
 
     token_create = token_sub.add_parser(
         "create", help="Issue a standalone (service-account) token, printed once"

@@ -10,14 +10,15 @@ import os
 import sys
 from typing import IO
 
-# A crenellated fortress: battlements, walls, two windows. Box-drawing chars
-# render in any modern terminal; we simply omit the banner when not a TTY.
+# A crenellated fortress: battlements, walls, two windows, an arched gate.
+# Box-drawing chars render in any modern terminal; we simply omit the banner
+# when not a TTY.
 _CASTLE_LINES = (
     "  ▙ ▟ ▙ ▟ ▙ ▟ ▙ ▟",
     "  ███████████████",
     "  ██ ▟▀▙   ▟▀▙ ██",
     "  ██ █ █   █ █ ██",
-    "  ███████████████",
+    "  █████▛▀▀▀▜█████",
 )
 # Right-side labels keyed by castle row, each with its ANSI styles.
 _LABELS: dict[int, tuple[str, tuple[str, ...]]] = {
@@ -25,21 +26,53 @@ _LABELS: dict[int, tuple[str, tuple[str, ...]]] = {
     2: ("the organization vault", ("dim",)),
 }
 
-# Large hero — a figlet "CITADEL" framed in a crenellated fortress. Used on the
-# bare `citadel` home screen; the compact `banner()` is the in-command header.
-_HERO = r"""
-     ▛▜   ▛▜   ▛▜   ▛▜   ▛▜   ▛▜   ▛▜
-    ▕══════════════════════════════════▏
-    ▕   ____  _ _____ _   ___  ___ _    ▏
-    ▕  / ___|| |_   _/ \ |   \| __| |   ▏
-    ▕ | |__  | | | |/ _ \| |) | _|| |__ ▏
-    ▕  \___| |_| |_/_/ \_\___/|___|____|▏
-    ▕══════════════════════════════════▏
-    ▕    ▟▀▙       ▟▀▙       ▟▀▙        ▏
-    ▕▄▄▄▄█ █▄▄▄▄▄▄▄█ █▄▄▄▄▄▄▄█ █▄▄▄▄▄▄▄▄▏
-"""
-_HERO_LINES = tuple(_HERO.strip("\n").splitlines())
-_HERO_WORDMARK_ROWS = frozenset({2, 3, 4, 5})  # the figlet letter rows
+# Large hero — just the figlet "CITADEL" wordmark in brand colors. Shown on
+# the bare `citadel` home screen; the compact castle `banner()` stays the
+# in-command header (it is "the mark", see brand.md).
+_WORDMARK = (
+    "  ____  ___  _____     _     ____   _____  _     ",
+    " / ___||_ _||_   _|   / \\   |  _ \\ | ____|| |    ",
+    "| |     | |   | |    / _ \\  | | | ||  _|  | |    ",
+    "| |___  | |   | |   / ___ \\ | |_| || |___ | |___ ",
+    " \\____||___|  |_|  /_/   \\_\\|____/ |_____||_____|",
+)
+_HERO_INDENT = "  "
+# Brand anchors (see brand.md): Masumi magenta #FA008C (the web brand) fading
+# into the terminal's cyan — one gradient tying both brand surfaces together.
+_BRAND_MAGENTA = (250, 0, 140)
+_BRAND_CYAN = (34, 211, 238)
+
+# Widest hero line — the home screen falls back to the compact banner when the
+# terminal is narrower than this.
+HERO_WIDTH = len(_HERO_INDENT) + max(len(line) for line in _WORDMARK)
+
+
+def supports_truecolor() -> bool:
+    """24-bit color support, per the de-facto COLORTERM convention."""
+    return os.getenv("COLORTERM", "").lower() in ("truecolor", "24bit")
+
+
+def _lerp_rgb(start: tuple[int, int, int], end: tuple[int, int, int], t: float) -> tuple[int, int, int]:
+    return tuple(round(s + (e - s) * t) for s, e in zip(start, end))
+
+
+def _ansi256(rgb: tuple[int, int, int]) -> int:
+    """Nearest xterm-256 color-cube index for an RGB triple."""
+    r, g, b = (round(c / 255 * 5) for c in rgb)
+    return 16 + 36 * r + 6 * g + b
+
+
+def _gradient_line(line: str, *, width: int, truecolor: bool) -> str:
+    """Paint one wordmark row with the brand gradient, column by column."""
+    out: list[str] = [_ANSI["bold"]]
+    for column, char in enumerate(line):
+        if char != " ":
+            rgb = _lerp_rgb(_BRAND_MAGENTA, _BRAND_CYAN, column / max(width - 1, 1))
+            code = f"38;2;{rgb[0]};{rgb[1]};{rgb[2]}" if truecolor else f"38;5;{_ansi256(rgb)}"
+            out.append(f"\033[{code}m")
+        out.append(char)
+    out.append(_ANSI["reset"])
+    return "".join(out)
 
 _ANSI = {
     "reset": "\033[0m",
@@ -100,11 +133,18 @@ def mark(ok: bool, *, enable: bool = True) -> str:
 
 
 def banner_large(*, color: bool = True) -> str:
-    """The big hero: a figlet CITADEL in a castle frame (cyan walls, bold letters)."""
+    """The big hero: the CITADEL wordmark in brand colors — a magenta→cyan
+    gradient (24-bit, or the xterm-256 approximation), bold cyan on basic
+    terminals, plain when piped."""
+    width = max(len(line) for line in _WORDMARK)
+    truecolor = supports_truecolor()
+    gradient = truecolor or "256color" in os.getenv("TERM", "")
     out: list[str] = []
-    for index, line in enumerate(_HERO_LINES):
-        styles = ("bold", "cyan") if index in _HERO_WORDMARK_ROWS else ("cyan",)
-        out.append(paint(line, *styles, enable=color))
+    for line in _WORDMARK:
+        if color and gradient:
+            out.append(_HERO_INDENT + _gradient_line(line, width=width, truecolor=truecolor))
+        else:
+            out.append(_HERO_INDENT + paint(line, "bold", "cyan", enable=color))
     return "\n".join(out)
 
 

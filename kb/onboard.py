@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import os
+import shlex
 import stat
 import subprocess
 import sys
@@ -168,14 +169,19 @@ def ensure_env_in_rc(rc_path: Path, var_name: str, value: str, *, comment: str) 
     value = value.strip()
     export_line = f"export {var_name}={_sh_single_quote(value)}"
     lines = rc_path.read_text().splitlines() if rc_path.exists() else []
+    # Rewrite the LAST matching line — that's the one a real shell honors, so
+    # a rotation can never be shadowed by a duplicate export further down.
+    match_index = None
     for index, raw in enumerate(lines):
         stripped = raw.strip()
         if stripped.startswith(f"export {var_name}=") or stripped.startswith(f"{var_name}="):
-            if stripped == export_line:
-                return "present"
-            lines[index] = export_line
-            rc_path.write_text("\n".join(lines) + "\n")
-            return "updated"
+            match_index = index
+    if match_index is not None:
+        if lines[match_index].strip() == export_line:
+            return "present"
+        lines[match_index] = export_line
+        rc_path.write_text("\n".join(lines) + "\n")
+        return "updated"
     rc_path.parent.mkdir(parents=True, exist_ok=True)
     with rc_path.open("a", encoding="utf-8") as handle:
         handle.write(f"\n# {comment}\n{export_line}\n")
@@ -190,6 +196,33 @@ def ensure_token_in_rc(rc_path: Path, token: str) -> str:
         token,
         comment="Citadel seat token (added by `citadel onboard`)",
     )
+
+
+def read_token_from_rc(rc_path: Path) -> str:
+    """Best-effort recovery of the exported token value from the shell rc.
+
+    Inverse of ensure_token_in_rc for the line shapes we write (single-quoted)
+    plus hand-added exports: shlex handles quoting and trailing comments, and
+    the LAST matching line wins — the same line a real shell would honor.
+    Lets `citadel onboard` say "already configured — keep or replace?" even in
+    a fresh shell where the env var is not exported yet. Returns "" when absent.
+    """
+    try:
+        lines = rc_path.read_text().splitlines()
+    except OSError:
+        return ""
+    token = ""
+    for raw in lines:
+        stripped = raw.strip()
+        for prefix in (f"export {TOKEN_ENV}=", f"{TOKEN_ENV}="):
+            if stripped.startswith(prefix):
+                value = stripped[len(prefix):].strip()
+                try:
+                    parts = shlex.split(value, comments=True)
+                except ValueError:  # unbalanced quotes — treat as unreadable
+                    parts = []
+                token = parts[0] if parts else ""
+    return token
 
 
 def merge_mcp_config(path: Path, base_url: str = DEFAULT_NODE_URL) -> str:

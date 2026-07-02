@@ -42,7 +42,7 @@ def test_bare_citadel_shows_home_screen(monkeypatch, capsys) -> None:
     assert exc.value.code == 0
     out = capsys.readouterr().out
     assert "the organization vault" in out         # hero tagline
-    assert "▛▜" in out                              # castle hero art
+    assert "____" in out                            # CITADEL wordmark hero
     assert "onboard" in out and "status" in out     # curated command menu
     assert "Get started" in out                     # grouped menu
 
