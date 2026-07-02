@@ -50,7 +50,7 @@ from kb.onboard import (
     merge_mcp_config,
     read_token_from_rc,
 )
-from kb.banner import HERO_WIDTH, SKIP, banner, banner_large, mark, paint, supports_color
+from kb.banner import HERO_WIDTH, SKIP, banner, banner_large, mark, paint, supports_color, tagline
 from kb.access_client import (
     AccessClientError,
     create_seat,
@@ -1629,7 +1629,7 @@ def _print_home() -> None:
     if cols >= HERO_WIDTH + 2:
         print(banner_large(color=color))
         print()
-        print("  " + paint("the organization vault", "dim", enable=color))
+        print("  " + tagline(color=color))
     else:
         # Narrow terminal: the compact castle (wordmark + tagline inline)
         # instead of a wrapped, mangled hero.

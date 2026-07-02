@@ -38,7 +38,8 @@ All notable changes to `citadel-archive` are documented here. Format follows
   home-relative dir that does (`~/masumi`) instead of recording a dead root.
 - **Brand-color hero** — the opening art is now just the CITADEL wordmark in
   brand colors: a Masumi-magenta → cyan gradient on truecolor terminals, bold
-  cyan elsewhere. The compact castle banner (the mark) stays as the in-command
+  cyan elsewhere, and the "the organization vault" tagline highlighted in
+  brand magenta. The compact castle banner (the mark) stays as the in-command
   header and gains an arched gate; the home screen falls back to it on narrow
   terminals and shows the installed version.
 

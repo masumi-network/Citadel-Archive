@@ -132,6 +132,21 @@ def mark(ok: bool, *, enable: bool = True) -> str:
     return paint(glyph(ok), "green" if ok else "red", enable=enable)
 
 
+def tagline(*, color: bool = True) -> str:
+    """The brand tagline under the hero — highlighted in brand magenta on
+    capable terminals (256-color approximation below truecolor), cyan on
+    basic ones, plain when piped."""
+    text = "the organization vault"
+    if not color:
+        return text
+    r, g, b = _BRAND_MAGENTA
+    if supports_truecolor():
+        return f"\033[38;2;{r};{g};{b}m{text}{_ANSI['reset']}"
+    if "256color" in os.getenv("TERM", ""):
+        return f"\033[38;5;{_ansi256(_BRAND_MAGENTA)}m{text}{_ANSI['reset']}"
+    return paint(text, "cyan")
+
+
 def banner_large(*, color: bool = True) -> str:
     """The big hero: the CITADEL wordmark in brand colors — a magenta→cyan
     gradient (24-bit, or the xterm-256 approximation), bold cyan on basic
