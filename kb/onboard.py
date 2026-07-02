@@ -192,6 +192,31 @@ def ensure_token_in_rc(rc_path: Path, token: str) -> str:
     )
 
 
+def read_token_from_rc(rc_path: Path) -> str:
+    """Best-effort recovery of the exported token value from the shell rc.
+
+    Inverse of ensure_token_in_rc for the line shapes we write (single-quoted)
+    plus plain unquoted/double-quoted exports a user may have added by hand.
+    Lets `citadel onboard` say "already configured — keep or replace?" even in
+    a fresh shell where the env var is not exported yet. Returns "" when absent.
+    """
+    try:
+        lines = rc_path.read_text().splitlines()
+    except OSError:
+        return ""
+    for raw in lines:
+        stripped = raw.strip()
+        for prefix in (f"export {TOKEN_ENV}=", f"{TOKEN_ENV}="):
+            if stripped.startswith(prefix):
+                value = stripped[len(prefix):].strip()
+                if len(value) >= 2 and value[0] == value[-1] and value[0] in "'\"":
+                    inner = value[1:-1]
+                    # Undo POSIX single-quote escaping (see _sh_single_quote).
+                    return inner.replace("'\"'\"'", "'") if value[0] == "'" else inner
+                return value.split(" #", 1)[0].strip()
+    return ""
+
+
 def merge_mcp_config(path: Path, base_url: str = DEFAULT_NODE_URL) -> str:
     """Merge the citadel MCP server into .mcp.json, preserving other servers."""
     data = _load_json_object(path)

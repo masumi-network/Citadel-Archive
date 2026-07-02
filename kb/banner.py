@@ -10,14 +10,15 @@ import os
 import sys
 from typing import IO
 
-# A crenellated fortress: battlements, walls, two windows. Box-drawing chars
-# render in any modern terminal; we simply omit the banner when not a TTY.
+# A crenellated fortress: battlements, walls, two windows, an arched gate.
+# Box-drawing chars render in any modern terminal; we simply omit the banner
+# when not a TTY.
 _CASTLE_LINES = (
     "  ▙ ▟ ▙ ▟ ▙ ▟ ▙ ▟",
     "  ███████████████",
     "  ██ ▟▀▙   ▟▀▙ ██",
     "  ██ █ █   █ █ ██",
-    "  ███████████████",
+    "  █████▛▀▀▀▜█████",
 )
 # Right-side labels keyed by castle row, each with its ANSI styles.
 _LABELS: dict[int, tuple[str, tuple[str, ...]]] = {
@@ -25,21 +26,52 @@ _LABELS: dict[int, tuple[str, tuple[str, ...]]] = {
     2: ("the organization vault", ("dim",)),
 }
 
-# Large hero — a figlet "CITADEL" framed in a crenellated fortress. Used on the
-# bare `citadel` home screen; the compact `banner()` is the in-command header.
-_HERO = r"""
-     ▛▜   ▛▜   ▛▜   ▛▜   ▛▜   ▛▜   ▛▜
-    ▕══════════════════════════════════▏
-    ▕   ____  _ _____ _   ___  ___ _    ▏
-    ▕  / ___|| |_   _/ \ |   \| __| |   ▏
-    ▕ | |__  | | | |/ _ \| |) | _|| |__ ▏
-    ▕  \___| |_| |_/_/ \_\___/|___|____|▏
-    ▕══════════════════════════════════▏
-    ▕    ▟▀▙       ▟▀▙       ▟▀▙        ▏
-    ▕▄▄▄▄█ █▄▄▄▄▄▄▄█ █▄▄▄▄▄▄▄█ █▄▄▄▄▄▄▄▄▏
-"""
-_HERO_LINES = tuple(_HERO.strip("\n").splitlines())
-_HERO_WORDMARK_ROWS = frozenset({2, 3, 4, 5})  # the figlet letter rows
+# Large hero — a figlet "CITADEL" inside a walled fortress: merlons on a solid
+# rampart, lit windows, and an arched gate. Used on the bare `citadel` home
+# screen; the compact `banner()` is the in-command header. The frame is built
+# programmatically from the wordmark so alignment can never drift.
+_WORDMARK = (
+    "  ____  ___  _____     _     ____   _____  _     ",
+    " / ___||_ _||_   _|   / \\   |  _ \\ | ____|| |    ",
+    "| |     | |   | |    / _ \\  | | | ||  _|  | |    ",
+    "| |___  | |   | |   / ___ \\ | |_| || |___ | |___ ",
+    " \\____||___|  |_|  /_/   \\_\\|____/ |_____||_____|",
+)
+
+
+def _hero_rows() -> tuple[tuple[str, str], ...]:
+    """Assemble the hero as (line, kind) rows; kind drives per-row styling.
+
+    kind ∈ {"wall", "word", "window"} — walls are cyan, the wordmark is bold,
+    and the window row gets a warm glow when color is on.
+    """
+    inner = len(_WORDMARK[0]) + 4  # two columns of courtyard each side
+    width = inner + 2  # plus the flanking walls
+    rows: list[tuple[str, str]] = []
+    merlons = ("▛▜  " * width)[:width].rstrip()
+    rows.append((" " + merlons, "wall"))
+    rows.append((" " + "█" * width, "wall"))
+    rows.append((" █" + " " * inner + "█", "wall"))
+    for line in _WORDMARK:
+        rows.append((" █  " + line + "  █", "word"))
+    rows.append((" █" + " " * inner + "█", "wall"))
+    # Three arched windows, spread evenly across the courtyard.
+    slot = inner // 3
+    lead = (inner - slot * 3) // 2
+    cell = " " * ((slot - 3) // 2)
+    window = cell + "▟▀▙" + " " * (slot - len(cell) - 3)
+    rows.append((" █" + (" " * lead + window * 3).ljust(inner) + "█", "window"))
+    # The gate: an arched lintel over open doors, carved from the base wall.
+    flank = (width - 5) // 2
+    rows.append((" " + "█" * flank + "▛▀▀▀▜" + "█" * (width - 5 - flank), "wall"))
+    rows.append((" " + "█" * flank + "▌   ▐" + "█" * (width - 5 - flank), "wall"))
+    return tuple(rows)
+
+
+_HERO_ROWS = _hero_rows()
+# Widest hero line — the home screen falls back to the compact banner when the
+# terminal is narrower than this.
+HERO_WIDTH = max(len(line) for line, _ in _HERO_ROWS)
 
 _ANSI = {
     "reset": "\033[0m",
@@ -100,11 +132,16 @@ def mark(ok: bool, *, enable: bool = True) -> str:
 
 
 def banner_large(*, color: bool = True) -> str:
-    """The big hero: a figlet CITADEL in a castle frame (cyan walls, bold letters)."""
+    """The big hero: a figlet CITADEL in a fortress (cyan walls, lit windows)."""
     out: list[str] = []
-    for index, line in enumerate(_HERO_LINES):
-        styles = ("bold", "cyan") if index in _HERO_WORDMARK_ROWS else ("cyan",)
-        out.append(paint(line, *styles, enable=color))
+    for line, kind in _HERO_ROWS:
+        if kind == "word":
+            out.append(paint(line, "bold", "cyan", enable=color))
+        elif kind == "window" and color:
+            # Lit windows: a warm glow between the cyan walls.
+            out.append(paint(line[:2], "cyan") + paint(line[2:-1], "yellow") + paint(line[-1], "cyan"))
+        else:
+            out.append(paint(line, "cyan", enable=color))
     return "\n".join(out)
 
 
