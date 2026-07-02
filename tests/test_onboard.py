@@ -257,6 +257,40 @@ def test_read_token_from_rc_handles_manual_lines(tmp_path: Path) -> None:
     assert read_token_from_rc(tmp_path / "missing") == ""
 
 
+def test_read_token_from_rc_quoted_value_with_trailing_comment(tmp_path: Path) -> None:
+    # A hand-edited line with a comment must not leak the quote chars into the
+    # token (Bearer 'ctdl_…' would 401 a perfectly valid setup).
+    rc = tmp_path / ".zshrc"
+    rc.write_text(f"export {TOKEN_ENV}='ctdl_abc123'  # citadel seat\n")
+    assert read_token_from_rc(rc) == "ctdl_abc123"
+
+
+def test_read_token_from_rc_last_export_wins_like_the_shell(tmp_path: Path) -> None:
+    rc = tmp_path / ".zshrc"
+    rc.write_text(
+        f"export {TOKEN_ENV}='ctdl_first_1234567890'\n"
+        f"export {TOKEN_ENV}=ctdl_last_0987654321\n"
+    )
+    assert read_token_from_rc(rc) == "ctdl_last_0987654321"
+
+
+def test_ensure_env_in_rc_rewrites_last_duplicate(tmp_path: Path) -> None:
+    # The shell honors the LAST export; rotation must rewrite that one, or the
+    # new token is silently shadowed by the trailing duplicate.
+    from kb.onboard import ensure_env_in_rc
+
+    rc = tmp_path / ".zshrc"
+    rc.write_text(
+        f"export {TOKEN_ENV}='ctdl_old_a'\n"
+        f"export {TOKEN_ENV}='ctdl_old_b'\n"
+    )
+    assert ensure_env_in_rc(rc, TOKEN_ENV, "ctdl_new_c", comment="x") == "updated"
+    lines = rc.read_text().splitlines()
+    assert lines[0] == f"export {TOKEN_ENV}='ctdl_old_a'"  # untouched (shadowed anyway)
+    assert lines[1] == f"export {TOKEN_ENV}='ctdl_new_c'"  # the shell-effective line
+    assert read_token_from_rc(rc) == "ctdl_new_c"  # reader agrees with the shell
+
+
 def _interactive_onboard_args(tmp_path: Path) -> argparse.Namespace:
     repo = _make_repo(tmp_path)
     return argparse.Namespace(
@@ -314,6 +348,28 @@ def test_onboard_keep_answer_reuses_env_token(tmp_path: Path, monkeypatch, capsy
     assert "ctdl_env_1234567890" in Path(args.shell_rc).read_text()
     out = capsys.readouterr().out
     assert "authenticated" in out  # identity panel shown up front
+
+
+def test_onboard_rc_token_wins_over_stale_env(tmp_path: Path, monkeypatch, capsys) -> None:
+    # A rotation written to the rc must not be silently reverted by onboarding
+    # from an old shell whose env still exports the superseded token.
+    monkeypatch.setenv(TOKEN_ENV, "ctdl_stale_env_67890")
+    args = _interactive_onboard_args(tmp_path)
+    rc_file = Path(args.shell_rc)
+    ensure_token_in_rc(rc_file, "ctdl_rotated_rc_4321")
+
+    monkeypatch.setattr("sys.stdin.isatty", lambda: True)
+    answers = iter([""])  # keep
+    monkeypatch.setattr("builtins.input", lambda prompt="": next(answers))
+    pastes = iter([""])  # skip OpenRouter key
+    monkeypatch.setattr("kb.cli.getpass.getpass", lambda prompt="": next(pastes))
+    monkeypatch.setattr("kb.status.check_auth", lambda *a, **k: _auth_ok())
+
+    assert asyncio.run(_onboard(args)) == 0
+    out = capsys.readouterr().out
+    assert "…4321" in out  # the rc (rotated) token is the one offered
+    body = rc_file.read_text()
+    assert "ctdl_rotated_rc_4321" in body and "ctdl_stale_env_67890" not in body
 
 
 def test_onboard_rejected_token_offers_immediate_replacement(tmp_path: Path, monkeypatch, capsys) -> None:

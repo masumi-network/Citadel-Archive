@@ -152,6 +152,15 @@ def _needs_server(
     return wrapper
 
 
+def _prompt(text: str) -> str:
+    """input() that treats Ctrl-D (EOF) as an empty answer, not a traceback."""
+    try:
+        return input(text)
+    except EOFError:
+        print()
+        return ""
+
+
 def _stale_env_hint(status_code: int) -> str | None:
     """The fix-it line for an auth-rejected command run from a stale shell.
 
@@ -165,6 +174,11 @@ def _stale_env_hint(status_code: int) -> str | None:
     rc_path = detect_shell_rc()
     rc_token = read_token_from_rc(rc_path)
     env_token = (os.environ.get(TOKEN_ENV) or "").strip()
+    if "$" in rc_token:
+        # Variable indirection (export TOKEN="$OTHER") — we can't evaluate it,
+        # so a textual mismatch proves nothing; stay quiet rather than send
+        # the user on a `source` loop that can never fix a real 401.
+        return None
     if rc_token and rc_token != env_token:
         return (
             f"this shell's {TOKEN_ENV} is out of date with {rc_path} — "
@@ -444,19 +458,32 @@ def _parse_root_arg(raw: str) -> tuple[str, tuple[str, ...]]:
     return path, tags
 
 
+def _ask_root_tags() -> tuple[str, ...]:
+    print(
+        f"  Tags — presets: {', '.join(PRESET_ROOT_TAGS)}; "
+        f"'personal' never promotes. Default: {DEFAULT_ROOT_TAG}."
+    )
+    tags_raw = _prompt("  Tags (comma-separated): ").strip()
+    return tuple(tags_raw.split(",")) if tags_raw else (DEFAULT_ROOT_TAG,)
+
+
 def _wizard_roots(config: CaptureConfig, default_root: str | None = None) -> CaptureConfig:
-    # Offer the dir the user is already in as a press-Enter default (once) —
-    # nobody should have to copy-paste the path they just ran `citadel` from.
+    print("\nAdd Approved Capture Roots — folders auto-captured to your Node.")
+    # The dir the user ran `citadel` from is offered as an explicit yes/no —
+    # Enter accepts, `n` declines. A separate question (not a prefilled path
+    # prompt) so declining is always possible and "empty to finish" below
+    # keeps meaning finish.
     default = normalize_path(default_root) if default_root else None
     if default and any(root.path == default for root in config.roots):
         default = None  # already approved — nothing to offer
-    print("\nAdd Approved Capture Roots — folders auto-captured to your Node.")
+    if default:
+        answer = _prompt(f"  Add {default} (this folder)? [Y/n]: ").strip().lower()
+        if answer in ("", "y", "yes"):
+            tags = _ask_root_tags()
+            config = config.with_root(default, tags)
+            print(f"  + {default}  [{', '.join(normalize_tags(tags))}]")
     while True:
-        if default:
-            raw = input(f"  Root path [{default}]: ").strip() or default
-        else:
-            raw = input("  Root path (empty to finish): ").strip()
-        default = None  # offered once; from here Enter finishes
+        raw = _prompt("  Root path (empty to finish): ").strip()
         if not raw:
             break
         normalized = normalize_path(raw)
@@ -466,7 +493,7 @@ def _wizard_roots(config: CaptureConfig, default_root: str | None = None) -> Cap
             # recording a root that will never capture anything.
             guess = Path.home() / raw.lstrip("/") if raw.startswith("/") else None
             if guess is not None and guess.exists():
-                answer = input(
+                answer = _prompt(
                     f"  ! {normalized} does not exist — did you mean {guess}? [Y/n]: "
                 ).strip().lower()
                 if answer in ("", "y", "yes"):
@@ -475,12 +502,7 @@ def _wizard_roots(config: CaptureConfig, default_root: str | None = None) -> Cap
                     print(f"  ! keeping {normalized} (does not exist yet)")
             else:
                 print(f"  ! {normalized} does not exist yet (added anyway)")
-        print(
-            f"  Tags — presets: {', '.join(PRESET_ROOT_TAGS)}; "
-            f"'personal' never promotes. Default: {DEFAULT_ROOT_TAG}."
-        )
-        tags_raw = input("  Tags (comma-separated): ").strip()
-        tags = tuple(tags_raw.split(",")) if tags_raw else (DEFAULT_ROOT_TAG,)
+        tags = _ask_root_tags()
         config = config.with_root(normalized, tags)
         print(f"  + {normalized}  [{', '.join(normalize_tags(tags))}]")
     return config
@@ -581,6 +603,7 @@ async def _capture(args: argparse.Namespace) -> int:
     as_json = getattr(args, "json", False)
     results: list[dict[str, Any]] = []
     failures = 0
+    auth_fail_code = 0
     for root, payload in payloads:
         try:
             response = post_capture(config.node_url, token, payload)
@@ -590,17 +613,19 @@ async def _capture(args: argparse.Namespace) -> int:
                 print(f"OK  {root.path} ({status})")
         except urllib.error.HTTPError as exc:
             failures += 1
+            auth_fail_code = auth_fail_code or exc.code
             detail = exc.read().decode(errors="replace")[:200]
             results.append({"root": root.path, "ok": False, "error": f"HTTP {exc.code} {detail}"})
             if not as_json:
                 print(f"FAIL {root.path}: HTTP {exc.code} {detail}", file=sys.stderr)
-                _print_auth_hint("capture", exc.code)
         except (urllib.error.URLError, OSError, ValueError) as exc:
             # Node unreachable / DNS / timeout / non-HTTPS URL — isolate per root.
             failures += 1
             results.append({"root": root.path, "ok": False, "error": str(exc)})
             if not as_json:
                 print(f"FAIL {root.path}: {exc}", file=sys.stderr)
+    if not as_json and auth_fail_code:
+        _print_auth_hint("capture", auth_fail_code)  # once, not per failing root
     if as_json:
         _print_json({"ok": failures == 0, "results": results})
     # Human mode already printed a per-root OK/FAIL line during the loop.
@@ -1265,28 +1290,42 @@ def _prompt_hidden(prompt: str) -> str:
 
 async def _resolve_onboard_token(
     args: argparse.Namespace, rc_path: Path, node_url: str, *, interactive: bool, color: bool
-) -> tuple[str, Any]:
-    """Pick the token to onboard with, then verify it. Returns (token, auth).
+) -> str:
+    """Pick the token to onboard with, then verify it. Returns "" when absent.
 
-    Interactive flow: an already-configured token (env or shell rc) is shown
-    masked with a keep-or-replace choice; a token the Node rejects offers an
-    immediate re-paste instead of burying the failure at the end of the run.
+    Interactive flow: an already-configured token (shell rc first — it's the
+    durable value every new shell exports — then env) is shown masked with a
+    keep-or-replace choice; a token the Node rejects offers an immediate
+    re-paste instead of burying the failure at the end of the run.
     Non-interactive: --token or env only, no verification (scripts/CI stay
-    offline) — auth comes back None.
+    offline).
     """
     token = (args.token or "").strip()
     if not token:
         env_token = (os.environ.get(TOKEN_ENV) or "").strip()
-        existing, source = env_token, "this shell's env"
-        if not existing and interactive:
-            existing, source = read_token_from_rc(rc_path), str(rc_path)
+        # rc wins over env: a stale shell's env must not silently revert a
+        # rotation that `citadel token set` already wrote to the rc.
+        rc_token = read_token_from_rc(rc_path) if interactive else ""
+        if rc_token:
+            existing, source = rc_token, str(rc_path)
+        else:
+            existing, source = env_token, "this shell's env"
         if existing and interactive:
             print(
                 f"\nAccess token already configured: "
                 f"{paint(mask_token(existing), 'bold', enable=color)}  "
                 f"{paint(f'(from {source})', 'dim', enable=color)}"
             )
-            answer = input("  Keep it? [Y/n — n to paste a new one]: ").strip().lower()
+            if env_token and rc_token and env_token != rc_token:
+                print(
+                    paint(
+                        f"  (this shell's env exports a different token {mask_token(env_token)} — "
+                        f"`source {rc_path}` after onboarding aligns it)",
+                        "dim",
+                        enable=color,
+                    )
+                )
+            answer = _prompt("  Keep it? [Y/n — n to paste a new one]: ").strip().lower()
             token = existing
             if answer in ("n", "no"):
                 token = _prompt_hidden("  Paste the new seat token (ctdl_…): ") or existing
@@ -1303,7 +1342,7 @@ async def _resolve_onboard_token(
         )
         token = _prompt_hidden("Paste your Citadel seat token (ctdl_…): ")
     if not token:
-        return "", None
+        return ""
 
     # Verify the token + show its identity (seat / role / access) up front, so a
     # rejected token is fixable now — not discovered after every other prompt.
@@ -1327,7 +1366,7 @@ async def _resolve_onboard_token(
                 )
                 break
             print(f"  {mark(False, enable=color)} the Node rejected this token ({detail})")
-            answer = input("  Paste a different token? [y/N]: ").strip().lower()
+            answer = _prompt("  Paste a different token? [y/N]: ").strip().lower()
             if answer not in ("y", "yes"):
                 print(paint("  (keeping it anyway — fix it later with `citadel token set`)", "dim", enable=color))
                 break
@@ -1335,7 +1374,7 @@ async def _resolve_onboard_token(
             if not new_token:
                 break
             token = new_token
-    return token, auth
+    return token
 
 
 async def _onboard(args: argparse.Namespace) -> int:
@@ -1349,7 +1388,7 @@ async def _onboard(args: argparse.Namespace) -> int:
     if interactive:
         _print_banner_animated(banner(color=color), color)
 
-    token, _auth = await _resolve_onboard_token(
+    token = await _resolve_onboard_token(
         args, rc_path, node_url, interactive=interactive, color=color
     )
     if not token:
@@ -1392,13 +1431,9 @@ async def _onboard(args: argparse.Namespace) -> int:
     # and proactive-ingest work out of the box (#35). Interactive-only; written
     # to the shell rc next to the seat token.
     if interactive:
-        try:
-            llm_key = getpass.getpass(
-                "Optional: paste an OpenRouter API key for local cognify "
-                "(enter to skip): "
-            ).strip()
-        except (EOFError, KeyboardInterrupt):
-            llm_key = ""
+        llm_key = _prompt_hidden(
+            "Optional: paste an OpenRouter API key for local cognify (enter to skip): "
+        )
         if llm_key:
             steps.append(
                 (
@@ -1415,14 +1450,15 @@ async def _onboard(args: argparse.Namespace) -> int:
             "  (local cognify also needs: pipx install 'citadel-archive[server]')"
         )
 
-    # Capture roots (unless --no-capture): the wizard offers the repo toplevel as
-    # a press-Enter default; whatever happens, an empty config is seeded with the
-    # repo toplevel so the pre-push hook is not a guaranteed no-op (#43/#35).
+    # Capture roots (unless --no-capture): the wizard asks about the repo
+    # toplevel explicitly (declinable); if the config still ends up empty, it
+    # is seeded with the repo toplevel so the pre-push hook is not a
+    # guaranteed no-op out of the box (#43/#35).
     if not args.no_capture:
         cfg_path = capture_config_path()
         cfg = load_capture_config(cfg_path)
         if interactive:
-            answer = input("\nSet up Approved Capture Roots now? [Y/n]: ").strip().lower()
+            answer = _prompt("\nSet up Approved Capture Roots now? [Y/n]: ").strip().lower()
             if answer in ("", "y", "yes"):
                 cfg = _wizard_roots(cfg, default_root=str(repo))
         if not cfg.roots:

@@ -33,9 +33,9 @@ All notable changes to `citadel-archive` are documented here. Format follows
   moved to the *front* of the run; a Node-rejected token offers an immediate
   re-paste loop instead of "saved anyway" after all the other prompts.
 - **Capture-roots wizard defaults** — the dir you ran `citadel` from (repo
-  toplevel on onboard, cwd on setup) is offered as a press-Enter default, and a
-  root like `/masumi` that doesn't exist offers the home-relative dir that does
-  (`~/masumi`) instead of recording a dead root.
+  toplevel on onboard, cwd on setup) is offered as an explicit press-Enter
+  yes/no (declinable), and a root like `/masumi` that doesn't exist offers the
+  home-relative dir that does (`~/masumi`) instead of recording a dead root.
 - **Brand-color hero** — the opening art is now just the CITADEL wordmark in
   brand colors: a Masumi-magenta → cyan gradient on truecolor terminals, bold
   cyan elsewhere. The compact castle banner (the mark) stays as the in-command

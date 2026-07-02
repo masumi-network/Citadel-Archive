@@ -331,6 +331,12 @@ def test_stale_env_hint_points_at_shell_rc(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("CITADEL_MCP_ACCESS_TOKEN", "ctdl_fresh_1234567890")
     assert _stale_env_hint(401) is None  # env matches rc → different problem
 
+    # Variable indirection can't be evaluated — a textual mismatch proves
+    # nothing, so no misleading `source` advice.
+    rc.write_text('export CITADEL_MCP_ACCESS_TOKEN="$WORK_CITADEL_TOKEN"\n')
+    monkeypatch.setenv("CITADEL_MCP_ACCESS_TOKEN", "ctdl_whatever_890")
+    assert _stale_env_hint(401) is None
+
 
 # ---- capture-roots wizard -----------------------------------------------------
 
@@ -360,6 +366,37 @@ def test_wizard_enter_accepts_default_root(tmp_path: Path, monkeypatch) -> None:
     config = _wizard_roots(CaptureConfig(node_url="https://node.example"), default_root=str(tmp_path))
     assert [root.path for root in config.roots] == [str(tmp_path)]
     assert "personal" in config.roots[0].tags
+
+
+def test_wizard_default_root_is_declinable(tmp_path: Path, monkeypatch) -> None:
+    # 'n' to the offered folder, Enter to finish — ending with NO roots must be
+    # possible (an un-declinable default would auto-approve $HOME for capture).
+    from kb.capture_config import CaptureConfig
+
+    answers = iter(["n", ""])
+    monkeypatch.setattr("builtins.input", lambda prompt="": next(answers))
+    config = _wizard_roots(CaptureConfig(node_url="https://node.example"), default_root=str(tmp_path))
+    assert config.roots == ()
+
+
+def test_read_key_handles_bare_escape_and_csi_tails() -> None:
+    # Esc alone must not hang or swallow the next key; multi-byte CSI keys
+    # (Delete = ESC [ 3 ~) must be consumed whole.
+    import os as _os
+
+    from kb.prompt import _ESC, _read_key
+
+    r, w = _os.pipe()
+    try:
+        _os.write(w, b"\x1b")  # bare Esc (nothing follows within the poll)
+        assert _read_key(r) == _ESC
+        _os.write(w, b"\x1b[A\x1b[3~q")  # Up, Delete, then 'q'
+        assert _read_key(r) == "\x1b[A"
+        assert _read_key(r) == "\x1b[3~"  # fully consumed, no stray '~'
+        assert _read_key(r) == "q"
+    finally:
+        _os.close(r)
+        _os.close(w)
 
 
 def test_wizard_default_suppressed_when_already_approved(tmp_path: Path, monkeypatch) -> None:
