@@ -2,7 +2,18 @@ from __future__ import annotations
 
 import io
 
-from kb.banner import banner, banner_large, paint, supports_color
+from kb.banner import banner, banner_large, paint, supports_color, tagline
+
+
+def test_tagline_is_brand_highlighted(monkeypatch) -> None:
+    assert tagline(color=False) == "the organization vault"  # plain when piped
+    monkeypatch.setenv("COLORTERM", "truecolor")
+    assert "\033[38;2;250;0;140m" in tagline(color=True)  # brand magenta
+    monkeypatch.delenv("COLORTERM", raising=False)
+    monkeypatch.setenv("TERM", "xterm-256color")
+    assert "\033[38;5;" in tagline(color=True)  # 256-color approximation
+    monkeypatch.setenv("TERM", "xterm")
+    assert "\033[36m" in tagline(color=True)  # cyan fallback
 
 
 def test_banner_large_is_the_brand_wordmark(monkeypatch) -> None:

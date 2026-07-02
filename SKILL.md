@@ -177,8 +177,7 @@ Install the standalone client (zero-dep base) — no clone, no `uv`:
 
 ```bash
 pipx install citadel-archive
-# upgrade: pipx install --force citadel-archive --pip-args=--no-cache-dir
-#          (plain `pipx upgrade` can land a stale cached build)
+# upgrade: citadel update   (pipx-aware self-update; skips the stale wheel cache)
 # bootstrap installer: curl -fsSL https://raw.githubusercontent.com/masumi-network/Citadel-Archive/main/install.sh | sh
 ```
 
@@ -189,7 +188,10 @@ run the in-process server stack instead (needs the `[server]` extra).
 ```bash
 citadel search "What did I learn about Railway?"        # HTTP-backed by default
 citadel ingest "A useful note" --tag personal --tag research
-citadel onboard            # token + git/Claude hooks + .mcp.json + capture roots
+citadel onboard            # token (keep-or-replace, verified up front) + hooks +
+                           # .mcp.json + capture roots + checkbox tool selection
+citadel token set          # rotate this machine's seat token (verify-first)
+citadel update             # self-update the CLI (alias: upgrade)
 citadel doctor --fix       # diagnose / repair local setup
 citadel mcp add claude     # add the Citadel MCP server to a client (`citadel mcp list`)
 citadel seat create        # admin: mint a seat token (needs CITADEL_ADMIN_KEY)
