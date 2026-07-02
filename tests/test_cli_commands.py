@@ -261,6 +261,77 @@ def test_update_unmanaged_install_prints_instructions(monkeypatch, capsys) -> No
     assert "pip install --upgrade citadel-archive" in capsys.readouterr().out
 
 
+# ---- coding-tools checkbox + stale-token hint ----------------------------------
+
+
+def test_checkbox_line_fallback_toggles_and_applies(monkeypatch) -> None:
+    from kb.prompt import _select_lines
+
+    answers = iter(["1 3", ""])  # toggle #1 off and #3 on, then apply
+    monkeypatch.setattr("builtins.input", lambda prompt="": next(answers))
+    picked = _select_lines("pick:", ["cursor", "codex", "zed"], {0, 1})
+    assert picked == {1, 2}
+
+
+def test_checkbox_line_fallback_q_skips(monkeypatch) -> None:
+    from kb.prompt import _select_lines
+
+    monkeypatch.setattr("builtins.input", lambda prompt="": "q")
+    assert _select_lines("pick:", ["cursor"], {0}) is None
+
+
+def test_wire_detected_tools_applies_only_selection(monkeypatch, capsys) -> None:
+    from kb.cli import _wire_detected_tools
+    from kb.tool_detect import ToolResult
+
+    applied: list[str] = []
+    monkeypatch.setattr("kb.tool_detect.detect", lambda: ["cursor", "codex", "zed", "pi"])
+    monkeypatch.setattr(
+        "kb.tool_detect.apply",
+        lambda name, node_url: applied.append(name)
+        or ToolResult(name, "note" if name == "pi" else "wrote", "ok", snippet="{}"),
+    )
+    # The checkbox returns cursor + zed; codex (preselected) was deselected.
+    monkeypatch.setattr("kb.prompt.checkbox_select", lambda header, options, checked: {0, 2})
+
+    _wire_detected_tools("https://node.example", color=False)
+    out = capsys.readouterr().out
+    assert applied == ["cursor", "zed", "pi"]  # pi is the always-shown note
+    assert "Cursor" in out and "wrote" in out
+    assert "paste into" in out  # zed snippet printed
+
+
+def test_wire_detected_tools_skip_selects_nothing(monkeypatch, capsys) -> None:
+    from kb.cli import _wire_detected_tools
+    from kb.tool_detect import ToolResult
+
+    applied: list[str] = []
+    monkeypatch.setattr("kb.tool_detect.detect", lambda: ["cursor", "codex"])
+    monkeypatch.setattr(
+        "kb.tool_detect.apply",
+        lambda name, node_url: applied.append(name) or ToolResult(name, "wrote", "ok"),
+    )
+    monkeypatch.setattr("kb.prompt.checkbox_select", lambda *a: None)  # user pressed q
+    _wire_detected_tools("https://node.example", color=False)
+    assert applied == []
+
+
+def test_stale_env_hint_points_at_shell_rc(tmp_path: Path, monkeypatch) -> None:
+    from kb.cli import _stale_env_hint
+    from kb.onboard import ensure_token_in_rc
+
+    rc = tmp_path / ".zshrc"
+    ensure_token_in_rc(rc, "ctdl_fresh_1234567890")
+    monkeypatch.setattr("kb.cli.detect_shell_rc", lambda: rc)
+    monkeypatch.setenv("CITADEL_MCP_ACCESS_TOKEN", "ctdl_stale_1234567890")
+
+    hint = _stale_env_hint(401)
+    assert hint and "source" in hint and str(rc) in hint
+    assert _stale_env_hint(500) is None  # only auth failures
+    monkeypatch.setenv("CITADEL_MCP_ACCESS_TOKEN", "ctdl_fresh_1234567890")
+    assert _stale_env_hint(401) is None  # env matches rc → different problem
+
+
 # ---- capture-roots wizard -----------------------------------------------------
 
 

@@ -19,6 +19,9 @@ A compact crenellated fortress: battlements, walls, two windows. Shown on bare
 
 - **Wordmark:** `CITADEL` (bold).
 - **Tagline:** `the organization vault` (dim).
+- **Opening hero (bare `citadel`):** the figlet `CITADEL` wordmark in brand
+  colors — Masumi magenta `#FA008C` fading to cyan on truecolor terminals
+  (`COLORTERM`), bold cyan elsewhere.
 - Source of truth: [`kb/banner.py`](kb/banner.py).
 
 ## Terminal palette (ANSI)

@@ -26,10 +26,9 @@ _LABELS: dict[int, tuple[str, tuple[str, ...]]] = {
     2: ("the organization vault", ("dim",)),
 }
 
-# Large hero — a figlet "CITADEL" inside a walled fortress: merlons on a solid
-# rampart, lit windows, and an arched gate. Used on the bare `citadel` home
-# screen; the compact `banner()` is the in-command header. The frame is built
-# programmatically from the wordmark so alignment can never drift.
+# Large hero — just the figlet "CITADEL" wordmark in brand colors. Shown on
+# the bare `citadel` home screen; the compact castle `banner()` stays the
+# in-command header (it is "the mark", see brand.md).
 _WORDMARK = (
     "  ____  ___  _____     _     ____   _____  _     ",
     " / ___||_ _||_   _|   / \\   |  _ \\ | ____|| |    ",
@@ -37,41 +36,36 @@ _WORDMARK = (
     "| |___  | |   | |   / ___ \\ | |_| || |___ | |___ ",
     " \\____||___|  |_|  /_/   \\_\\|____/ |_____||_____|",
 )
+_HERO_INDENT = "  "
+# Brand anchors (see brand.md): Masumi magenta #FA008C (the web brand) fading
+# into the terminal's cyan — one gradient tying both brand surfaces together.
+_BRAND_MAGENTA = (250, 0, 140)
+_BRAND_CYAN = (34, 211, 238)
 
-
-def _hero_rows() -> tuple[tuple[str, str], ...]:
-    """Assemble the hero as (line, kind) rows; kind drives per-row styling.
-
-    kind ∈ {"wall", "word", "window"} — walls are cyan, the wordmark is bold,
-    and the window row gets a warm glow when color is on.
-    """
-    inner = len(_WORDMARK[0]) + 4  # two columns of courtyard each side
-    width = inner + 2  # plus the flanking walls
-    rows: list[tuple[str, str]] = []
-    merlons = ("▛▜  " * width)[:width].rstrip()
-    rows.append((" " + merlons, "wall"))
-    rows.append((" " + "█" * width, "wall"))
-    rows.append((" █" + " " * inner + "█", "wall"))
-    for line in _WORDMARK:
-        rows.append((" █  " + line + "  █", "word"))
-    rows.append((" █" + " " * inner + "█", "wall"))
-    # Three arched windows, spread evenly across the courtyard.
-    slot = inner // 3
-    lead = (inner - slot * 3) // 2
-    cell = " " * ((slot - 3) // 2)
-    window = cell + "▟▀▙" + " " * (slot - len(cell) - 3)
-    rows.append((" █" + (" " * lead + window * 3).ljust(inner) + "█", "window"))
-    # The gate: an arched lintel over open doors, carved from the base wall.
-    flank = (width - 5) // 2
-    rows.append((" " + "█" * flank + "▛▀▀▀▜" + "█" * (width - 5 - flank), "wall"))
-    rows.append((" " + "█" * flank + "▌   ▐" + "█" * (width - 5 - flank), "wall"))
-    return tuple(rows)
-
-
-_HERO_ROWS = _hero_rows()
 # Widest hero line — the home screen falls back to the compact banner when the
 # terminal is narrower than this.
-HERO_WIDTH = max(len(line) for line, _ in _HERO_ROWS)
+HERO_WIDTH = len(_HERO_INDENT) + max(len(line) for line in _WORDMARK)
+
+
+def supports_truecolor() -> bool:
+    """24-bit color support, per the de-facto COLORTERM convention."""
+    return os.getenv("COLORTERM", "").lower() in ("truecolor", "24bit")
+
+
+def _lerp_rgb(start: tuple[int, int, int], end: tuple[int, int, int], t: float) -> tuple[int, int, int]:
+    return tuple(round(s + (e - s) * t) for s, e in zip(start, end))
+
+
+def _gradient_line(line: str, *, width: int) -> str:
+    """Paint one wordmark row with the brand gradient, column by column."""
+    out: list[str] = [_ANSI["bold"]]
+    for column, char in enumerate(line):
+        if char != " ":
+            r, g, b = _lerp_rgb(_BRAND_MAGENTA, _BRAND_CYAN, column / max(width - 1, 1))
+            out.append(f"\033[38;2;{r};{g};{b}m")
+        out.append(char)
+    out.append(_ANSI["reset"])
+    return "".join(out)
 
 _ANSI = {
     "reset": "\033[0m",
@@ -132,16 +126,15 @@ def mark(ok: bool, *, enable: bool = True) -> str:
 
 
 def banner_large(*, color: bool = True) -> str:
-    """The big hero: a figlet CITADEL in a fortress (cyan walls, lit windows)."""
+    """The big hero: the CITADEL wordmark in brand colors — a magenta→cyan
+    gradient on truecolor terminals, bold cyan elsewhere, plain when piped."""
+    width = max(len(line) for line in _WORDMARK)
     out: list[str] = []
-    for line, kind in _HERO_ROWS:
-        if kind == "word":
-            out.append(paint(line, "bold", "cyan", enable=color))
-        elif kind == "window" and color:
-            # Lit windows: a warm glow between the cyan walls.
-            out.append(paint(line[:2], "cyan") + paint(line[2:-1], "yellow") + paint(line[-1], "cyan"))
+    for line in _WORDMARK:
+        if color and supports_truecolor():
+            out.append(_HERO_INDENT + _gradient_line(line, width=width))
         else:
-            out.append(paint(line, "cyan", enable=color))
+            out.append(_HERO_INDENT + paint(line, "bold", "cyan", enable=color))
     return "\n".join(out)
 
 

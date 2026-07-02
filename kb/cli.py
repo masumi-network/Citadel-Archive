@@ -152,6 +152,33 @@ def _needs_server(
     return wrapper
 
 
+def _stale_env_hint(status_code: int) -> str | None:
+    """The fix-it line for an auth-rejected command run from a stale shell.
+
+    After `citadel onboard`/`token set` rotate the token in the shell rc, the
+    *current* shell still exports the old value — and env is what commands
+    send. When the Node rejects it (401/403) and the rc disagrees with env,
+    the fix is `source <rc>`, so say exactly that instead of a bare 401.
+    """
+    if status_code not in (401, 403):
+        return None
+    rc_path = detect_shell_rc()
+    rc_token = read_token_from_rc(rc_path)
+    env_token = (os.environ.get(TOKEN_ENV) or "").strip()
+    if rc_token and rc_token != env_token:
+        return (
+            f"this shell's {TOKEN_ENV} is out of date with {rc_path} — "
+            f"run `source {rc_path}` (or open a new shell) and retry."
+        )
+    return None
+
+
+def _print_auth_hint(command: str, status_code: int) -> None:
+    hint = _stale_env_hint(status_code)
+    if hint:
+        print(f"citadel {command}: hint: {hint}", file=sys.stderr)
+
+
 def _result_exit(value: Any) -> int:
     """Exit 1 when a result payload carries ``ok: False``; else 0.
 
@@ -190,6 +217,7 @@ async def _ingest(args: argparse.Namespace) -> int:
     except urllib.error.HTTPError as exc:
         detail = exc.read().decode(errors="replace")[:200] if exc.fp else exc.reason
         print(f"citadel ingest: HTTP {exc.code} {detail}", file=sys.stderr)
+        _print_auth_hint("ingest", exc.code)
         return 1
     except TimeoutError:
         print(
@@ -296,6 +324,7 @@ async def _search(args: argparse.Namespace) -> int:
     except urllib.error.HTTPError as exc:
         detail = exc.read().decode(errors="replace")[:200] if exc.fp else exc.reason
         print(f"citadel search: HTTP {exc.code} {detail}", file=sys.stderr)
+        _print_auth_hint("search", exc.code)
         return 1
     except (urllib.error.URLError, OSError, ValueError, http.client.HTTPException) as exc:
         print(f"citadel search: {exc}", file=sys.stderr)
@@ -565,6 +594,7 @@ async def _capture(args: argparse.Namespace) -> int:
             results.append({"root": root.path, "ok": False, "error": f"HTTP {exc.code} {detail}"})
             if not as_json:
                 print(f"FAIL {root.path}: HTTP {exc.code} {detail}", file=sys.stderr)
+                _print_auth_hint("capture", exc.code)
         except (urllib.error.URLError, OSError, ValueError) as exc:
             # Node unreachable / DNS / timeout / non-HTTPS URL — isolate per root.
             failures += 1
@@ -880,37 +910,55 @@ def _indent(text: str, prefix: str = "    ") -> str:
 
 
 def _wire_detected_tools(node_url: str, *, color: bool) -> None:
-    """Interactive: offer to add Citadel's MCP server to each detected tool.
+    """Interactive: one checkbox list of detected tools, then wire the selection.
 
-    Write-tier tools (token stays in the rc via an env reference) are merged on
-    confirmation; snippet-tier tools print a paste-in block on request; Pi gets
-    a note. Used only on an interactive `citadel onboard`.
+    Write-tier tools (token stays in the rc via an env reference) are merged;
+    snippet-tier tools print a paste-in block; Pi gets a note. Preselection
+    mirrors the old per-tool defaults: write-tier on, snippet-tier off. Used
+    only on an interactive `citadel onboard`.
     """
     from kb import tool_detect
+    from kb.prompt import checkbox_select
 
     detected = tool_detect.detect()
     if not detected:
         return
-    print("\n" + paint("Coding tools", "bold", enable=color))
-    for name in detected:
+    selectable = [name for name in detected if tool_detect.SPECS[name].mode != "note"]
+    notes = [name for name in detected if tool_detect.SPECS[name].mode == "note"]
+
+    chosen: list[str] = []
+    if selectable:
+        labels = [
+            tool_detect.SPECS[name].label
+            + (paint("  (paste-in snippet)", "dim", enable=color) if tool_detect.SPECS[name].mode == "snippet" else "")
+            for name in selectable
+        ]
+        preselected = {i for i, name in enumerate(selectable) if tool_detect.SPECS[name].mode == "write"}
+        print()
+        picked = checkbox_select(
+            paint("Coding tools", "bold", enable=color)
+            + paint(" — add Citadel MCP to:", "dim", enable=color),
+            labels,
+            preselected,
+        )
+        chosen = [selectable[i] for i in sorted(picked)] if picked else []
+
+    results: list[tuple[str, Any]] = []
+    if chosen:
+        with _Spinner(f"Wiring {len(chosen)} tool(s)…"):
+            results = [(name, tool_detect.apply(name, node_url=node_url)) for name in chosen]
+    for name, result in results:
         spec = tool_detect.SPECS[name]
         if spec.mode == "write":
-            answer = input(f"  Add Citadel MCP to {spec.label}? [Y/n]: ").strip().lower()
-            if answer not in ("", "y", "yes"):
-                continue
-            result = tool_detect.apply(name, node_url=node_url)
             sigil = mark(result.action != "error", enable=color)
             print(f"  {sigil} {spec.label}  {paint(f'{result.action} · {result.detail}', 'dim', enable=color)}")
-        elif spec.mode == "snippet":
-            answer = input(f"  Show paste-in MCP snippet for {spec.label}? [y/N]: ").strip().lower()
-            if answer not in ("y", "yes"):
-                continue
-            result = tool_detect.apply(name, node_url=node_url)
-            print(paint(f"    → {spec.config_hint}", "dim", enable=color))
+        else:  # snippet
+            print(f"  {paint(spec.label, 'bold', enable=color)} — paste into {paint(spec.config_hint, 'dim', enable=color)}:")
             print(_indent(result.snippet or ""))
-        else:  # note (e.g. Pi)
-            result = tool_detect.apply(name, node_url=node_url)
-            print(f"  {paint('•', 'dim', enable=color)} {spec.label}: {paint(result.detail, 'dim', enable=color)}")
+    for name in notes:
+        result = tool_detect.apply(name, node_url=node_url)
+        spec = tool_detect.SPECS[name]
+        print(f"  {paint('•', 'dim', enable=color)} {spec.label}: {paint(result.detail, 'dim', enable=color)}")
 
 
 async def _mcp_add(args: argparse.Namespace) -> int:

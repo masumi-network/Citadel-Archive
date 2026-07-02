@@ -17,6 +17,14 @@ All notable changes to `citadel-archive` are documented here. Format follows
   `pipx upgrade --pip-args=--no-cache-dir`, editable/source checkouts are left
   alone (told to `git pull`), anything else gets printed instructions.
 
+- **Checkbox tool selection on onboard** — the coding-tools step is one
+  arrow-key multi-select (↑/↓ · space · enter; numeric fallback off-TTY)
+  instead of a Y/n question per tool, with the spinner while the selection is
+  wired.
+- **Stale-shell auth hint** — when `ingest`/`search`/`capture` get a 401/403
+  and the shell rc holds a different token than the env, the error now says
+  the actual fix: `source ~/.zshrc`.
+
 ### Changed
 
 - **`citadel onboard` token flow** — an already-configured token (env or shell
@@ -28,10 +36,11 @@ All notable changes to `citadel-archive` are documented here. Format follows
   toplevel on onboard, cwd on setup) is offered as a press-Enter default, and a
   root like `/masumi` that doesn't exist offers the home-relative dir that does
   (`~/masumi`) instead of recording a dead root.
-- **New castle art** — the hero is a walled fortress (solid ramparts, lit
-  windows, arched gate) built programmatically so alignment can't drift; the
-  compact banner gains the matching gate; the home screen falls back to the
-  compact banner on narrow terminals and shows the installed version.
+- **Brand-color hero** — the opening art is now just the CITADEL wordmark in
+  brand colors: a Masumi-magenta → cyan gradient on truecolor terminals, bold
+  cyan elsewhere. The compact castle banner (the mark) stays as the in-command
+  header and gains an arched gate; the home screen falls back to it on narrow
+  terminals and shows the installed version.
 
 ## [0.2.1] — 2026-06-29
 
