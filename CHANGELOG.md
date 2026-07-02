@@ -4,7 +4,7 @@ All notable changes to `citadel-archive` are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses
 [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [0.2.2] — 2026-07-02
 
 ### Added
 

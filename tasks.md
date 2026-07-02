@@ -1,5 +1,36 @@
 # Citadel Tasks
 
+## CLI UX sprint (2026-07-02) — SHIPPED as v0.2.2 (PR #72 + tagline follow-up)
+
+Full change list: [`CHANGELOG.md` § 0.2.2](CHANGELOG.md).
+
+- [x] Onboard token flow: keep-or-replace for an existing token (rc wins over a
+      stale env), verification + identity panel up front, 401 re-paste loop
+- [x] `citadel token set` (verify-first rotation) · `citadel update`/`upgrade`
+      (pipx-aware self-update)
+- [x] Checkbox multi-select for onboard coding-tools (`kb/prompt.py`; raw-fd
+      keys, Esc/CSI-safe, width-clipped repaint, numeric fallback)
+- [x] Capture-roots wizard: declinable press-Enter default (repo/cwd),
+      `/masumi`→`~/masumi` did-you-mean, post-wizard seed keeps #43 guarantee
+- [x] Brand hero: CITADEL wordmark in magenta `#FA008C`→cyan gradient
+      (truecolor/256/bold-cyan tiers) + magenta tagline; compact castle stays
+      the in-command mark (arched gate)
+- [x] Stale-shell 401/403 hint on ingest/search/capture (`source ~/.zshrc`)
+- [x] Pre-merge workflow code review: 10 verified findings, all fixed
+      (rc parsing via shlex + last-export-wins, EOF-safe prompts, termios
+      degradation, repaint clipping). Suite 637 pass.
+
+**Todos / carry-over:**
+
+- [ ] sarthi's seat token 403s against prod (predates v0.2.2) — mint fresh
+      (`citadel seat token sarthi` with admin key), then `citadel token set`
+- [ ] Release gates from the read-side sprint: rotate secrets · verify #69 on
+      the node · profile #50
+- [ ] Deferred CLI refactors: global `--json`/`--node-url` parent-parser,
+      did-you-mean for subparser typos
+- [ ] Event-driven sync (GitHub/Linear webhooks → per-event ingest +
+      incremental cognify) to replace polling — user-preferred next project
+
 ## Read-side hardening sprint (issues #25–#53) — ~SHIPPED (16 closed, 4 pending verify)
 
 Plan + full status: [`docs/read-side-hardening-sprint.md`](docs/read-side-hardening-sprint.md)
