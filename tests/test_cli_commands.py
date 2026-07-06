@@ -408,3 +408,178 @@ def test_wizard_default_suppressed_when_already_approved(tmp_path: Path, monkeyp
 
     config = _wizard_roots(existing, default_root=str(tmp_path))
     assert len(config.roots) == 1  # not duplicated
+
+
+# ---- citadel token create (seat binding) ---------------------------------------
+
+
+SEATS = [
+    {"seat_slug": "alice", "name": "Alice", "role": "writer", "disabled": False},
+    {"seat_slug": "sarthi", "name": "Sarthi", "role": "writer", "disabled": False},
+]
+
+
+def _token_create_args(**kw):
+    base = dict(
+        name="ci-bot", seat=None, dataset=None, role=None, kind=None,
+        expires_at=None, json=True, node_url="https://node.example",
+    )
+    base.update(kw)
+    return argparse.Namespace(**base)
+
+
+def _wire_access(monkeypatch, *, seats=None):
+    calls = {}
+
+    def fake_issue_seat_token(slug, **k):
+        calls["seat"] = (slug, k.get("token_name"))
+        return {"ok": True, "token": "ctdl_seat", "principal": {"seat_slug": slug}, "api_token": {}}
+
+    def fake_create_token(**k):
+        calls["standalone"] = k
+        return {"ok": True, "token": "ctdl_standalone", "principal": {"id": "p1"}, "api_token": k}
+
+    monkeypatch.setattr("kb.cli.list_seats", lambda **k: {"seats": seats if seats is not None else SEATS})
+    monkeypatch.setattr("kb.cli.issue_seat_token", fake_issue_seat_token)
+    monkeypatch.setattr("kb.cli.create_token", fake_create_token)
+    return calls
+
+
+def test_token_create_seat_and_dataset_conflict(monkeypatch, capsys) -> None:
+    from kb.cli import _token_create
+
+    _wire_access(monkeypatch)
+    rc = asyncio.run(_token_create(_token_create_args(seat="alice", dataset="x")))
+    assert rc == 2
+    assert "not both" in capsys.readouterr().err
+
+
+def test_token_create_seat_rejects_role_flags(monkeypatch, capsys) -> None:
+    from kb.cli import _token_create
+
+    _wire_access(monkeypatch)
+    rc = asyncio.run(_token_create(_token_create_args(seat="alice", role="admin")))
+    assert rc == 2
+    assert "inherit" in capsys.readouterr().err
+
+
+def test_token_create_seat_mints_via_seat_endpoint(monkeypatch, capsys) -> None:
+    from kb.cli import _token_create
+
+    calls = _wire_access(monkeypatch)
+    rc = asyncio.run(_token_create(_token_create_args(seat="alice")))
+    assert rc == 0
+    assert calls["seat"] == ("alice", "ci-bot")
+    assert "standalone" not in calls
+    assert json.loads(capsys.readouterr().out)["token"] == "ctdl_seat"
+
+
+def test_token_create_unknown_seat_lists_available(monkeypatch, capsys) -> None:
+    from kb.cli import _token_create
+
+    calls = _wire_access(monkeypatch)
+    rc = asyncio.run(_token_create(_token_create_args(seat="bob")))
+    assert rc == 1
+    err = capsys.readouterr().err
+    assert "no seat 'bob'" in err and "alice" in err
+    assert not calls
+
+
+def test_token_create_dataset_matching_seat_slug_redirects(monkeypatch, capsys) -> None:
+    from kb.cli import _token_create
+
+    calls = _wire_access(monkeypatch)
+    rc = asyncio.run(_token_create(_token_create_args(dataset="sarthi")))
+    assert rc == 1
+    assert "--seat sarthi" in capsys.readouterr().err
+    assert not calls
+
+
+def test_token_create_seat_prefixed_unknown_dataset_fails(monkeypatch, capsys) -> None:
+    from kb.cli import _token_create
+
+    calls = _wire_access(monkeypatch)
+    rc = asyncio.run(_token_create(_token_create_args(dataset="seat:ghost")))
+    assert rc == 1
+    assert "no seat 'ghost'" in capsys.readouterr().err
+    assert not calls
+
+
+def test_token_create_plain_dataset_stays_standalone(monkeypatch, capsys) -> None:
+    from kb.cli import _token_create
+
+    calls = _wire_access(monkeypatch)
+    rc = asyncio.run(_token_create(_token_create_args(dataset="masumi-network")))
+    assert rc == 0
+    assert calls["standalone"]["default_dataset"] == "masumi-network"
+    assert calls["standalone"]["role"] == "reader"  # default fills in
+    assert json.loads(capsys.readouterr().out)["token"] == "ctdl_standalone"
+
+
+def test_token_create_no_target_non_tty_skips_picker(monkeypatch, capsys) -> None:
+    from kb.cli import _token_create
+
+    calls = _wire_access(monkeypatch)
+    rc = asyncio.run(_token_create(_token_create_args(json=False)))
+    assert rc == 0
+    assert "standalone" in calls and "seat" not in calls
+
+
+def test_pick_seat_choices() -> None:
+    from kb.cli import _PickerAborted, _pick_seat
+
+    answers = iter(["7", "2"])  # out-of-range re-prompts, then a valid pick
+    import builtins
+
+    original = builtins.input
+    builtins.input = lambda prompt="": next(answers)
+    try:
+        assert _pick_seat(SEATS) == "sarthi"
+        builtins.input = lambda prompt="": "0"
+        assert _pick_seat(SEATS) is None
+        builtins.input = lambda prompt="": ""
+        with pytest.raises(_PickerAborted):
+            _pick_seat(SEATS)
+    finally:
+        builtins.input = original
+
+
+def test_token_create_empty_seat_is_usage_error(monkeypatch, capsys) -> None:
+    from kb.cli import _token_create
+
+    calls = _wire_access(monkeypatch)
+    rc = asyncio.run(_token_create(_token_create_args(seat="")))
+    assert rc == 2
+    assert "--seat needs a seat slug" in capsys.readouterr().err
+    assert not calls
+
+
+def test_token_create_blank_dataset_is_usage_error(monkeypatch, capsys) -> None:
+    from kb.cli import _token_create
+
+    calls = _wire_access(monkeypatch)
+    rc = asyncio.run(_token_create(_token_create_args(dataset="  ")))
+    assert rc == 2
+    assert "--dataset needs a dataset name" in capsys.readouterr().err
+    assert not calls
+
+
+def test_token_create_standalone_flags_skip_picker_on_tty(monkeypatch, capsys) -> None:
+    from kb.cli import _token_create
+
+    calls = _wire_access(monkeypatch)
+    monkeypatch.setattr("sys.stdin.isatty", lambda: True)
+    monkeypatch.setattr("sys.stdout.isatty", lambda: True)
+    monkeypatch.setattr(
+        "kb.cli._pick_seat",
+        lambda seats: pytest.fail("picker must not run when standalone flags are explicit"),
+    )
+    rc = asyncio.run(
+        _token_create(
+            _token_create_args(json=False, role="writer", expires_at="2027-01-01T00:00:00Z")
+        )
+    )
+    assert rc == 0
+    assert calls["standalone"]["role"] == "writer"
+    assert calls["standalone"]["expires_at"] == "2027-01-01T00:00:00Z"
+    assert "seat" not in calls

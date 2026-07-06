@@ -834,15 +834,134 @@ async def _seat_token(args: argparse.Namespace) -> int:
     return 0
 
 
+class _PickerAborted(Exception):
+    """The user cancelled the interactive seat picker (empty answer / EOF)."""
+
+
+def _active_seats(base_url: str) -> list[dict[str, Any]]:
+    result = list_seats(base_url=base_url)
+    return [seat for seat in (result.get("seats") or []) if not seat.get("disabled")]
+
+
+def _pick_seat(seats: list[dict[str, Any]]) -> str | None:
+    """Interactive seat picker for `token create` — a slug, or None for standalone."""
+    color = supports_color()
+    print("Assign this token to a seat (its writes land in that seat's private node):")
+    for index, seat in enumerate(seats, start=1):
+        slug = paint(str(seat.get("seat_slug")), "cyan", enable=color)
+        print(f"  {index}) {slug}  {seat.get('name', '')}  role={seat.get('role')}")
+    print("  0) standalone service-account token (no seat)")
+    while True:
+        answer = _prompt(f"Select [0-{len(seats)}]: ").strip()
+        if not answer:
+            raise _PickerAborted
+        if answer.isdigit() and int(answer) <= len(seats):
+            choice = int(answer)
+            return None if choice == 0 else str(seats[choice - 1].get("seat_slug"))
+        print(f"  enter a number between 0 and {len(seats)} (empty to cancel)")
+
+
+def _print_seat_token_result(result: dict[str, Any]) -> None:
+    color = supports_color()
+    principal = result.get("principal", {})
+    print(
+        paint(
+            f"New token for seat {principal.get('seat_slug')}  (dataset {principal.get('default_dataset')})",
+            "green",
+            enable=color,
+        )
+    )
+    if result.get("token"):
+        _print_minted_token(result["token"], result.get("api_token", {}), color=color)
+
+
 async def _token_create(args: argparse.Namespace) -> int:
     as_json = args.json
+    base_url = node_base_url(args.node_url)
+    seat_slug = args.seat
+    dataset = args.dataset
+
+    # Explicit-but-blank values (--seat "$SLUG" with the var unset) must not read
+    # as "flag omitted" — that would silently mint a standalone token with exit 0.
+    if seat_slug is not None and not seat_slug.strip():
+        print("citadel token create: --seat needs a seat slug.", file=sys.stderr)
+        return 2
+    if dataset is not None and not dataset.strip():
+        print("citadel token create: --dataset needs a dataset name.", file=sys.stderr)
+        return 2
+    if seat_slug and dataset:
+        print("citadel token create: choose --seat or --dataset, not both.", file=sys.stderr)
+        return 2
+    if seat_slug and (args.role or args.kind or args.expires_at):
+        print(
+            "citadel token create: seat tokens inherit the seat's role — "
+            "--role/--kind/--expires-at only apply to standalone tokens.",
+            file=sys.stderr,
+        )
+        return 2
+
     try:
+        # Interactive picker: TTY, human output, and no explicit target given.
+        # --role/--kind/--expires-at signal standalone intent (and minted
+        # immediately before seat binding existed) — never route them into the
+        # picker, where a picked seat would silently drop them.
+        if (
+            not seat_slug
+            and not dataset
+            and not (args.role or args.kind or args.expires_at)
+            and not as_json
+            and sys.stdin.isatty()
+            and sys.stdout.isatty()
+        ):
+            try:
+                seat_slug = _pick_seat(_active_seats(base_url))
+            except _PickerAborted:
+                print("citadel token create: cancelled.", file=sys.stderr)
+                return 1
+
+        if seat_slug:
+            known = {seat.get("seat_slug") for seat in _active_seats(base_url)}
+            if seat_slug not in known:
+                listing = ", ".join(sorted(str(slug) for slug in known)) or "none yet — `citadel seat create`"
+                print(
+                    f"citadel token create: no seat '{seat_slug}'. Seats: {listing}",
+                    file=sys.stderr,
+                )
+                return 1
+            result = issue_seat_token(seat_slug, base_url=base_url, token_name=args.name)
+            if as_json:
+                _print_json(result)
+            else:
+                _print_seat_token_result(result)
+            return 0
+
+        if dataset:
+            # The seat: namespace is private memory — seat tokens must come from
+            # --seat so they carry the seat identity and allowlist, not a bare
+            # default_dataset that the Node will 403.
+            slug = dataset.removeprefix("seat:")
+            known = {seat.get("seat_slug") for seat in _active_seats(base_url)}
+            if dataset.startswith("seat:") or slug in known:
+                if slug in known:
+                    print(
+                        f"citadel token create: '{dataset}' is a seat — mint a seat-bound token: "
+                        f"citadel token create \"{args.name}\" --seat {slug}",
+                        file=sys.stderr,
+                    )
+                else:
+                    print(
+                        f"citadel token create: no seat '{slug}' — create it first: "
+                        f"citadel seat create \"Name\" {slug}",
+                        file=sys.stderr,
+                    )
+                return 1
+
         result = create_token(
-            base_url=node_base_url(args.node_url),
+            base_url=base_url,
             name=args.name,
-            role=args.role,
-            kind=args.kind,
-            default_dataset=args.dataset,
+            role=args.role or "reader",
+            kind=args.kind or "service_account",
+            default_dataset=dataset,
             expires_at=args.expires_at,
         )
     except AccessClientError as exc:
@@ -1927,7 +2046,8 @@ def build_parser() -> argparse.ArgumentParser:
     seat_create.set_defaults(handler=_seat_create)
 
     seat_token = seat_sub.add_parser(
-        "token", help="Mint a fresh token for an EXISTING seat (re-link a lost seat token)"
+        "token",
+        help="Mint a fresh token for an EXISTING seat (alias of `citadel token create --seat <slug>`)",
     )
     seat_token.add_argument("slug", help="Seat slug, e.g. sarthi")
     seat_token.add_argument("--json", action="store_true", help="Machine-readable output")
@@ -1953,18 +2073,24 @@ def build_parser() -> argparse.ArgumentParser:
     token_set.set_defaults(handler=_token_set)
 
     token_create = token_sub.add_parser(
-        "create", help="Issue a standalone (service-account) token, printed once"
+        "create",
+        help="Issue a token, printed once — seat-bound (--seat, or interactive picker) or standalone",
     )
     token_create.add_argument("name", help="Token name/label")
     token_create.add_argument(
-        "--role", default="reader", choices=("reader", "writer", "admin"),
-        help="Token role (default: reader)",
+        "--seat", help="Bind the token to an EXISTING seat by slug (omit for an interactive picker)"
     )
     token_create.add_argument(
-        "--kind", default="service_account", choices=("service_account", "user"),
-        help="Principal kind (default: service_account)",
+        "--role", default=None, choices=("reader", "writer", "admin"),
+        help="Standalone-token role (default: reader; seat tokens inherit the seat's role)",
     )
-    token_create.add_argument("--dataset", help="Default dataset for the token")
+    token_create.add_argument(
+        "--kind", default=None, choices=("service_account", "user"),
+        help="Standalone-token principal kind (default: service_account)",
+    )
+    token_create.add_argument(
+        "--dataset", help="Default dataset for a standalone token (for seats use --seat)"
+    )
     token_create.add_argument("--expires-at", help="ISO 8601 expiry timestamp (optional)")
     token_create.add_argument("--json", action="store_true", help="Machine-readable output")
     token_create.add_argument("--node-url", help="Override Node URL")
