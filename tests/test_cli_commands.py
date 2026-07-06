@@ -542,3 +542,44 @@ def test_pick_seat_choices() -> None:
             _pick_seat(SEATS)
     finally:
         builtins.input = original
+
+
+def test_token_create_empty_seat_is_usage_error(monkeypatch, capsys) -> None:
+    from kb.cli import _token_create
+
+    calls = _wire_access(monkeypatch)
+    rc = asyncio.run(_token_create(_token_create_args(seat="")))
+    assert rc == 2
+    assert "--seat needs a seat slug" in capsys.readouterr().err
+    assert not calls
+
+
+def test_token_create_blank_dataset_is_usage_error(monkeypatch, capsys) -> None:
+    from kb.cli import _token_create
+
+    calls = _wire_access(monkeypatch)
+    rc = asyncio.run(_token_create(_token_create_args(dataset="  ")))
+    assert rc == 2
+    assert "--dataset needs a dataset name" in capsys.readouterr().err
+    assert not calls
+
+
+def test_token_create_standalone_flags_skip_picker_on_tty(monkeypatch, capsys) -> None:
+    from kb.cli import _token_create
+
+    calls = _wire_access(monkeypatch)
+    monkeypatch.setattr("sys.stdin.isatty", lambda: True)
+    monkeypatch.setattr("sys.stdout.isatty", lambda: True)
+    monkeypatch.setattr(
+        "kb.cli._pick_seat",
+        lambda seats: pytest.fail("picker must not run when standalone flags are explicit"),
+    )
+    rc = asyncio.run(
+        _token_create(
+            _token_create_args(json=False, role="writer", expires_at="2027-01-01T00:00:00Z")
+        )
+    )
+    assert rc == 0
+    assert calls["standalone"]["role"] == "writer"
+    assert calls["standalone"]["expires_at"] == "2027-01-01T00:00:00Z"
+    assert "seat" not in calls

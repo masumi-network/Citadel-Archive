@@ -881,6 +881,14 @@ async def _token_create(args: argparse.Namespace) -> int:
     seat_slug = args.seat
     dataset = args.dataset
 
+    # Explicit-but-blank values (--seat "$SLUG" with the var unset) must not read
+    # as "flag omitted" — that would silently mint a standalone token with exit 0.
+    if seat_slug is not None and not seat_slug.strip():
+        print("citadel token create: --seat needs a seat slug.", file=sys.stderr)
+        return 2
+    if dataset is not None and not dataset.strip():
+        print("citadel token create: --dataset needs a dataset name.", file=sys.stderr)
+        return 2
     if seat_slug and dataset:
         print("citadel token create: choose --seat or --dataset, not both.", file=sys.stderr)
         return 2
@@ -894,7 +902,17 @@ async def _token_create(args: argparse.Namespace) -> int:
 
     try:
         # Interactive picker: TTY, human output, and no explicit target given.
-        if not seat_slug and not dataset and not as_json and sys.stdin.isatty() and sys.stdout.isatty():
+        # --role/--kind/--expires-at signal standalone intent (and minted
+        # immediately before seat binding existed) — never route them into the
+        # picker, where a picked seat would silently drop them.
+        if (
+            not seat_slug
+            and not dataset
+            and not (args.role or args.kind or args.expires_at)
+            and not as_json
+            and sys.stdin.isatty()
+            and sys.stdout.isatty()
+        ):
             try:
                 seat_slug = _pick_seat(_active_seats(base_url))
             except _PickerAborted:

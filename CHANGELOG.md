@@ -4,6 +4,27 @@ All notable changes to `citadel-archive` are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses
 [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+
+- **Seat-bound `citadel token create`** — `--seat <slug>` mints a token bound
+  to an existing seat (it inherits the seat's role and private dataset;
+  `--role`/`--kind`/`--expires-at` are standalone-only and rejected alongside
+  `--seat`). On a TTY with no `--seat`/`--dataset` and none of the standalone
+  flags, an interactive picker offers the active seats or a standalone
+  service-account token (`0`, empty to cancel). `citadel seat token <slug>`
+  stays as the re-mint shortcut for an existing seat.
+
+### Changed
+
+- **`citadel token create --dataset <value>`** — a value that names a seat (or
+  uses the `seat:` prefix) is now rejected with a redirect to `--seat`, since a
+  bare `default_dataset` pointing at seat-private memory would only mint a
+  token the Node 403s. Explicitly empty `--seat ""`/`--dataset ""` (the unset
+  shell-variable footgun) are usage errors (exit 2) instead of silently
+  minting a standalone token.
+
 ## [0.2.2] — 2026-07-02
 
 ### Added
