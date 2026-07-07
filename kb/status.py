@@ -18,6 +18,7 @@ import shutil
 import time
 import urllib.error
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
@@ -63,6 +64,22 @@ def _request(
     return json.loads(body) if body else {}
 
 
+def _humanize_net_error(exc: Exception) -> str:
+    """Human words for the common network failures — raw urllib reasons read
+    like C errno dumps ('nodename nor servname provided, or not known')."""
+    text = str(exc)
+    lowered = text.lower()
+    if isinstance(exc, urllib.error.HTTPError):
+        return text
+    if "nodename nor servname" in lowered or "name or service not known" in lowered or "getaddrinfo" in lowered:
+        return "cannot resolve host"
+    if "connection refused" in lowered:
+        return "connection refused"
+    if isinstance(exc, TimeoutError) or "timed out" in lowered:
+        return "timed out"
+    return text
+
+
 @dataclass
 class Check:
     name: str
@@ -79,6 +96,7 @@ class StatusReport:
     identity: dict[str, Any]
     checks: list[Check]
     recent: list[dict[str, Any]]
+    repo: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -87,6 +105,7 @@ class StatusReport:
             "identity": self.identity,
             "checks": [asdict(c) for c in self.checks],
             "recent": self.recent,
+            "repo": self.repo,
         }
 
 
@@ -103,7 +122,7 @@ def check_node_health(base_url: str, *, timeout: float = _TIMEOUT) -> Check:
     try:
         data = _request("GET", f"{base_url.rstrip('/')}/healthz", timeout=timeout)
     except Exception as exc:
-        return Check("node", ok=False, detail=str(exc))
+        return Check("node", ok=False, detail=_humanize_net_error(exc))
     latency = int((time.monotonic() - started) * 1000)
     ok = bool(data.get("ok"))
     return Check("node", ok=ok, detail="healthy" if ok else "unhealthy", latency_ms=latency)
@@ -118,7 +137,7 @@ def check_auth(base_url: str, token: str | None, *, timeout: float = _TIMEOUT) -
             "GET", f"{base_url.rstrip('/')}/api/session", token=token, timeout=timeout
         )
     except Exception as exc:
-        return Check("auth", ok=False, detail=str(exc))
+        return Check("auth", ok=False, detail=_humanize_net_error(exc))
     latency = int((time.monotonic() - started) * 1000)
     identity = {
         "seat_slug": data.get("seat_slug"),
@@ -145,11 +164,11 @@ def check_search(base_url: str, token: str | None, *, timeout: float = _SEARCH_T
     except TimeoutError:
         return Check(
             "search", ok=False,
-            detail=f"timed out (>{int(timeout)}s, node warming up)",
+            detail=f"timed out after {int(timeout)}s — node warming up",
             data={"timed_out": True},
         )
     except Exception as exc:
-        return Check("search", ok=False, detail=str(exc))
+        return Check("search", ok=False, detail=_humanize_net_error(exc))
     latency = int((time.monotonic() - started) * 1000)
     results = data.get("results")
     if results is None:
@@ -342,17 +361,27 @@ def gather_status(
     base_url = base_url.rstrip("/")
     repo = repo or Path.cwd()
 
-    node = check_node_health(base_url, timeout=timeout)
-    auth = check_auth(base_url, token, timeout=timeout)
-    checks = [node, auth]
-    if with_search:
-        checks.append(check_search(base_url, token))  # uses its own longer timeout
-    corpus = check_corpus(base_url, token, timeout=timeout)
-    if corpus is not None:
-        checks.append(corpus)
+    # The network checks are independent, so they run concurrently — wall time
+    # is the slowest check (search, when cold), not the sum of all of them.
+    # Each check still captures its own failure, so a thread never raises.
+    with ThreadPoolExecutor(max_workers=5) as pool:
+        node_f = pool.submit(check_node_health, base_url, timeout=timeout)
+        auth_f = pool.submit(check_auth, base_url, token, timeout=timeout)
+        search_f = pool.submit(check_search, base_url, token) if with_search else None
+        corpus_f = pool.submit(check_corpus, base_url, token, timeout=timeout)
+        recent_f = (
+            pool.submit(fetch_recent, base_url, token, timeout=timeout) if with_recent else None
+        )
+        node = node_f.result()
+        auth = auth_f.result()
+        checks = [node, auth]
+        if search_f is not None:
+            checks.append(search_f.result())  # uses its own longer timeout
+        corpus = corpus_f.result()
+        if corpus is not None:
+            checks.append(corpus)
+        recent = recent_f.result() if recent_f is not None else []
     checks.extend(check_local_setup(repo, config_path))
-
-    recent = fetch_recent(base_url, token, timeout=timeout) if with_recent else []
     # A RED corpus gate (sources tracked but graph empty, or the canary failed)
     # makes the whole report unhealthy — no more green over a broken data plane (#27).
     corpus_ok = corpus.ok if corpus is not None else True
@@ -362,6 +391,7 @@ def gather_status(
         identity=auth.data,
         checks=checks,
         recent=recent,
+        repo=str(repo),
     )
 
 
@@ -381,48 +411,97 @@ _CHECK_LABELS = {
 }
 
 
-def render_text(report: StatusReport, *, color: bool = False) -> str:
-    from kb.banner import mark, paint
+def _fmt_latency(latency_ms: int | None) -> str:
+    """Humanized latency: '143ms' below a second, '5.8s' above."""
+    if latency_ms is None:
+        return ""
+    if latency_ms >= 1000:
+        return f"{latency_ms / 1000:.1f}s"
+    return f"{latency_ms}ms"
+
+
+# A check slower than this gets its latency called out instead of dimmed.
+_SLOW_MS = 3000
+
+
+def render_text(report: StatusReport, *, color: bool = False, verdict: bool = True) -> str:
+    from kb.banner import WARN, mark, paint
 
     ident = report.identity
     seat = ident.get("seat_slug") or ident.get("actor") or "—"
     role = ident.get("role") or "—"
+    identity_line = f"seat: {paint(str(seat), 'bold', enable=color)}   role: {role}"
+    # Where this token writes — the onboard identity panel's "writes" fact,
+    # surfaced here too so status answers it without a second command.
+    if ident.get("capabilities", {}).get("write"):
+        writes = f"seat:{ident['seat_slug']}" if ident.get("seat_slug") else "shared org dataset"
+        identity_line += f"   writes: {writes}"
     lines = [
-        f"seat: {paint(str(seat), 'bold', enable=color)}   role: {role}",
+        identity_line,
         paint(f"node: {report.node_url}", "dim", enable=color),
         "",
     ]
 
     cols = shutil.get_terminal_size((80, 24)).columns
 
-    def _row(check: Check) -> str:
+    def _row(check: Check, detail_width: int) -> str:
         label = _CHECK_LABELS.get(check.name, check.name)
-        latency = f"  ({check.latency_ms}ms)" if check.latency_ms is not None else ""
+        latency = _fmt_latency(check.latency_ms)
         detail = check.detail
-        budget = cols - 21 - len(latency)  # 2 indent + glyph + space + 16 label + space
+        budget = cols - 22 - len(latency)  # 2 indent + glyph + space + 16 label + space + gap
         if budget > 8 and len(detail) > budget:
             detail = detail[: budget - 1] + "…"
-        return f"  {mark(check.ok, enable=color)} {label:<16} {detail}{latency}"
+        if latency:
+            slow = (check.latency_ms or 0) >= _SLOW_MS
+            pad = " " * max(detail_width - len(detail) + 2, 2)
+            latency = pad + paint(latency, "yellow" if slow else "dim", enable=color)
+        sigil = mark(check.ok, enable=color)
+        if not check.ok and check.name == "search":
+            # Search never gates health — a red ✗ next to a green verdict reads
+            # as a contradiction, so the non-gating failure warns instead.
+            sigil = paint(WARN, "yellow", enable=color)
+        return f"  {sigil} {label:<16} {detail}{latency}"
 
     conn = [c for c in report.checks if c.name in _CONNECTIVITY]
     local = [c for c in report.checks if c.name not in _CONNECTIVITY]
+
+    def _section(title: str, checks: list[Check], note: str = "") -> list[str]:
+        # Latencies form one aligned (and dimmed) column per section, so the
+        # details read as a block instead of a ragged mix of text and numbers.
+        width = min(max((len(c.detail) for c in checks), default=0), max(cols - 30, 8))
+        header = paint(title, "bold", enable=color) + (paint(note, "dim", enable=color) if note else "")
+        return [header, *(_row(c, width) for c in checks)]
+
     if conn:
-        lines.append(paint("Connectivity", "bold", enable=color))
-        lines.extend(_row(c) for c in conn)
+        lines.extend(_section("Connectivity", conn))
         lines.append("")
     if local:
-        lines.append(paint("Local setup", "bold", enable=color))
-        lines.extend(_row(c) for c in local)
+        # Local checks are repo-relative — name the repo, so a ✗ from the wrong
+        # directory reads as "wrong directory", not "broken setup".
+        note = f"  — {report.repo}" if report.repo else ""
+        lines.extend(_section("Local setup", local, note))
 
     if report.recent:
         lines.append("")
-        lines.append("Recent activity")
+        lines.append(paint("Recent activity", "bold", enable=color))
         for item in report.recent[:5]:
             when = item.get("created_at") or item.get("timestamp") or ""
             label = item.get("title") or item.get("action") or item.get("detail") or "—"
-            lines.append(f"  · {str(when)[:19]}  {label}")
+            lines.append(f"  · {paint(str(when)[:19], 'dim', enable=color)}  {label}")
 
-    lines.append("")
+    if verdict:
+        lines.append("")
+        lines.append(render_verdict(report, color=color))
+    return "\n".join(lines)
+
+
+def render_verdict(report: StatusReport, *, color: bool = False) -> str:
+    """The one-line (plus hints) bottom-line summary — always the last thing printed."""
+    from kb.banner import paint
+
+    lines: list[str] = []
+    conn = [c for c in report.checks if c.name in _CONNECTIVITY]
+    local = [c for c in report.checks if c.name not in _CONNECTIVITY]
     conn_fail = [c for c in conn if not c.ok]
     local_fail = [c for c in local if not c.ok]
     # A cold-node Search TIMEOUT is non-gating noise; a hard Search error is not.
@@ -446,10 +525,10 @@ def render_text(report: StatusReport, *, color: bool = False) -> str:
             )
             lines.append(paint("  Run `citadel doctor --fix` to repair.", "dim", enable=color))
         if search_warming:
-            lines.append(paint("  Search: node warming up (non-gating).", "dim", enable=color))
+            lines.append(paint("  Search is still warming up — retry in a minute.", "dim", enable=color))
         elif search_degraded:
             detail = next((c.detail for c in search_fail), "")
-            lines.append(paint(f"  Search degraded — {detail} (non-gating).", "yellow", enable=color))
+            lines.append(paint(f"  Search degraded — {detail}. Not blocking.", "yellow", enable=color))
     else:
         node_auth_fail = [c for c in conn_fail if c.name in ("node", "auth")]
         corpus_fail = next((c for c in conn if c.name == "corpus" and not c.ok), None)

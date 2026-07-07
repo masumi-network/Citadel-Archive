@@ -202,6 +202,47 @@ def test_render_text_smoke() -> None:
     assert "✓" in out
 
 
+def test_render_text_names_the_checked_repo() -> None:
+    # Local checks are repo-relative — a ✗ from the wrong directory must read
+    # as "wrong directory", not "broken setup", so the repo is always named.
+    report = StatusReport(
+        node_url="https://node.example",
+        healthy=True,
+        identity={},
+        checks=[Check("mcp", ok=False, detail="not configured")],
+        recent=[],
+        repo="/some/checked/repo",
+    )
+    assert "/some/checked/repo" in render_text(report)
+
+
+def test_render_text_search_failure_warns_not_fails() -> None:
+    # Search never gates health — its failure renders as a yellow ! warning,
+    # not the same red ✗ as a fatal check, so glyphs can't contradict the
+    # green "Connected" verdict.
+    report = StatusReport(
+        node_url="https://node.example",
+        healthy=True,
+        identity={},
+        checks=[
+            Check("node", ok=True, detail="healthy"),
+            Check("search", ok=False, detail="timed out after 15s — node warming up", data={"timed_out": True}),
+        ],
+        recent=[],
+    )
+    out = render_text(report)
+    search_row = next(line for line in out.splitlines() if "Search" in line)
+    assert "!" in search_row
+    assert "✗" not in search_row
+
+
+def test_humanize_net_error_translates_dns_noise() -> None:
+    # Raw urllib reasons read like C errno dumps — humans get words.
+    exc = OSError("<urlopen error [Errno 8] nodename nor servname provided, or not known>")
+    assert status_mod._humanize_net_error(exc) == "cannot resolve host"
+    assert status_mod._humanize_net_error(OSError("[Errno 61] Connection refused")) == "connection refused"
+
+
 def test_status_command_json_and_exit(tmp_path: Path, monkeypatch, capsys) -> None:
     monkeypatch.setattr(
         status_mod._OPENER,

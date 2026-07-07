@@ -6,6 +6,8 @@ All notable changes to `citadel-archive` are documented here. Format follows
 
 ## [Unreleased]
 
+## [0.2.3] — 2026-07-07
+
 ### Added
 
 - **Seat-bound `citadel token create`** — `--seat <slug>` mints a token bound
@@ -18,12 +20,39 @@ All notable changes to `citadel-archive` are documented here. Format follows
 
 ### Changed
 
+- **`citadel status` is faster** — the network checks (node, auth, search,
+  data plane, recent activity, mesh) run concurrently, so wall time is the
+  slowest check instead of the sum of all of them.
+- **`citadel status` is clearer** — the verdict line always prints last;
+  latencies form an aligned dim column (`4.9s` above a second, yellow when
+  slow); the identity line shows where the token writes (`writes: seat:X` /
+  `shared org dataset`); **Local setup names the repo it checked**, so a ✗
+  from the wrong directory reads as "wrong directory" rather than "broken
+  setup" (`citadel doctor` names it too); the knowledge mesh is one compact
+  line; network errors are humanized ("cannot resolve host" instead of the
+  urllib errno dump); a failing search renders as a yellow `!` (it never
+  gates health) instead of a red ✗ contradicting a green verdict; the
+  stale-shell 401 hint (`source ~/.zshrc`) now prints on status like it does
+  on ingest/search; the banner is skipped when output is piped.
+- **`citadel onboard` has less friction** — the token keep-or-replace prompt
+  is a plain `Keep it? [Y/n]`; the capture-roots wizard drops the redundant
+  "set up now?" gate (its first question was already declinable) and asks for
+  tags as a one-line `Tags [personal]:` with the presets explained once up
+  front; the local-cognify pipx hint only prints when an OpenRouter key was
+  actually entered; the step summary reads `N step(s) wired, M skipped`.
 - **`citadel token create --dataset <value>`** — a value that names a seat (or
   uses the `seat:` prefix) is now rejected with a redirect to `--seat`, since a
   bare `default_dataset` pointing at seat-private memory would only mint a
   token the Node 403s. Explicitly empty `--seat ""`/`--dataset ""` (the unset
   shell-variable footgun) are usage errors (exit 2) instead of silently
   minting a standalone token.
+
+### Fixed
+
+- **Onboarding no longer ends green with a dead token** — keeping a token the
+  Node rejected (401/403) marks the token step with a yellow `!` and closes
+  with a warning pointing at `citadel token set`, instead of an all-green
+  "configured" summary whose very next suggestion would fail.
 
 ## [0.2.2] — 2026-07-02
 
