@@ -50,7 +50,17 @@ from kb.onboard import (
     merge_mcp_config,
     read_token_from_rc,
 )
-from kb.banner import HERO_WIDTH, SKIP, banner, banner_large, mark, paint, supports_color, tagline
+from kb.banner import (
+    HERO_WIDTH,
+    SKIP,
+    WARN,
+    banner,
+    banner_large,
+    mark,
+    paint,
+    supports_color,
+    tagline,
+)
 from kb.access_client import (
     AccessClientError,
     create_seat,
@@ -67,7 +77,7 @@ from kb.promotion_client import (
     reject_pending,
     run_promotion,
 )
-from kb.status import fetch_mesh, gather_status, render_text
+from kb.status import fetch_mesh, gather_status, render_text, render_verdict
 
 
 def _print_json(value: Any) -> None:
@@ -459,16 +469,15 @@ def _parse_root_arg(raw: str) -> tuple[str, tuple[str, ...]]:
 
 
 def _ask_root_tags() -> tuple[str, ...]:
-    print(
-        f"  Tags — presets: {', '.join(PRESET_ROOT_TAGS)}; "
-        f"'personal' never promotes. Default: {DEFAULT_ROOT_TAG}."
-    )
-    tags_raw = _prompt("  Tags (comma-separated): ").strip()
+    tags_raw = _prompt(f"  Tags [{DEFAULT_ROOT_TAG}]: ").strip()
     return tuple(tags_raw.split(",")) if tags_raw else (DEFAULT_ROOT_TAG,)
 
 
 def _wizard_roots(config: CaptureConfig, default_root: str | None = None) -> CaptureConfig:
-    print("\nAdd Approved Capture Roots — folders auto-captured to your Node.")
+    print("\nApproved Capture Roots — folders auto-captured to your Node.")
+    # Tag semantics explained once up front, so the per-root Tags prompt can
+    # stay a one-liner with a press-Enter default.
+    print(f"  Tag presets: {', '.join(PRESET_ROOT_TAGS)} — 'personal' never promotes.")
     # The dir the user ran `citadel` from is offered as an explicit yes/no —
     # Enter accepts, `n` declines. A separate question (not a prefilled path
     # prompt) so declining is always possible and "empty to finish" below
@@ -1170,23 +1179,38 @@ async def _status(args: argparse.Namespace) -> int:
         )
 
     if args.json:
-        report = await _gather()
+        report, mesh = await asyncio.gather(
+            _gather(), asyncio.to_thread(fetch_mesh, node_url, token)
+        )
         payload = report.to_dict()
-        payload["mesh"] = await asyncio.to_thread(fetch_mesh, node_url, token)
+        payload["mesh"] = mesh
         _print_json(payload)
     else:
         # The search check can take ~15s cold — spin so it doesn't look hung.
         with _Spinner("Checking Citadel…"):
-            report = await _gather()
-            mesh = await asyncio.to_thread(fetch_mesh, node_url, token)
+            report, mesh = await asyncio.gather(
+                _gather(), asyncio.to_thread(fetch_mesh, node_url, token)
+            )
         use_color = supports_color()
-        print(banner(color=use_color))
-        print()
-        print(render_text(report, color=use_color))
+        if sys.stdout.isatty():
+            # Piped output is for parsing/paging — skip the castle art.
+            print(banner(color=use_color))
+            print()
+        # Verdict last — the bottom line belongs at the bottom, not buried
+        # above the mesh block.
+        print(render_text(report, color=use_color, verdict=False))
         mesh_block = _render_mesh(mesh, use_color)
         if mesh_block:
             print()
             print(mesh_block)
+        print()
+        print(render_verdict(report, color=use_color))
+        auth = next((c for c in report.checks if c.name == "auth"), None)
+        if auth is not None and not auth.ok:
+            code = 401 if "401" in auth.detail else 403 if "403" in auth.detail else 0
+            hint = _stale_env_hint(code) if code else None
+            if hint:
+                print(paint(f"  hint: {hint}", "yellow", enable=use_color))
     return 0 if report.healthy else 1
 
 
@@ -1200,15 +1224,20 @@ def _render_mesh(mesh: dict[str, Any], color: bool) -> str:
         value = stats.get(key)
         return value if isinstance(value, int) else 0
 
-    lines = [
-        paint("Knowledge mesh", "bold", enable=color),
-        f"  documents {paint(str(num('documents')), 'bold', enable=color)}   "
-        f"nodes {num('nodes')}   edges {num('edges')}   searches {num('searches')}",
+    parts = [
+        f"{paint(str(num('documents')), 'bold', enable=color)} documents",
+        f"{num('nodes')} nodes",
+        f"{num('edges')} edges",
+        f"{num('searches')} searches",
     ]
     last = stats.get("last_indexed_at")
     if last:
-        lines.append(paint(f"  last indexed {str(last)[:19]}", "dim", enable=color))
-    return "\n".join(lines)
+        parts.append(paint(f"last indexed {str(last)[:16].replace('T', ' ')}", "dim", enable=color))
+    return (
+        paint("Knowledge mesh", "bold", enable=color)
+        + "\n  "
+        + " · ".join(parts)
+    )
 
 
 def _mcp_node_url(path: Path) -> str | None:
@@ -1332,8 +1361,12 @@ async def _doctor(args: argparse.Namespace) -> int:
         })
         return rc
 
-    print(banner(color=color))
-    print()
+    if sys.stdout.isatty():
+        print(banner(color=color))
+        print()
+    # Several checks are repo-relative — name the repo so a miss from the
+    # wrong directory reads as "wrong directory", not "broken setup".
+    print(paint(f"repo: {repo}", "dim", enable=color))
     if not issues:
         print(paint("✓ No problems found.", "green", enable=color))
         return 0
@@ -1409,8 +1442,12 @@ def _prompt_hidden(prompt: str) -> str:
 
 async def _resolve_onboard_token(
     args: argparse.Namespace, rc_path: Path, node_url: str, *, interactive: bool, color: bool
-) -> str:
-    """Pick the token to onboard with, then verify it. Returns "" when absent.
+) -> tuple[str, bool]:
+    """Pick the token to onboard with, then verify it.
+
+    Returns ``(token, rejected)`` — ``token`` is "" when absent; ``rejected``
+    is True when the Node answered 401/403 and the user chose to keep the
+    token anyway, so the summary can warn instead of ending green.
 
     Interactive flow: an already-configured token (shell rc first — it's the
     durable value every new shell exports — then env) is shown masked with a
@@ -1444,7 +1481,7 @@ async def _resolve_onboard_token(
                         enable=color,
                     )
                 )
-            answer = _prompt("  Keep it? [Y/n — n to paste a new one]: ").strip().lower()
+            answer = _prompt("  Keep it? [Y/n]: ").strip().lower()
             token = existing
             if answer in ("n", "no"):
                 token = _prompt_hidden("  Paste the new seat token (ctdl_…): ") or existing
@@ -1461,7 +1498,7 @@ async def _resolve_onboard_token(
         )
         token = _prompt_hidden("Paste your Citadel seat token (ctdl_…): ")
     if not token:
-        return ""
+        return "", False
 
     # Verify the token + show its identity (seat / role / access) up front, so a
     # rejected token is fixable now — not discovered after every other prompt.
@@ -1493,7 +1530,12 @@ async def _resolve_onboard_token(
             if not new_token:
                 break
             token = new_token
-    return token
+    rejected = (
+        auth is not None
+        and not auth.ok
+        and any(code in str(getattr(auth, "detail", "")) for code in ("401", "403"))
+    )
+    return token, rejected
 
 
 async def _onboard(args: argparse.Namespace) -> int:
@@ -1507,7 +1549,7 @@ async def _onboard(args: argparse.Namespace) -> int:
     if interactive:
         _print_banner_animated(banner(color=color), color)
 
-    token = await _resolve_onboard_token(
+    token, token_rejected = await _resolve_onboard_token(
         args, rc_path, node_url, interactive=interactive, color=color
     )
     if not token:
@@ -1551,7 +1593,7 @@ async def _onboard(args: argparse.Namespace) -> int:
     # to the shell rc next to the seat token.
     if interactive:
         llm_key = _prompt_hidden(
-            "Optional: paste an OpenRouter API key for local cognify (enter to skip): "
+            "\nOpenRouter API key for local cognify — Enter to skip: "
         )
         if llm_key:
             steps.append(
@@ -1565,9 +1607,10 @@ async def _onboard(args: argparse.Namespace) -> int:
                     ),
                 )
             )
-        print(
-            "  (local cognify also needs: pipx install 'citadel-archive[server]')"
-        )
+            # Only relevant once a key exists — noise for everyone who skipped.
+            print(
+                "  (local cognify also needs: pipx install 'citadel-archive[server]')"
+            )
 
     # Capture roots (unless --no-capture): the wizard asks about the repo
     # toplevel explicitly (declinable); if the config still ends up empty, it
@@ -1577,9 +1620,10 @@ async def _onboard(args: argparse.Namespace) -> int:
         cfg_path = capture_config_path()
         cfg = load_capture_config(cfg_path)
         if interactive:
-            answer = _prompt("\nSet up Approved Capture Roots now? [Y/n]: ").strip().lower()
-            if answer in ("", "y", "yes"):
-                cfg = _wizard_roots(cfg, default_root=str(repo))
+            # Straight into the wizard — its first question is already a
+            # declinable Y/n, so a separate "set up now?" gate was one prompt
+            # of pure friction.
+            cfg = _wizard_roots(cfg, default_root=str(repo))
         if not cfg.roots:
             cfg = cfg.with_root(str(repo), (DEFAULT_ROOT_TAG,))  # 'personal' never promotes
         save_capture_config(
@@ -1608,10 +1652,27 @@ async def _onboard(args: argparse.Namespace) -> int:
     for label, status in steps:
         text, ok, skipped = _humanize_status(status)
         sigil = paint(SKIP, "yellow", enable=color) if skipped else mark(ok, enable=color)
+        if token_rejected and label.startswith("token → "):
+            # The Node said 401/403 up front — the summary must not end green.
+            sigil = paint(WARN, "yellow", enable=color)
+            text += " — Node rejected this token"
         print(f"  {sigil} {label}  {paint(text, 'dim', enable=color)}")
     done = sum(1 for _, status in steps if not status.startswith("skipped"))
+    skipped_count = len(steps) - done
+    summary = f"Citadel configured — {done} step(s) wired"
+    if skipped_count:
+        summary += f", {skipped_count} skipped"
     print()
-    print(paint(f"Citadel configured — {done}/{len(steps)} steps wired.", "green", enable=color))
+    print(paint(summary + ".", "green", enable=color))
+    if token_rejected:
+        print(
+            paint(
+                f"{WARN} The Node rejected this token — searches will fail until you set "
+                "a valid one with `citadel token set`.",
+                "yellow",
+                enable=color,
+            )
+        )
     print(
         f"\nNext: restart your shell (or `source {rc_path}`), then in your agent ask:\n"
         '  "use citadel_search to find what we decided about the vault"'

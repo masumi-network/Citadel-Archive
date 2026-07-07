@@ -394,3 +394,25 @@ def test_onboard_rejected_token_offers_immediate_replacement(tmp_path: Path, mon
     assert "rejected" in out and "401" in out
     body = Path(args.shell_rc).read_text()
     assert "ctdl_fresh_bcdef12345" in body and "ctdl_stale_234567890" not in body
+
+
+def test_onboard_kept_rejected_token_warns_in_summary(tmp_path: Path, monkeypatch, capsys) -> None:
+    # Keeping a 401'd token must not end on an all-green summary (probe finding:
+    # a new user walked away from a dead token thinking setup succeeded).
+    monkeypatch.setenv(TOKEN_ENV, "ctdl_stale_234567890")
+    args = _interactive_onboard_args(tmp_path)
+
+    monkeypatch.setattr("sys.stdin.isatty", lambda: True)
+    answers = iter(["", ""])  # keep existing → decline the re-paste offer
+    monkeypatch.setattr("builtins.input", lambda prompt="": next(answers))
+    pastes = iter([""])  # skip OpenRouter key
+    monkeypatch.setattr("kb.cli.getpass.getpass", lambda prompt="": next(pastes))
+    monkeypatch.setattr(
+        "kb.status.check_auth",
+        lambda *a, **k: Check("auth", ok=False, detail="HTTP Error 401: Unauthorized"),
+    )
+
+    assert asyncio.run(_onboard(args)) == 0
+    out = capsys.readouterr().out
+    assert "Node rejected this token" in out  # on the token step line + closing warning
+    assert "citadel token set" in out
