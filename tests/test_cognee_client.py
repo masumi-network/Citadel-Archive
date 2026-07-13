@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import os
 import sys
 from types import SimpleNamespace
@@ -179,6 +180,83 @@ async def test_get_document_returns_none_for_textless_node(monkeypatch: Any) -> 
 
 
 @pytest.mark.asyncio
+async def test_get_document_assembles_document_from_chunks(monkeypatch: Any) -> None:
+    # Document nodes carry no text — body is stitched from linked DocumentChunk
+    # neighbors ordered by chunk_index (not edge order); textless entity
+    # neighbors are skipped and edge direction doesn't matter.
+    client = CogneePublicClient()
+
+    doc_props = {"name": "text_abc123", "type": "TextDocument"}
+
+    async def fake_graph_data() -> tuple[list[Any], list[Any]]:
+        nodes = [
+            ("doc-1", doc_props),
+            ("chunk-b", {"text": "part two", "chunk_index": 1}),
+            ("chunk-a", {"text": "part one", "chunk_index": 0}),
+            ("ent-1", {"name": "Entity"}),
+        ]
+        edges = [
+            ("chunk-b", "doc-1", "is_part_of", {}),
+            ("doc-1", "ent-1", "mentions", {}),
+            ("chunk-a", "doc-1", "is_part_of", {}),
+        ]
+        return (nodes, edges)
+
+    monkeypatch.setattr(client, "graph_data", fake_graph_data)
+
+    doc = await client.get_document("doc-1")
+    assert doc is not None
+    assert doc["body"] == "part one\n\npart two"  # chunk_index wins over edge order
+    assert doc["title"] == "text_abc123"
+    assert doc["source_type"] == "cognee"
+    assert doc["chunk_count"] == 2
+    assert doc["metadata"] == doc_props
+
+
+@pytest.mark.asyncio
+async def test_get_document_returns_none_for_textless_entity_near_chunks(
+    monkeypatch: Any,
+) -> None:
+    # Entity nodes (name/description only, no text) sit right next to
+    # text-bearing DocumentChunk nodes via contains/mentions edges. Chunk
+    # assembly must only follow is_part_of edges, or selecting an entity
+    # fabricates a "document" stitched from every chunk that mentions it
+    # (regressing the textless-node -> None / HTTP 404 contract).
+    client = CogneePublicClient()
+
+    async def fake_graph_data() -> tuple[list[Any], list[Any]]:
+        nodes = [
+            ("ent-1", {"name": "Kuzu", "description": "graph db", "is_a": "tool"}),
+            ("chunk-a", {"text": "doc A part one", "chunk_index": 0}),
+            ("chunk-b", {"text": "doc B part one", "chunk_index": 0}),
+        ]
+        edges = [
+            ("chunk-a", "ent-1", "contains", {}),
+            ("chunk-b", "ent-1", "contains", {}),
+        ]
+        return (nodes, edges)
+
+    monkeypatch.setattr(client, "graph_data", fake_graph_data)
+    assert await client.get_document("ent-1") is None
+
+
+@pytest.mark.asyncio
+async def test_get_document_returns_none_for_document_with_textless_neighbors(
+    monkeypatch: Any,
+) -> None:
+    # A document node whose only neighbors carry no text resolves to None,
+    # matching the existing textless-node behavior.
+    client = CogneePublicClient()
+
+    async def fake_graph_data() -> tuple[list[Any], list[Any]]:
+        nodes = [("doc-1", {"name": "text_abc123"}), ("ent-1", {"name": "Entity"})]
+        return (nodes, [("doc-1", "ent-1", "mentions", {})])
+
+    monkeypatch.setattr(client, "graph_data", fake_graph_data)
+    assert await client.get_document("doc-1") is None
+
+
+@pytest.mark.asyncio
 async def test_improve_raises_without_llm_key(monkeypatch: Any) -> None:
     """improve must fail loud like cognify — cognee swallows the keyless error (#41)."""
     monkeypatch.delenv("LLM_API_KEY", raising=False)
@@ -245,6 +323,233 @@ async def test_delete_graph_nodes_clears_graph_and_vector(monkeypatch: Any) -> N
     assert captured["collection"] == "DocumentChunk_text"
     assert captured["vector"] == [UUID(uuid_a), UUID(uuid_b)]
     assert await client.delete_graph_nodes([]) == 0  # no-op
+
+
+@pytest.mark.asyncio
+async def test_node_dataset_map_builds_data_id_to_dataset_names(monkeypatch: Any) -> None:
+    # Dataset membership lives only in the relational store (datasets ↔
+    # dataset_data ↔ data); a Data item can belong to multiple datasets (mirrors).
+    from uuid import uuid4
+
+    doc_id = uuid4()
+    mirrored_id = uuid4()
+    dataset_a = SimpleNamespace(id=uuid4(), name="seat:alice")
+    dataset_b = SimpleNamespace(id=uuid4(), name="seat:bob")
+
+    async def run_startup_migrations() -> None:
+        return None
+
+    async def get_default_user() -> Any:
+        return SimpleNamespace(id="user-1")
+
+    async def get_datasets(user_id: Any) -> list[Any]:
+        assert user_id == "user-1"
+        return [dataset_a, dataset_b]
+
+    async def get_dataset_data(dataset_id: Any) -> list[Any]:
+        if dataset_id == dataset_a.id:
+            return [SimpleNamespace(id=doc_id), SimpleNamespace(id=mirrored_id)]
+        return [SimpleNamespace(id=mirrored_id)]
+
+    monkeypatch.setitem(
+        sys.modules, "cognee", SimpleNamespace(run_startup_migrations=run_startup_migrations)
+    )
+    for parent in ("cognee.modules", "cognee.modules.data", "cognee.modules.users"):
+        monkeypatch.setitem(sys.modules, parent, SimpleNamespace())
+    monkeypatch.setitem(
+        sys.modules,
+        "cognee.modules.data.methods",
+        SimpleNamespace(get_datasets=get_datasets, get_dataset_data=get_dataset_data),
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "cognee.modules.users.methods",
+        SimpleNamespace(get_default_user=get_default_user),
+    )
+
+    client = CogneePublicClient()
+    monkeypatch.setattr(client, "_prepare_cognee_environment", lambda: None)
+
+    mapping = await client.node_dataset_map()
+
+    assert mapping == {
+        str(doc_id): ["seat:alice"],
+        str(mirrored_id): ["seat:alice", "seat:bob"],
+    }
+
+
+@pytest.mark.asyncio
+async def test_node_dataset_map_degrades_to_empty_on_failure(monkeypatch: Any) -> None:
+    # Attribution is best-effort: relational failures must never break the
+    # graph endpoint — the map degrades to {}.
+    async def run_startup_migrations() -> None:
+        return None
+
+    async def get_default_user() -> Any:
+        raise RuntimeError("relational store offline")
+
+    async def get_datasets(user_id: Any) -> list[Any]:
+        return []
+
+    async def get_dataset_data(dataset_id: Any) -> list[Any]:
+        return []
+
+    monkeypatch.setitem(
+        sys.modules, "cognee", SimpleNamespace(run_startup_migrations=run_startup_migrations)
+    )
+    for parent in ("cognee.modules", "cognee.modules.data", "cognee.modules.users"):
+        monkeypatch.setitem(sys.modules, parent, SimpleNamespace())
+    monkeypatch.setitem(
+        sys.modules,
+        "cognee.modules.data.methods",
+        SimpleNamespace(get_datasets=get_datasets, get_dataset_data=get_dataset_data),
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "cognee.modules.users.methods",
+        SimpleNamespace(get_default_user=get_default_user),
+    )
+
+    client = CogneePublicClient()
+    monkeypatch.setattr(client, "_prepare_cognee_environment", lambda: None)
+
+    assert await client.node_dataset_map() == {}
+
+
+@pytest.mark.asyncio
+async def test_node_dataset_map_returns_empty_when_no_datasets(monkeypatch: Any) -> None:
+    async def run_startup_migrations() -> None:
+        return None
+
+    async def get_default_user() -> Any:
+        return SimpleNamespace(id="user-1")
+
+    async def get_datasets(user_id: Any) -> list[Any]:
+        return []
+
+    async def get_dataset_data(dataset_id: Any) -> list[Any]:
+        raise AssertionError("must not be called when there are no datasets")
+
+    monkeypatch.setitem(
+        sys.modules, "cognee", SimpleNamespace(run_startup_migrations=run_startup_migrations)
+    )
+    for parent in ("cognee.modules", "cognee.modules.data", "cognee.modules.users"):
+        monkeypatch.setitem(sys.modules, parent, SimpleNamespace())
+    monkeypatch.setitem(
+        sys.modules,
+        "cognee.modules.data.methods",
+        SimpleNamespace(get_datasets=get_datasets, get_dataset_data=get_dataset_data),
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "cognee.modules.users.methods",
+        SimpleNamespace(get_default_user=get_default_user),
+    )
+
+    client = CogneePublicClient()
+    monkeypatch.setattr(client, "_prepare_cognee_environment", lambda: None)
+
+    assert await client.node_dataset_map() == {}
+
+
+@pytest.mark.asyncio
+async def test_node_dataset_map_caches_result_across_calls(monkeypatch: Any) -> None:
+    # /api/mesh/graph calls this on every poll: the relational read (2+N
+    # sequential round-trips) must run once per TTL, not once per request (#50).
+    from uuid import uuid4
+
+    doc_id = uuid4()
+    reads = 0
+
+    async def run_startup_migrations() -> None:
+        return None
+
+    async def get_default_user() -> Any:
+        nonlocal reads
+        reads += 1
+        return SimpleNamespace(id="user-1")
+
+    async def get_datasets(user_id: Any) -> list[Any]:
+        return [SimpleNamespace(id="ds-1", name="seat:alice")]
+
+    async def get_dataset_data(dataset_id: Any) -> list[Any]:
+        return [SimpleNamespace(id=doc_id)]
+
+    monkeypatch.setitem(
+        sys.modules, "cognee", SimpleNamespace(run_startup_migrations=run_startup_migrations)
+    )
+    for parent in ("cognee.modules", "cognee.modules.data", "cognee.modules.users"):
+        monkeypatch.setitem(sys.modules, parent, SimpleNamespace())
+    monkeypatch.setitem(
+        sys.modules,
+        "cognee.modules.data.methods",
+        SimpleNamespace(get_datasets=get_datasets, get_dataset_data=get_dataset_data),
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "cognee.modules.users.methods",
+        SimpleNamespace(get_default_user=get_default_user),
+    )
+
+    client = CogneePublicClient()
+    monkeypatch.setattr(client, "_prepare_cognee_environment", lambda: None)
+
+    first = await client.node_dataset_map()
+    second = await client.node_dataset_map()
+
+    assert first == second == {str(doc_id): ["seat:alice"]}
+    assert reads == 1
+
+
+@pytest.mark.asyncio
+async def test_node_dataset_map_times_out_and_caches_the_failure(
+    monkeypatch: Any,
+) -> None:
+    # A non-erroring relational outage (TCP blackhole, saturated pool) must not
+    # stall /api/mesh/graph: the read is time-bounded, degrades to {}, and the
+    # failure is remembered for the TTL instead of re-blocking every poll (#50).
+    import kb.cognee_client as cognee_client_module
+
+    monkeypatch.setattr(cognee_client_module, "NODE_DATASET_MAP_TIMEOUT_SECONDS", 0.05)
+    reads = 0
+
+    async def run_startup_migrations() -> None:
+        return None
+
+    async def get_default_user() -> Any:
+        nonlocal reads
+        reads += 1
+        await asyncio.sleep(30)  # simulated blackhole: never errors, never returns
+        return SimpleNamespace(id="user-1")
+
+    async def get_datasets(user_id: Any) -> list[Any]:
+        return []
+
+    async def get_dataset_data(dataset_id: Any) -> list[Any]:
+        return []
+
+    monkeypatch.setitem(
+        sys.modules, "cognee", SimpleNamespace(run_startup_migrations=run_startup_migrations)
+    )
+    for parent in ("cognee.modules", "cognee.modules.data", "cognee.modules.users"):
+        monkeypatch.setitem(sys.modules, parent, SimpleNamespace())
+    monkeypatch.setitem(
+        sys.modules,
+        "cognee.modules.data.methods",
+        SimpleNamespace(get_datasets=get_datasets, get_dataset_data=get_dataset_data),
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "cognee.modules.users.methods",
+        SimpleNamespace(get_default_user=get_default_user),
+    )
+
+    client = CogneePublicClient()
+    monkeypatch.setattr(client, "_prepare_cognee_environment", lambda: None)
+
+    assert await client.node_dataset_map() == {}
+    assert await client.node_dataset_map() == {}  # served from the failure cache
+    assert reads == 1
 
 
 @pytest.mark.asyncio

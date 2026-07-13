@@ -223,7 +223,8 @@ function typeColor(type) {
 }
 
 // The Central dataset node id. In live mode it is the dataset node whose label
-// equals CENTRAL_DATASET; in knowledge mode it is the highest-degree node.
+// equals CENTRAL_DATASET; otherwise the highest-degree node — but never a
+// seat hub, so one user's private seat is never promoted to org Central.
 function resolveCentralId(nodes) {
   for (const node of nodes) {
     if (
@@ -236,6 +237,11 @@ function resolveCentralId(nodes) {
   let best = null;
   let bestDegree = -1;
   for (const node of nodes) {
+    // Seat hubs collect one belongs_to edge per doc+chunk, so without this
+    // guard the biggest seat's private hub would win the degree fallback and
+    // get pinned at the origin as the org Central whenever no node matches
+    // CENTRAL_DATASET (e.g. a renamed github_sync_dataset).
+    if (isSeatNode(node)) continue;
     const degree = Array.isArray(node.neighbors) ? node.neighbors.length : 0;
     if (degree > bestDegree) {
       bestDegree = degree;
@@ -288,6 +294,11 @@ function applyGraphDepth(nodes, links, byId) {
 }
 
 function applyHubSpokes(nodes, links, byId) {
+  // Spokes are decoration for the live dashboard projection only. Knowledge
+  // mode renders real graph data (dataset attribution arrives as belongs_to
+  // edges), so synthesizing Central→seat "hub" links there would draw edges
+  // that do not exist in the data.
+  if (state.graphMode === "knowledge") return { nodes, links };
   if (!state.graphSpokes || !graph.centralId || !byId.has(graph.centralId)) {
     return { nodes, links };
   }
@@ -1354,7 +1365,7 @@ function initializeGraph() {
 // Per-type node colour, dimmed to ~20% alpha when a hover highlight is active
 // and this node is not part of the highlighted set.
 function nodeColor(node) {
-  const base = typeColor(node.type);
+  const base = typeColor(isSeatNode(node) ? "seat" : node.type);
   if (graph.highlightNodes.size && !graph.highlightNodes.has(node.id)) {
     return withAlpha(base, 0.2);
   }
@@ -1502,9 +1513,44 @@ function selectNode(node) {
     </div>
     <p>${escapeHtml(formatDetails(node.metadata || {}))}</p>
   `;
+  if (state.graphMode === "knowledge" && node.id) {
+    loadNodeDocument(node);
+  }
   updateNodeSelection();
   if (state.graphDepth > 0) {
     buildGraphScene();
+  }
+}
+
+// Fetch and render the stored document text for a knowledge-graph node into
+// the inspector panel. Most entity nodes have no stored document (404), which
+// is normal and rendered as a quiet note rather than an error.
+async function loadNodeDocument(node) {
+  const container = document.createElement("div");
+  container.className = "node-document";
+  container.innerHTML = "<p>Loading document text…</p>";
+  selectedNode.append(container);
+  try {
+    const data = await api(`/api/documents/${encodeURIComponent(node.id)}`);
+    if (state.selectedId !== node.id) return;
+    const doc = data?.document;
+    if (!doc || !doc.body) {
+      container.innerHTML = "<p>No document text stored for this node.</p>";
+      return;
+    }
+    const title =
+      doc.title && doc.title !== node.label
+        ? `<strong>${escapeHtml(doc.title)}</strong>`
+        : "";
+    container.innerHTML = `${title}<pre>${escapeHtml(doc.body)}</pre>`;
+  } catch (error) {
+    if (state.selectedId !== node.id) return;
+    const message = String(error?.message || "Request failed");
+    if (/not found/i.test(message)) {
+      container.innerHTML = "<p>No document text stored for this node.</p>";
+    } else {
+      container.innerHTML = `<p>Could not load document text: ${escapeHtml(message)}</p>`;
+    }
   }
 }
 
@@ -1585,13 +1631,19 @@ function shapeRealGraph(payload) {
   const list = Array.isArray(payload.nodes) ? payload.nodes : [];
   list.forEach((node) => {
     const links = degree.get(node.id) || 0;
+    const dataset = node.dataset || null;
+    const isDatasetHub = (node.type || "node") === "dataset";
+    const isSeatHub =
+      isDatasetHub && String(dataset || node.label || "").startsWith(SEAT_DATASET_PREFIX);
+    const metadata = { type: node.type || "node", links };
+    if (dataset) metadata.dataset = dataset;
     nodes.set(node.id, {
       id: node.id,
       label: node.label || node.id,
       type: node.type || "node",
-      status: "linked",
-      size: clamp(26 + links * 5, 24, 58),
-      metadata: { type: node.type || "node", links },
+      status: isDatasetHub ? (isSeatHub ? "seat" : "dataset") : "linked",
+      size: isDatasetHub ? 72 : clamp(26 + links * 5, 24, 58),
+      metadata,
     });
   });
 

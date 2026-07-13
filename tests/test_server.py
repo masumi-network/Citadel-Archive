@@ -1785,6 +1785,51 @@ def test_mesh_graph_serves_real_graph_through_injected_gateway() -> None:
     assert unauthenticated.status_code == 401
 
 
+def test_mesh_graph_hides_seat_attribution_from_plain_readers(tmp_path: Any) -> None:
+    # Seat datasets are default-deny private memory (enforce_dataset_allowlist):
+    # graph attribution must not let any kb:search reader durably enumerate
+    # which seat contributed which document. Non-seat datasets stay open for
+    # unscoped tokens, mirroring the allowlist rules exactly.
+    class FakeDatasetGateway:
+        async def graph_data(self) -> tuple[list[Any], list[Any]]:
+            return (
+                [
+                    ("doc-1", {"name": "Seat doc", "type": "TextDocument"}),
+                    ("doc-2", {"name": "Org doc", "type": "TextDocument"}),
+                ],
+                [],
+            )
+
+        async def node_dataset_map(self) -> dict[str, list[str]]:
+            return {"doc-1": ["seat:alice"], "doc-2": ["masumi-network"]}
+
+    app.state.access_store = AccessStore(tmp_path / "access.json")
+    admin = authed_client()
+    app.state.knowledge_mesh = KnowledgeMesh(FakeDatasetGateway())
+    token = admin.post(
+        "/api/access/tokens",
+        json={"name": "plain-reader", "role": "reader", "kind": "service_account"},
+    ).json()["token"]
+    try:
+        admin_view = admin.get("/api/mesh/graph").json()
+        reader_view = (
+            TestClient(app, base_url="https://testserver")
+            .get("/api/mesh/graph", headers={"Authorization": f"Bearer {token}"})
+            .json()
+        )
+    finally:
+        app.state.knowledge_mesh = None
+
+    # Bypassing callers (admin) keep full attribution, seat hubs included.
+    assert any(node["id"] == "dataset:seat:alice" for node in admin_view["nodes"])
+    # Plain readers: the seat name appears nowhere in the payload...
+    assert "seat:alice" not in json.dumps(reader_view)
+    # ...but non-seat attribution is retained.
+    assert any(node["id"] == "dataset:masumi-network" for node in reader_view["nodes"])
+    doc = next(node for node in reader_view["nodes"] if node["id"] == "doc-2")
+    assert doc["dataset"] == "masumi-network"
+
+
 class KnowledgeCitadel(FakeCitadel):
     async def search(self, query: str, **kwargs: Any) -> list[Any]:
         return [

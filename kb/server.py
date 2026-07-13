@@ -922,6 +922,20 @@ def enforce_dataset_allowlist(identity: AccessIdentity, dataset: str) -> None:
     raise HTTPException(status_code=403, detail=f"Dataset not allowed: {dataset}.")
 
 
+def dataset_visible_to(identity: AccessIdentity, dataset: str) -> bool:
+    """Boolean twin of enforce_dataset_allowlist for read-side projections.
+
+    Used where a hidden dataset should silently disappear from a payload
+    (e.g. /api/mesh/graph attribution) instead of rejecting the request.
+    Delegates to enforce_dataset_allowlist so the two can never drift.
+    """
+    try:
+        enforce_dataset_allowlist(identity, dataset)
+    except HTTPException:
+        return False
+    return True
+
+
 def scope_override_active(
     identity: AccessIdentity,
     datasets: list[str] | tuple[str, ...],
@@ -2241,11 +2255,16 @@ async def mesh_graph(request: Request, limit: int | None = None) -> Any:
     Never fails hard: returns an empty graph with ``fallback: true`` when
     Cognee has no data or graph access is unavailable.
     """
-    require_access(request, "reader", "kb:search")
+    identity = require_access(request, "reader", "kb:search")
     if limit is not None and not 1 <= limit <= 1000:
         raise HTTPException(status_code=422, detail="Graph limit must be between 1 and 1000.")
     effective_limit = limit or get_citadel().config.mesh_graph_max_nodes
-    graph = await get_knowledge_mesh().graph(limit=effective_limit)
+    graph = await get_knowledge_mesh().graph(
+        limit=effective_limit,
+        # Seat datasets are private memory: dataset attribution is filtered per
+        # caller so a plain reader cannot enumerate who contributed what.
+        dataset_visible=lambda name: dataset_visible_to(identity, name),
+    )
     return jsonable_encoder({**graph, "limit": effective_limit})
 
 

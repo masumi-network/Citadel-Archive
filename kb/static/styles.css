@@ -819,6 +819,34 @@ pre {
   overflow-wrap: anywhere;
 }
 
+/* Stored document text for the selected knowledge-graph node.
+   Higher specificity than `.selection div` so it stays block, not flex. */
+.selection .node-document {
+  display: block;
+  margin-top: 8px;
+  padding: 8px 10px;
+  max-height: 260px;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--field);
+}
+
+.selection .node-document strong {
+  display: block;
+  margin-bottom: 4px;
+  font-size: 12px;
+}
+
+.selection .node-document pre {
+  margin: 0;
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 12px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
 .inline-alert {
   display: flex;
   justify-content: space-between;

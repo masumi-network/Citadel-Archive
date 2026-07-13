@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
-from time import perf_counter
+from time import monotonic, perf_counter
 from typing import Any, Protocol
 from urllib.parse import unquote, urlparse
 
@@ -12,6 +12,13 @@ logger = logging.getLogger(__name__)
 # Strong refs to detached background cognify tasks so the loop does not GC them
 # mid-flight (and so they can be awaited/observed in tests).
 _BACKGROUND_COGNIFY_TASKS: set[Any] = set()
+
+# Dataset-attribution tuning (#50): /api/mesh/graph calls node_dataset_map on
+# every poll, so results — failed reads included — are cached for the TTL, and
+# the relational read is time-bounded so a non-erroring outage (TCP blackhole,
+# saturated pool) degrades to "no attribution" instead of stalling the endpoint.
+NODE_DATASET_MAP_TTL_SECONDS = 60.0
+NODE_DATASET_MAP_TIMEOUT_SECONDS = 5.0
 
 
 def _suppress_inline_cognify() -> bool:
@@ -130,6 +137,11 @@ class CogneePublicClient:
         # Phase-1 subprocess so the web never cognifies while the subprocess owns
         # the on-disk Kuzu lock.
         self.writer_lock = asyncio.Lock()
+        # node→dataset attribution cache: (monotonic_ts, mapping). Remembers
+        # failures too, so an unreachable relational store cannot re-block every
+        # /api/mesh/graph poll (#50). One client per Citadel singleton, so this
+        # is effectively process-wide.
+        self._node_dataset_cache: tuple[float, dict[str, list[str]]] | None = None
 
     def _copy_env_if_missing(self, target: str, *sources: str) -> None:
         if os.getenv(target):
@@ -460,6 +472,56 @@ class CogneePublicClient:
         nodes, edges = await engine.get_graph_data()
         return list(nodes), list(edges)
 
+    async def node_dataset_map(self) -> dict[str, list[str]]:
+        """Map document graph-node ids to the cognee dataset names they belong to.
+
+        A TextDocument graph node's id IS the relational ``Data.id`` (same UUID),
+        and dataset membership lives only in the relational store (datasets ↔
+        dataset_data ↔ data) — node properties do not reliably carry the dataset
+        name. Read-only relational query, so no ``writer_lock``. A Data item can
+        belong to multiple datasets (mirrors), hence list values. Attribution is
+        best-effort: any failure (timeout included) degrades to ``{}`` and never
+        breaks callers.
+
+        Called on every /api/mesh/graph poll, so the result — a failed read's
+        ``{}`` included — is cached for ``NODE_DATASET_MAP_TTL_SECONDS`` and the
+        relational read is bounded by ``NODE_DATASET_MAP_TIMEOUT_SECONDS``:
+        without both, every poll would add 2+N sequential relational round-trips
+        to a latency-watched endpoint and block for the full driver timeout
+        whenever the relational store stalls (#50).
+        """
+        cached = self._node_dataset_cache
+        if cached is not None and monotonic() - cached[0] < NODE_DATASET_MAP_TTL_SECONDS:
+            return cached[1]
+        try:
+            mapping = await asyncio.wait_for(
+                self._read_node_dataset_map(),
+                timeout=NODE_DATASET_MAP_TIMEOUT_SECONDS,
+            )
+        except Exception:  # noqa: BLE001 - dataset attribution is best-effort
+            logger.warning("node dataset map read skipped/failed", exc_info=True)
+            mapping = {}
+        self._node_dataset_cache = (monotonic(), mapping)
+        return mapping
+
+    async def _read_node_dataset_map(self) -> dict[str, list[str]]:
+        self._prepare_cognee_environment()
+        import cognee
+
+        await self._ensure_cognee_ready(cognee)
+        from cognee.modules.data.methods import get_dataset_data, get_datasets
+        from cognee.modules.users.methods import get_default_user
+
+        user = await get_default_user()
+        datasets = await get_datasets(user.id)
+        if not datasets:
+            return {}
+        mapping: dict[str, list[str]] = {}
+        for dataset in datasets:
+            for data_item in await get_dataset_data(dataset.id):
+                mapping.setdefault(str(data_item.id), []).append(dataset.name)
+        return mapping
+
     async def delete_graph_nodes(self, node_ids: list[str]) -> int:
         """Delete nodes by id from BOTH the graph and the chunk vector store (#15).
 
@@ -501,40 +563,95 @@ class CogneePublicClient:
             logger.warning("vector-store cleanup delete skipped/failed", exc_info=True)
 
     async def get_document(self, document_id: str) -> dict[str, Any] | None:
-        """Resolve a search-hit node id back to its stored chunk text (#28).
+        """Resolve a search-hit node id back to its stored text (#28).
 
         cognee search hits carry a graph node/chunk id with no backing document
         store, so ``/api/documents`` previously 404'd on every cognee hit. Look
         the node up in the graph and return its text plus the remaining
-        properties; ``None`` when the node is missing or carries no text.
+        properties. Document nodes (e.g. TextDocument) carry no text themselves
+        — it lives on linked DocumentChunk nodes — so a textless match is
+        assembled from its ``is_part_of`` chunk neighbors, ordered by
+        ``chunk_index``; ``None`` when the node is missing or no text is found
+        either way (textless entities keep resolving to None/404).
         """
         try:
-            nodes, _ = await self.graph_data()
+            nodes, edges = await self.graph_data()
         except Exception as exc:  # noqa: BLE001
             if self._is_no_data_error(exc):
                 return None
             raise
-        for node_id, properties in nodes:
-            if str(node_id) != str(document_id):
-                continue
-            props = dict(properties or {})
-            text: str | None = None
-            text_key: str | None = None
+
+        def _extract_text(props: dict[str, Any]) -> tuple[str | None, str | None]:
             for key in ("text", "chunk", "content", "raw_content"):
                 value = props.get(key)
                 if isinstance(value, str) and value.strip():
-                    text, text_key = value, key
-                    break
-            if text is None:
-                return None
+                    return value, key
+            return None, None
+
+        # One pass over nodes: props by str id for O(1) neighbor lookup
+        # (setdefault keeps first-encounter semantics on duplicate ids).
+        props_by_id: dict[str, dict[str, Any]] = {}
+        for node_id, properties in nodes:
+            props_by_id.setdefault(str(node_id), dict(properties or {}))
+        doc_id = str(document_id)
+        props = props_by_id.get(doc_id)
+        if props is None:
+            return None
+        text, text_key = _extract_text(props)
+        if text is not None:
             return {
-                "id": str(document_id),
+                "id": doc_id,
                 "source_type": "cognee",
                 "title": props.get("title") or None,
                 "body": text,
                 "metadata": {k: v for k, v in props.items() if k != text_key},
             }
-        return None
+        # Textless document node: its text lives on DocumentChunk neighbors
+        # linked via ``is_part_of`` (chunk --is_part_of--> doc; stay
+        # direction-agnostic on endpoints but ONLY follow is_part_of edges —
+        # entities are also graph-adjacent to text-bearing chunks via
+        # ``contains``/``mentions``, and assembling those would fabricate a
+        # document for a textless entity, which must stay None (404).
+        # One pass over edges; textless neighbors are skipped; chunks sort by
+        # numeric chunk_index, unindexed ones trail in encounter order;
+        # duplicate edges to the same neighbor count once.
+        chunks: list[tuple[tuple[int, float], str]] = []
+        seen: set[str] = set()
+        for source_id, target_id, relationship, _edge_props in edges:
+            if str(relationship) != "is_part_of":
+                continue
+            if str(source_id) == doc_id:
+                neighbor_id = str(target_id)
+            elif str(target_id) == doc_id:
+                neighbor_id = str(source_id)
+            else:
+                continue
+            if neighbor_id in seen:
+                continue
+            seen.add(neighbor_id)
+            neighbor_props = props_by_id.get(neighbor_id)
+            if neighbor_props is None:
+                continue
+            neighbor_text, _ = _extract_text(neighbor_props)
+            if neighbor_text is None:
+                continue
+            index = neighbor_props.get("chunk_index")
+            if isinstance(index, (int, float)):
+                sort_key = (0, float(index))
+            else:
+                sort_key = (1, float(len(chunks)))
+            chunks.append((sort_key, neighbor_text))
+        if not chunks:
+            return None
+        chunks.sort(key=lambda item: item[0])
+        return {
+            "id": doc_id,
+            "source_type": "cognee",
+            "title": props.get("title") or props.get("name") or None,
+            "body": "\n\n".join(chunk_text for _, chunk_text in chunks),
+            "chunk_count": len(chunks),
+            "metadata": dict(props),
+        }
 
     async def cognify(self, *, datasets: list[str], force: bool = False) -> Any:
         """Cognify already-added data in ``datasets``.
