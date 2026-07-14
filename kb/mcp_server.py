@@ -472,7 +472,7 @@ class CitadelHttpClient:
         timeout: float = 30.0,
     ) -> None:
         self.base_url = _validate_base_url(
-            base_url or os.getenv("CITADEL_HTTP_BASE_URL") or "http://localhost:8000"
+            base_url or os.getenv("CITADEL_HTTP_BASE_URL") or _self_base_url()
         )
         self.access_token = (
             access_token
@@ -625,7 +625,7 @@ def create_mcp_server(
 
     def resolve_public_client() -> CitadelHttpClient:
         base_url = getattr(fallback, "base_url", None) if fallback is not None else None
-        return CitadelHttpClient(base_url=base_url, access_token="")
+        return CitadelHttpClient(base_url=base_url or _self_base_url(), access_token="")
 
     def public_manifest() -> dict[str, Any]:
         if fallback is not None and hasattr(fallback, "get_public"):
