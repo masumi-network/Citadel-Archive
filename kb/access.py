@@ -259,6 +259,19 @@ class AccessStore:
             "audit_events": [asdict(event) for event in self._audit_events(data)],
         }
 
+    def seat_slugs(self) -> list[str]:
+        """Return the seat slugs of all principals, in store order.
+
+        Cheaper than ``snapshot()`` for the latency-watched /api/mesh/graph
+        presence read: it reads only principals and never materializes the
+        (up to ``max_audit_events``) audit list or the token roster.
+        """
+        return [
+            principal.seat_slug
+            for principal in self._principals(self._load())
+            if principal.seat_slug
+        ]
+
     def authenticate_token(self, token: str) -> TokenSession | None:
         token_hash = hash_api_token(token)
         data = self._load()

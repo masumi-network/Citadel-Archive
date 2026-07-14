@@ -1880,6 +1880,86 @@ def test_mesh_graph_hides_seat_attribution_from_plain_readers(tmp_path: Any) -> 
     assert doc["dataset"] == "masumi-network"
 
 
+def test_mesh_projection_hides_seat_content_from_plain_readers(tmp_path: Any) -> None:
+    # ADR-0009 blocker: /api/mesh (its SSE twin /events, and the citadel_get_mesh
+    # MCP tool that proxies it) is a runtime-activity projection that recorded
+    # each seat's document first line and raw search-query text as node labels
+    # keyed by dataset. A plain reader/agent token must not receive another
+    # seat's content; the seat's presence (dataset hub) stays universal; bypass
+    # callers (admin) still see everything.
+    app.state.access_store = AccessStore(tmp_path / "access.json")
+    admin = authed_client()
+    alice_token = admin.post(
+        "/api/access/seats",
+        json={"name": "Alice Example", "slug": "alice", "email": "alice@example.com"},
+    ).json()["token"]
+    reader_token = admin.post(
+        "/api/access/tokens",
+        json={"name": "plain-reader", "role": "reader", "kind": "service_account"},
+    ).json()["token"]
+
+    config = server_module.get_citadel().config
+    mesh = server_module.get_mesh()
+    secret = "SECRET_ACQUISITION_TARGET is BetaCorp at $50M valuation"
+    org_doc = "Public roadmap milestone for the org"
+    secret_query = "alice private acquisition query"
+
+    async def _populate() -> None:
+        await mesh.record_ingest(
+            config,
+            IngestResult(accepted=True, reason="stored", dataset="seat:alice", tags=()),
+            data=secret,
+            dataset="seat:alice",
+            tags=[],
+        )
+        await mesh.record_search(
+            config, query=secret_query, dataset="seat:alice", result_count=1
+        )
+        await mesh.record_ingest(
+            config,
+            IngestResult(
+                accepted=True, reason="stored", dataset="masumi-network", tags=()
+            ),
+            data=org_doc,
+            dataset="masumi-network",
+            tags=[],
+        )
+
+    asyncio.run(_populate())
+
+    api = TestClient(app, base_url="https://testserver")
+    reader_view = api.get(
+        "/api/mesh", headers={"Authorization": f"Bearer {reader_token}"}
+    ).json()
+    alice_view = api.get(
+        "/api/mesh", headers={"Authorization": f"Bearer {alice_token}"}
+    ).json()
+    admin_view = admin.get("/api/mesh").json()
+
+    reader_blob = json.dumps(reader_view)
+    # The leak: neither the seat's document first line nor its query text may
+    # reach a plain reader.
+    assert secret not in reader_blob
+    assert secret_query not in reader_blob
+    # Org (non-seat) content stays visible to every reader.
+    assert org_doc in reader_blob
+    # Seat presence stays universal: the seat's dataset hub is still there.
+    assert any(
+        node.get("metadata", {}).get("dataset") == "seat:alice"
+        and node["type"] == "dataset"
+        for node in reader_view["nodes"]
+    )
+    # No content-bearing seat node survives for the reader.
+    assert not any(
+        node.get("metadata", {}).get("dataset") == "seat:alice"
+        and node["type"] != "dataset"
+        for node in reader_view["nodes"]
+    )
+    # Owner and admin both retain their own/all content.
+    assert secret in json.dumps(alice_view)
+    assert secret in json.dumps(admin_view)
+
+
 class IsolationDatasetGateway:
     """Three docs across two seats and Central, with a controllable map."""
 
@@ -2133,6 +2213,37 @@ def test_document_drilldown_map_failure_fails_closed_for_scoped_callers(
         assert own.status_code == 404
         assert own.json()["detail"] == "Document not found."
         assert admin_doc.status_code == 200
+
+
+def test_document_drilldown_denies_when_gateway_lacks_node_dataset_map(
+    tmp_path: Any,
+) -> None:
+    # A gateway that exposes no node_dataset_map must fail closed for scoped
+    # callers (any future gateway MUST expose it), while admins bypass.
+    class _NoMapGateway:
+        async def graph_data(self) -> tuple[list[Any], list[Any]]:
+            return ([], [])
+
+    app.state.access_store = AccessStore(tmp_path / "access.json")
+    app.state.obsidian_sync = ObsidianSyncStore(tmp_path / "obsidian.json")
+    admin = authed_client()
+    bob_token = admin.post(
+        "/api/access/seats", json={"name": "Bob", "slug": "bob"}
+    ).json()["token"]
+    app.state.citadel = DrilldownIsolationCitadel()
+    app.state.knowledge_mesh = KnowledgeMesh(_NoMapGateway())
+    api = TestClient(app, base_url="https://testserver")
+    try:
+        own = api.get(
+            "/api/documents/doc-b", headers={"Authorization": f"Bearer {bob_token}"}
+        )
+        admin_doc = admin.get("/api/documents/doc-a")
+    finally:
+        app.state.knowledge_mesh = None
+
+    assert own.status_code == 404
+    assert own.json()["detail"] == "Document not found."
+    assert admin_doc.status_code == 200
 
 
 class KnowledgeCitadel(FakeCitadel):

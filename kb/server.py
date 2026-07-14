@@ -43,6 +43,7 @@ from kb.capture_policy import SeatCapturePolicy, capture_policy_payload
 from kb.backup_mirror import BackupMirror, BackupMirrorDisabled, BackupMirrorPublishError
 from kb.conflicts import KnowledgeConflictStore, obsidian_push_conflict_candidate
 from kb.tags import normalize_tags
+from kb.cognee_client import assert_cognee_dataset_api
 from kb.config import CitadelConfig
 from kb.github_sync import GitHubOrgSyncer
 from kb.linear_sync import LinearSyncer
@@ -317,6 +318,20 @@ async def lifespan(app: FastAPI) -> Any:
         # rehydrate must never block startup.
         mesh = MeshState()
         app.state.mesh = mesh
+        # Fail loud at boot if a cognee bump moved the private symbols dataset
+        # attribution depends on: without this the ImportError is swallowed and
+        # every scoped caller's vault silently blanks (fail-closed). Log ERROR,
+        # do not block startup — bypass callers still work, and the read-side is
+        # best-effort by design.
+        try:
+            assert_cognee_dataset_api()
+        except Exception:
+            logger.error(
+                "cognee dataset-attribution internals are missing (likely a cognee "
+                "version bump); ADR-0009 isolation will fail closed and hide content "
+                "for scoped callers until fixed",
+                exc_info=True,
+            )
         try:
             await mesh.rehydrate(get_citadel().config)
         except Exception:
@@ -2219,11 +2234,70 @@ async def readyz(request: Request) -> Any:
     return JSONResponse(payload, status_code=200 if ok else 503)
 
 
+def _mesh_dataset_visible(
+    identity: AccessIdentity, dataset: Any, cache: dict[str, bool]
+) -> bool:
+    if not isinstance(dataset, str) or not dataset:
+        return True
+    if dataset not in cache:
+        cache[dataset] = dataset_visible_to(identity, dataset)
+    return cache[dataset]
+
+
+def scope_mesh_snapshot(
+    snapshot: dict[str, Any], identity: AccessIdentity
+) -> dict[str, Any]:
+    """Strip other seats' content from the runtime-activity projection (ADR-0009).
+
+    The /api/mesh projection records each document's first line and each raw
+    search-query string as node labels keyed by ``metadata.dataset``, so an
+    unscoped read leaked every seat's Node content to any reader token (and, via
+    the citadel_get_mesh MCP tool that proxies /api/mesh with the caller's
+    bearer, to any agent). Bypass callers (admin/env) still see everything.
+    Scoped callers keep only nodes/edges/events whose dataset they may read.
+    Seat *presence* stays universal: ``dataset``-type nodes (the seat hub, whose
+    label is only the seat slug) are retained; only the content-bearing nodes
+    are dropped.
+    """
+    if can_bypass_dataset_allowlist(identity):
+        return snapshot
+    cache: dict[str, bool] = {}
+    dropped: set[str] = set()
+    kept_nodes: list[dict[str, Any]] = []
+    for node in snapshot.get("nodes", []):
+        dataset = (node.get("metadata") or {}).get("dataset")
+        if node.get("type") != "dataset" and not _mesh_dataset_visible(
+            identity, dataset, cache
+        ):
+            dropped.add(node.get("id"))
+            continue
+        kept_nodes.append(node)
+    kept_edges = [
+        edge
+        for edge in snapshot.get("edges", [])
+        if edge.get("source") not in dropped and edge.get("target") not in dropped
+    ]
+    kept_events = [
+        event
+        for event in snapshot.get("events", [])
+        if _mesh_dataset_visible(
+            identity, (event.get("details") or {}).get("dataset"), cache
+        )
+    ]
+    return {
+        **snapshot,
+        "nodes": kept_nodes,
+        "edges": kept_edges,
+        "events": kept_events,
+    }
+
+
 @app.get("/api/mesh")
 async def mesh(request: Request) -> Any:
-    require_access(request, "reader", "kb:read")
+    identity = require_access(request, "reader", "kb:read")
     citadel = get_citadel()
-    return jsonable_encoder(await get_mesh().snapshot(citadel.config))
+    snapshot = await get_mesh().snapshot(citadel.config)
+    return jsonable_encoder(scope_mesh_snapshot(snapshot, identity))
 
 
 @app.get("/api/knowledge/events")
@@ -2263,10 +2337,9 @@ def mesh_presence_hubs() -> list[dict[str, str]]:
     entries: list[dict[str, str]] = [{"dataset": central, "label": central}]
     seen = {central}
     try:
-        for principal in get_access_store().snapshot()["principals"]:
-            slug = principal.get("seat_slug")
-            if not slug:
-                continue
+        # Principals-only read: never materializes the audit list or token
+        # roster on this latency-watched endpoint (#50).
+        for slug in get_access_store().seat_slugs():
             name = f"{SEAT_DATASET_PREFIX}{slug}"
             if name in seen:
                 continue
@@ -2296,15 +2369,21 @@ async def mesh_graph(request: Request, limit: int | None = None) -> Any:
     # Node + Central + non-seat datasets), while every seat always appears as
     # a presence hub. Bypass callers (admin/env) pass dataset_visible=None and
     # see all content for support and audit.
-    graph = await get_knowledge_mesh().graph(
-        limit=effective_limit,
-        dataset_visible=(
-            None
-            if can_bypass_dataset_allowlist(identity)
-            else lambda name: dataset_visible_to(identity, name)
-        ),
-        presence=mesh_presence_hubs(),
-    )
+    #
+    # The graph read + per-caller shaping is the heaviest read-path endpoint and
+    # is now the default dashboard view, so cap it on the shared search-slot
+    # budget: at capacity it returns the 429 + Retry-After contract instead of
+    # piling full-graph reads onto the already-starved loop (#50).
+    with _SearchSlot(get_citadel().config.search_max_concurrency):
+        graph = await get_knowledge_mesh().graph(
+            limit=effective_limit,
+            dataset_visible=(
+                None
+                if can_bypass_dataset_allowlist(identity)
+                else lambda name: dataset_visible_to(identity, name)
+            ),
+            presence=mesh_presence_hubs(),
+        )
     return jsonable_encoder({**graph, "limit": effective_limit})
 
 
@@ -3426,19 +3505,28 @@ async def test_learning_agent_gateway(
 
 @app.get("/events")
 async def events(request: Request) -> StreamingResponse:
-    require_access(request, "reader", "kb:read")
+    identity = require_access(request, "reader", "kb:read")
     mesh_state = get_mesh()
     queue = mesh_state.subscribe()
+    # ADR-0009: the SSE stream serves the same content-leaking projection as
+    # /api/mesh, so scope the initial snapshot and every live event to the
+    # caller (bypass callers see all). Cache visibility across events.
+    bypass = can_bypass_dataset_allowlist(identity)
+    visible_cache: dict[str, bool] = {}
 
     async def stream() -> Any:
         try:
             snapshot = await mesh_state.snapshot(get_citadel().config)
-            yield sse("snapshot", snapshot)
+            yield sse("snapshot", scope_mesh_snapshot(snapshot, identity))
             while True:
                 try:
                     event = await asyncio.wait_for(queue.get(), timeout=15)
                 except TimeoutError:
                     yield ": ping\n\n"
+                    continue
+                if not bypass and not _mesh_dataset_visible(
+                    identity, (event.get("details") or {}).get("dataset"), visible_cache
+                ):
                     continue
                 yield sse("mesh-event", event)
         finally:

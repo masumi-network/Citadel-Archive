@@ -398,8 +398,12 @@ function buildForceGraphData() {
       relationship: edge.relationship || edge.label,
     });
   }
-  graph.centralId = resolveCentralId(nodes);
+  // resolveCentralId's highest-degree fallback reads node.neighbors, which is
+  // only populated by rebuildNeighborLinks — so resolve AFTER the first pass,
+  // else the fallback is dead and an arbitrary first node gets pinned as the
+  // org Central hub (e.g. when github_sync_dataset is renamed).
   let byId = rebuildNeighborLinks(nodes, links);
+  graph.centralId = resolveCentralId(nodes);
   ({ nodes, links } = applyGraphDepth(nodes, links, byId));
   byId = rebuildNeighborLinks(nodes, links);
   ({ nodes, links } = applyHubSpokes(nodes, links, byId));
@@ -1752,6 +1756,18 @@ function updateGraphMeta(message) {
       graphMeta.textContent = "Loading Knowledge Mesh";
       return;
     }
+    // A fallback payload has no real content (only presence hubs), so the
+    // "Showing X of Y nodes" line would misread as a healthy but empty mesh.
+    // Say what actually happened instead.
+    if (payload.fallback === true) {
+      const reason = String(payload.fallback_reason || "");
+      graphMeta.textContent =
+        reason.startsWith("graph_access_unavailable") ||
+        reason.startsWith("graph_engine_error")
+          ? "Knowledge Mesh unavailable — seat presence only"
+          : "Knowledge Mesh is empty — ingest notes or run source sync";
+      return;
+    }
     const hiddenPresent = new Set();
     for (const node of state.realGraph.nodes.values()) {
       const kind = nodeKind(node);
@@ -1779,6 +1795,11 @@ function updateGraphMeta(message) {
         meta = `No content in your scope · ${seatCount} seats visible`;
       } else {
         meta = `Showing ${shown} of ${visible} in your scope`;
+        // The server caps the node list at mesh_graph_max_nodes; without this
+        // the cut reads as if the legend/depth filters hid the nodes.
+        if (payload.truncated && Number.isFinite(Number(payload.limit))) {
+          meta += ` · capped at ${payload.limit}`;
+        }
         const orgWide = Number(payload.total_nodes);
         if (Number.isFinite(orgWide) && orgWide > visible) {
           meta += ` · ${orgWide} org-wide`;
@@ -1794,6 +1815,9 @@ function updateGraphMeta(message) {
       }
       const total = payload.truncated ? payload.total_nodes : contentTotal;
       meta = `Showing ${shown} of ${total} nodes`;
+      if (payload.truncated && Number.isFinite(Number(payload.limit))) {
+        meta += ` · capped at ${payload.limit}`;
+      }
     }
     if (hiddenPresent.size) {
       const names = GRAPH_KIND_ORDER.filter((kind) => hiddenPresent.has(kind)).map((kind) =>
@@ -1814,14 +1838,24 @@ function updateGraphMeta(message) {
 function updateRealGraphEmpty() {
   if (!realGraphEmpty) return;
   const payload = state.realGraph?.payload;
-  const show = state.graphMode === "knowledge" && Boolean(payload) && !state.realGraph.nodes.size;
+  // mesh_presence_hubs() always returns >=1 hub, so nodes.size is never 0 in
+  // knowledge mode — the old `!nodes.size` check was dead and a broken engine
+  // rendered as a healthy, empty mesh. Key the overlay off payload.fallback
+  // instead: a fallback payload (graph engine/access error, or a genuinely
+  // empty vault) carries only presence hubs and no real content.
+  const show =
+    state.graphMode === "knowledge" && Boolean(payload) && payload.fallback === true;
   realGraphEmpty.hidden = !show;
   if (show) {
     const text = realGraphEmpty.querySelector("p");
     if (text) {
-      text.textContent = payload.fallback
-        ? "Cognee has not produced graph data yet. Ingest notes or run source sync, then check back."
-        : "The Knowledge Mesh is empty. Ingest notes or run source sync, then check back.";
+      const reason = String(payload.fallback_reason || "");
+      const degraded =
+        reason.startsWith("graph_access_unavailable") ||
+        reason.startsWith("graph_engine_error");
+      text.textContent = degraded
+        ? `Knowledge Mesh unavailable — showing seat presence only. (${reason})`
+        : "Cognee has not produced graph data yet. Ingest notes or run source sync, then check back.";
     }
   }
 }
@@ -1841,6 +1875,9 @@ function renderGraphLegend() {
     counts.set(kind, (counts.get(kind) || 0) + 1);
   }
   graphLegend.innerHTML = "";
+  // Counts are over the capped in-view slice, not the whole vault — say so on
+  // hover so "Chunks 140" doesn't read as vault composition.
+  graphLegend.title = "counts in this view";
   for (const kind of GRAPH_KIND_ORDER) {
     const count = counts.get(kind);
     if (!count) continue;

@@ -12,6 +12,8 @@ receive an empty graph with ``fallback: true`` instead of an error.
 
 from __future__ import annotations
 
+import asyncio
+import functools
 import logging
 import re
 from typing import Any, Callable
@@ -562,8 +564,12 @@ class KnowledgeMesh:
         total_edges = len(raw_edges)
         visible_nodes: int | None = None
         if dataset_visible is not None:
-            visible_ids = _content_visible_ids(
-                raw_nodes, raw_edges, dataset_map, dataset_visible
+            # ADR-0009 scoping is pure Python over already-materialized tuples/
+            # dicts and closures (dataset_visible touches no cognee/Kuzu/loop
+            # objects), so run the ~100ms visibility scan off the single event
+            # loop to avoid starving concurrent requests (#50).
+            visible_ids = await asyncio.to_thread(
+                _content_visible_ids, raw_nodes, raw_edges, dataset_map, dataset_visible
             )
             visible_nodes = len(visible_ids)
             raw_nodes = [raw for raw in raw_nodes if _raw_id(raw) in visible_ids]
@@ -580,12 +586,17 @@ class KnowledgeMesh:
                 if kept:
                     filtered[node_id] = kept
             dataset_map = filtered
-        payload = build_graph_payload(
-            raw_nodes,
-            raw_edges,
-            limit=limit,
-            dataset_map=dataset_map,
-            presence=presence,
+        # build_graph_payload is likewise pure Python over plain tuples/dicts —
+        # shape it off the loop too (#50).
+        payload = await asyncio.to_thread(
+            functools.partial(
+                build_graph_payload,
+                raw_nodes,
+                raw_edges,
+                limit=limit,
+                dataset_map=dataset_map,
+                presence=presence,
+            )
         )
         if dataset_visible is not None:
             # Raw org-wide totals stay honest about what exists; the caller's
