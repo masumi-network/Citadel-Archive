@@ -342,8 +342,8 @@ Citadel stores only the SHA-256 hash. The raw token is shown once at creation.
 | `citadel_discovery` | Safe agent discovery metadata: MCP endpoint, skill hashes, tool policy | — |
 | `citadel_session` | Show authenticated role, actor, capabilities | — |
 | `citadel_search` | Search the Organization Vault; each hit includes `_citadel` provenance, hash, and retrieval metadata | `query`, `dataset?`, `session_id?`, `top_k?` |
-| `citadel_get_document` | Fetch a full document by a search hit `id` when `_citadel.retrieval.document_drilldown_available` is true | `document_id` |
-| `citadel_get_mesh` | Current knowledge mesh snapshot | — |
+| `citadel_get_document` | Fetch a full document by a search hit `id` when `_citadel.retrieval.document_drilldown_available` is true. Under ADR-0009 a scoped token may get **404 "Document not found"** for a document it is not allowed to read (another seat's) even though the flag was true — treat that 404 as "not visible to you", not a bug to retry | `document_id` |
+| `citadel_get_mesh` | Runtime-activity projection snapshot. Under ADR-0009 this is **caller-scoped** for non-admin tokens: other seats' document/query activity is stripped; seat presence (roster + counts) stays universal | — |
 | `citadel_list_sources` | Source-learning, GitHub sync, index status | — |
 
 ### Writer Tools

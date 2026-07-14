@@ -158,9 +158,28 @@ Admin:
 - `GET /api/backup-mirror`, `POST /api/backup-mirror/run`
 - `GET /api/linear-sync`, `POST /api/linear-sync/run`
 
-`GET /api/mesh/graph` (reader+) returns `{nodes, edges}` from Cognee's graph
+`GET /api/mesh/graph` (reader+) returns `{nodes, edges, ...}` from Cognee's graph
 engine with a node cap (`CITADEL_MESH_GRAPH_MAX_NODES`, default 200, or `?limit=`).
 With no data or no graph access it returns an empty graph with `fallback: true`.
+
+ADR-0009 read isolation applies to non-admin tokens: content is scoped to the
+caller's datasets (own seat + Central + non-seat datasets), while every seat is
+always present as a synthetic presence hub (id `dataset:<name>`, not a real
+graph node and not drillable). Scoped payloads add `visible_nodes` (caller
+scope) alongside `total_nodes`/`total_edges` (org-wide), and per-node
+`dataset`/`datasets`/`internal_name`/`chunk_count` where known. `/api/documents`
+drill-down is scoped the same way, so a **404 can mean "not yours"** rather than
+"does not exist". Admin/env tokens bypass scoping. The same scoping applies to
+the `/api/mesh` and `/events` activity projection and, transitively, the
+`citadel_get_mesh` / `citadel_get_document` MCP tools that proxy them.
+
+Attribution/isolation tuning env vars (all optional): `CITADEL_GRAPH_DATA_CACHE_TTL_SECONDS`
+(raw graph read cache, default 30), `CITADEL_NODE_DATASET_MAP_TTL_SECONDS`
+(default 60), `CITADEL_NODE_DATASET_MAP_TIMEOUT_SECONDS` (default 5), and
+`CITADEL_NODE_DATASET_MAP_FAILURE_TTL_SECONDS` (short negative-cache TTL,
+default 5, so a transient attribution stall serves stale-but-safe data instead
+of blanking scoped vaults). Note `CITADEL_MESH_GRAPH_MAX_NODES` is a UI cap, not
+a server-CPU bound.
 
 ## MCP server
 

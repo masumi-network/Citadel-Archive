@@ -17,9 +17,14 @@ const state = {
   accessSnapshot: null,
   settingsSnapshot: null,
   auditFilter: "all",
-  graphMode: "live",
+  // Knowledge Mesh is the durable view; Vault Activity is restart-transient and
+  // therefore empty on every fresh boot/redeploy — a bad first impression.
+  graphMode: "knowledge",
   graphDepth: 0,
   graphSpokes: true,
+  // Knowledge-mode legend filter: node kinds hidden from the canvas. Chunks
+  // start hidden — they dominate the node count and bury the entities.
+  graphHiddenKinds: new Set(["chunk"]),
   realGraph: null,
   realGraphLoading: false,
   conflicts: [],
@@ -114,6 +119,7 @@ const conflictFilterButtons = Array.from(document.querySelectorAll("[data-confli
 const graphModeButtons = Array.from(document.querySelectorAll("[data-graph-mode]"));
 const graphDepthInput = document.getElementById("graphDepthInput");
 const realGraphEmpty = document.getElementById("realGraphEmpty");
+const graphLegend = document.getElementById("graphLegend");
 const toastStack = document.getElementById("toastStack");
 const searchResultStatus = document.getElementById("searchResultStatus");
 const pageButtons = Array.from(document.querySelectorAll("[data-page-target]"));
@@ -212,6 +218,10 @@ function brandColors() {
     source: cssToken("--info", "#7dd4c0"),
     repository: cssToken("--primary-strong", "#c4b1ff"),
     seat: cssToken("--primary-strong", "#c4b1ff"),
+    // Knowledge-mode kinds (nodeKind); "dataset"/"document"/"seat" above are
+    // shared. Legend swatches read the same map so chips always match nodes.
+    chunk: cssToken("--quiet", "#8f8f8f"),
+    entity: cssToken("--info", "#7dd4c0"),
     other: cssToken("--muted", "#b3b3b3"),
   };
 }
@@ -223,7 +233,8 @@ function typeColor(type) {
 }
 
 // The Central dataset node id. In live mode it is the dataset node whose label
-// equals CENTRAL_DATASET; in knowledge mode it is the highest-degree node.
+// equals CENTRAL_DATASET; otherwise the highest-degree node — but never a
+// seat hub, so one user's private seat is never promoted to org Central.
 function resolveCentralId(nodes) {
   for (const node of nodes) {
     if (
@@ -236,6 +247,11 @@ function resolveCentralId(nodes) {
   let best = null;
   let bestDegree = -1;
   for (const node of nodes) {
+    // Seat hubs collect one belongs_to edge per doc+chunk, so without this
+    // guard the biggest seat's private hub would win the degree fallback and
+    // get pinned at the origin as the org Central whenever no node matches
+    // CENTRAL_DATASET (e.g. a renamed github_sync_dataset).
+    if (isSeatNode(node)) continue;
     const degree = Array.isArray(node.neighbors) ? node.neighbors.length : 0;
     if (degree > bestDegree) {
       bestDegree = degree;
@@ -248,6 +264,30 @@ function resolveCentralId(nodes) {
 function isSeatNode(node) {
   const dataset = node.metadata?.dataset || node.label || "";
   return node.type === "dataset" && String(dataset).startsWith(SEAT_DATASET_PREFIX);
+}
+
+// Coarse node kinds for the knowledge-mode legend, filter, and colors.
+const GRAPH_KIND_ORDER = ["seat", "dataset", "document", "chunk", "entity"];
+const GRAPH_KIND_LABELS = {
+  seat: "Seats",
+  dataset: "Datasets",
+  document: "Documents",
+  chunk: "Chunks",
+  entity: "Entities",
+};
+
+// Map a node to its legend kind. Cognee document nodes may surface either the
+// class name ("TextDocument") or a short type ("text"/"pdf"). Chunk is checked
+// before document because "DocumentChunk" contains both words.
+function nodeKind(node) {
+  if (isSeatNode(node)) return "seat";
+  const type = String(node.type || "").toLowerCase();
+  if (type === "dataset") return "dataset";
+  if (type.includes("chunk")) return "chunk";
+  if (type.includes("document") || ["text", "pdf", "audio", "image"].includes(type)) {
+    return "document";
+  }
+  return "entity";
 }
 
 // nodeVal tiers (area-proportional): Central is the biggest fixed hub, seat:
@@ -288,6 +328,11 @@ function applyGraphDepth(nodes, links, byId) {
 }
 
 function applyHubSpokes(nodes, links, byId) {
+  // Spokes are decoration for the live dashboard projection only. Knowledge
+  // mode renders real graph data (dataset attribution arrives as belongs_to
+  // edges), so synthesizing Central→seat "hub" links there would draw edges
+  // that do not exist in the data.
+  if (state.graphMode === "knowledge") return { nodes, links };
   if (!state.graphSpokes || !graph.centralId || !byId.has(graph.centralId)) {
     return { nodes, links };
   }
@@ -335,12 +380,30 @@ function buildForceGraphData() {
     neighbors: [],
     links: [],
   }));
+  // Knowledge mode only: drop legend-hidden kinds and any edge touching them.
+  // The projection (live) data and state.realGraph itself stay unfiltered.
+  if (state.graphMode === "knowledge" && state.graphHiddenKinds.size) {
+    nodes = nodes.filter((node) => !state.graphHiddenKinds.has(nodeKind(node)));
+  }
+  const nodeIds = new Set(nodes.map((node) => node.id));
   let links = [];
   for (const edge of source.edges) {
-    links.push({ source: edge.source, target: edge.target, label: edge.label });
+    if (!nodeIds.has(edge.source) || !nodeIds.has(edge.target)) continue;
+    // Projection edges carry "label", knowledge edges "relationship" —
+    // normalize so linkLabel tooltips work in both modes.
+    links.push({
+      source: edge.source,
+      target: edge.target,
+      label: edge.label || edge.relationship,
+      relationship: edge.relationship || edge.label,
+    });
   }
-  graph.centralId = resolveCentralId(nodes);
+  // resolveCentralId's highest-degree fallback reads node.neighbors, which is
+  // only populated by rebuildNeighborLinks — so resolve AFTER the first pass,
+  // else the fallback is dead and an arbitrary first node gets pinned as the
+  // org Central hub (e.g. when github_sync_dataset is renamed).
   let byId = rebuildNeighborLinks(nodes, links);
+  graph.centralId = resolveCentralId(nodes);
   ({ nodes, links } = applyGraphDepth(nodes, links, byId));
   byId = rebuildNeighborLinks(nodes, links);
   ({ nodes, links } = applyHubSpokes(nodes, links, byId));
@@ -375,7 +438,9 @@ function api(path, options = {}) {
     const data = text ? JSON.parse(text) : null;
     if (!response.ok) {
       const message = formatApiError(data?.detail) || data?.message || "Request failed";
-      throw new Error(message);
+      const error = new Error(message);
+      error.status = response.status;
+      throw error;
     }
     return data;
   });
@@ -1334,6 +1399,9 @@ function initializeGraph() {
     .nodeVal(nodeValue)
     .nodeColor(nodeColor)
     .nodeLabel((node) => escapeHtml(String(node.label || node.id)))
+    // The vendored build injects string tooltips via innerHTML, so escape here
+    // exactly like nodeLabel above.
+    .linkLabel((link) => escapeHtml(String(link.relationship || link.label || "")))
     .nodeCanvasObjectMode(() => "after")
     .nodeCanvasObject(drawNodeLabel)
     .linkColor(linkColor)
@@ -1354,7 +1422,12 @@ function initializeGraph() {
 // Per-type node colour, dimmed to ~20% alpha when a hover highlight is active
 // and this node is not part of the highlighted set.
 function nodeColor(node) {
-  const base = typeColor(node.type);
+  // Knowledge mode colors by legend kind so nodes always match the legend
+  // swatches; projection (live) mode keeps its per-type palette untouched.
+  const base =
+    state.graphMode === "knowledge"
+      ? typeColor(nodeKind(node))
+      : typeColor(isSeatNode(node) ? "seat" : node.type);
   if (graph.highlightNodes.size && !graph.highlightNodes.has(node.id)) {
     return withAlpha(base, 0.2);
   }
@@ -1495,16 +1568,155 @@ function selectNode(node) {
     updateNodeSelection();
     return;
   }
-  selectedNode.innerHTML = `
-    <div>
-      <strong>${escapeHtml(node.label)}</strong>
-      <span>${escapeHtml(node.type)} - ${escapeHtml(node.status)}</span>
-    </div>
-    <p>${escapeHtml(formatDetails(node.metadata || {}))}</p>
-  `;
+  if (state.graphMode === "knowledge") {
+    renderKnowledgeInspector(node);
+  } else {
+    selectedNode.innerHTML = `
+      <div>
+        <strong>${escapeHtml(node.label)}</strong>
+        <span>${escapeHtml(node.type)} - ${escapeHtml(node.status)}</span>
+      </div>
+      <p>${escapeHtml(formatDetails(node.metadata || {}))}</p>
+    `;
+  }
+  // Dataset hubs (seat presence + Central) never have stored document text —
+  // the inspector shows their presence counts instead, so skip the fetch
+  // rather than fire a guaranteed 404.
+  if (state.graphMode === "knowledge" && node.id && node.type !== "dataset") {
+    loadNodeDocument(node);
+  }
   updateNodeSelection();
   if (state.graphDepth > 0) {
     buildGraphScene();
+    updateGraphMeta();
+  }
+}
+
+const MAX_INSPECTOR_NEIGHBORS = 8;
+
+// Knowledge-mode inspector: label, kind + dataset, internal name when the
+// backend provides one, then up to MAX_INSPECTOR_NEIGHBORS clickable
+// connections from the unfiltered real graph (hidden kinds still listed).
+// loadNodeDocument appends the stored document text after this content.
+function renderKnowledgeInspector(node) {
+  const kind = nodeKind(node);
+  const dataset = node.metadata?.dataset;
+  const kindLine = dataset ? `${kind} · ${dataset}` : kind;
+  let markup = `
+    <div>
+      <strong>${escapeHtml(node.label || node.id)}</strong>
+      <span>${escapeHtml(kindLine)}</span>
+    </div>
+  `;
+  if (node.internal_name) {
+    markup += `<p class="node-internal-name">${escapeHtml(node.internal_name)}</p>`;
+  }
+  // Dataset hubs carry presence counts instead of document text (selectNode
+  // skips loadNodeDocument for them). Central gets its own label when it
+  // matches exactly; seat:* hubs are "Seat presence" even at zero documents;
+  // any other hub (auxiliary dataset, renamed central) is plain "Dataset".
+  if (kind === "seat" || kind === "dataset") {
+    const documents = Number(node.presence?.documents);
+    if (Number.isFinite(documents)) {
+      const isCentral = dataset === CENTRAL_DATASET || node.label === CENTRAL_DATASET;
+      const isSeat = String(dataset || "").startsWith(SEAT_DATASET_PREFIX);
+      const prefix = isCentral ? "Central" : isSeat ? "Seat presence" : "Dataset";
+      const line = `${prefix} · ${documents} ${
+        documents === 1 ? "document" : "documents"
+      }`;
+      markup += `<p class="node-presence">${escapeHtml(line)}</p>`;
+    }
+  }
+  selectedNode.innerHTML = markup;
+
+  const neighbors = knowledgeNeighbors(node.id);
+  if (!neighbors.length) return;
+  const container = document.createElement("div");
+  container.className = "node-connections";
+  const heading = document.createElement("strong");
+  heading.textContent = "Connections";
+  container.append(heading);
+  neighbors.slice(0, MAX_INSPECTOR_NEIGHBORS).forEach((item) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "node-connection";
+    button.textContent = `${item.relationship} · ${item.node.label || item.node.id}`;
+    // Resolve by id at click time: a graph refresh replaces state.realGraph
+    // while this button persists, so the captured node object may be stale.
+    const targetId = item.node.id;
+    button.addEventListener("click", () => {
+      const target = state.realGraph?.nodes.get(targetId);
+      if (!target) return;
+      focusGraphNode(targetId);
+      selectNode(target);
+    });
+    container.append(button);
+  });
+  if (neighbors.length > MAX_INSPECTOR_NEIGHBORS) {
+    const more = document.createElement("span");
+    more.className = "node-connections-more";
+    more.textContent = `+${neighbors.length - MAX_INSPECTOR_NEIGHBORS} more`;
+    container.append(more);
+  }
+  selectedNode.append(container);
+}
+
+// Neighbors of a node straight from state.realGraph edges (either direction).
+function knowledgeNeighbors(nodeId) {
+  const real = state.realGraph;
+  if (!real) return [];
+  const result = [];
+  for (const edge of real.edges) {
+    let otherId = null;
+    if (edge.source === nodeId) otherId = edge.target;
+    else if (edge.target === nodeId) otherId = edge.source;
+    else continue;
+    const other = real.nodes.get(otherId);
+    if (!other) continue;
+    result.push({ relationship: edge.relationship || edge.label || "related", node: other });
+  }
+  return result;
+}
+
+// Centre the viewport on a rendered node by id, mirroring handleNodeClick.
+// Nodes hidden by the legend filter are not rendered, so those just skip.
+function focusGraphNode(nodeId) {
+  if (!graph.instance || typeof graph.instance.graphData !== "function") return;
+  const rendered = (graph.instance.graphData().nodes || []).find((item) => item.id === nodeId);
+  if (rendered && Number.isFinite(rendered.x) && Number.isFinite(rendered.y)) {
+    graph.instance.centerAt(rendered.x, rendered.y, 600);
+  }
+}
+
+// Fetch and render the stored document text for a knowledge-graph node into
+// the inspector panel. Most entity nodes have no stored document (404), which
+// is normal and rendered as a quiet note rather than an error.
+async function loadNodeDocument(node) {
+  const container = document.createElement("div");
+  container.className = "node-document";
+  container.innerHTML = "<p>Loading document text…</p>";
+  selectedNode.append(container);
+  try {
+    const data = await api(`/api/documents/${encodeURIComponent(node.id)}`);
+    if (state.selectedId !== node.id) return;
+    const doc = data?.document;
+    if (!doc || !doc.body) {
+      container.innerHTML = "<p>No document text stored for this node.</p>";
+      return;
+    }
+    const title =
+      doc.title && doc.title !== node.label
+        ? `<strong>${escapeHtml(doc.title)}</strong>`
+        : "";
+    container.innerHTML = `${title}<pre>${escapeHtml(doc.body)}</pre>`;
+  } catch (error) {
+    if (state.selectedId !== node.id) return;
+    const message = String(error?.message || "Request failed");
+    if (/not found/i.test(message)) {
+      container.innerHTML = "<p>No document text stored for this node.</p>";
+    } else {
+      container.innerHTML = `<p>Could not load document text: ${escapeHtml(message)}</p>`;
+    }
   }
 }
 
@@ -1543,12 +1755,79 @@ function updateGraphMeta(message) {
   if (state.graphMode === "knowledge") {
     const payload = state.realGraph?.payload;
     if (!payload) {
-      graphMeta.textContent = "Loading knowledge graph";
+      graphMeta.textContent = "Loading Knowledge Mesh";
       return;
     }
-    const shown = state.realGraph.nodes.size;
-    const truncated = payload.truncated ? ` of ${payload.total_nodes}` : "";
-    graphMeta.textContent = `Cognee graph - ${shown}${truncated} nodes - ${state.realGraph.edges.length} edges`;
+    // A fallback payload has no real content (only presence hubs), so the
+    // "Showing X of Y nodes" line would misread as a healthy but empty mesh.
+    // Say what actually happened instead.
+    if (payload.fallback === true) {
+      const reason = String(payload.fallback_reason || "");
+      graphMeta.textContent =
+        reason.startsWith("graph_access_unavailable") ||
+        reason.startsWith("graph_engine_error")
+          ? "Knowledge Mesh unavailable — seat presence only"
+          : "Knowledge Mesh is empty — ingest notes or run source sync";
+      return;
+    }
+    const hiddenPresent = new Set();
+    for (const node of state.realGraph.nodes.values()) {
+      const kind = nodeKind(node);
+      if (state.graphHiddenKinds.has(kind)) hiddenPresent.add(kind);
+    }
+    // Count through the same pipeline the renderer uses (kind filter + depth
+    // drill-down) so "Showing N" never overstates what is on the canvas.
+    // Content nodes only: synthetic dataset hubs are excluded so the units
+    // match visible_nodes (a content count).
+    const shown = buildForceGraphData().nodes.filter(
+      (node) => node.type !== "dataset",
+    ).length;
+    // Isolation-aware payloads report visible_nodes (caller scope) alongside
+    // total_nodes (org-wide); older payloads only have total_nodes.
+    const visible = Number(payload.visible_nodes);
+    let meta;
+    if (Number.isFinite(visible)) {
+      if (visible === 0) {
+        // Isolation can leave a caller with zero content while every seat
+        // still renders as a presence hub — say that, not "Showing N of 0".
+        let seatCount = 0;
+        for (const node of state.realGraph.nodes.values()) {
+          if (nodeKind(node) === "seat") seatCount += 1;
+        }
+        meta = `No content in your scope · ${seatCount} seats visible`;
+      } else {
+        meta = `Showing ${shown} of ${visible} in your scope`;
+        // The server caps the node list at mesh_graph_max_nodes; without this
+        // the cut reads as if the legend/depth filters hid the nodes.
+        if (payload.truncated && Number.isFinite(Number(payload.limit))) {
+          meta += ` · capped at ${payload.limit}`;
+        }
+        const orgWide = Number(payload.total_nodes);
+        if (Number.isFinite(orgWide) && orgWide > visible) {
+          meta += ` · ${orgWide} org-wide`;
+        }
+      }
+    } else {
+      // Same units as `shown`: content nodes only, so synthetic presence hubs
+      // never inflate the denominator (total_nodes is already a raw content
+      // count when the payload is truncated).
+      let contentTotal = 0;
+      for (const node of state.realGraph.nodes.values()) {
+        if (node.type !== "dataset") contentTotal += 1;
+      }
+      const total = payload.truncated ? payload.total_nodes : contentTotal;
+      meta = `Showing ${shown} of ${total} nodes`;
+      if (payload.truncated && Number.isFinite(Number(payload.limit))) {
+        meta += ` · capped at ${payload.limit}`;
+      }
+    }
+    if (hiddenPresent.size) {
+      const names = GRAPH_KIND_ORDER.filter((kind) => hiddenPresent.has(kind)).map((kind) =>
+        GRAPH_KIND_LABELS[kind].toLowerCase(),
+      );
+      meta += ` · ${names.join(", ")} hidden`;
+    }
+    graphMeta.textContent = meta;
     return;
   }
   if (state.snapshot) {
@@ -1561,16 +1840,74 @@ function updateGraphMeta(message) {
 function updateRealGraphEmpty() {
   if (!realGraphEmpty) return;
   const payload = state.realGraph?.payload;
-  const show = state.graphMode === "knowledge" && Boolean(payload) && !state.realGraph.nodes.size;
+  // mesh_presence_hubs() always returns >=1 hub, so nodes.size is never 0 in
+  // knowledge mode — the old `!nodes.size` check was dead and a broken engine
+  // rendered as a healthy, empty mesh. Key the overlay off payload.fallback
+  // instead: a fallback payload (graph engine/access error, or a genuinely
+  // empty vault) carries only presence hubs and no real content.
+  const show =
+    state.graphMode === "knowledge" && Boolean(payload) && payload.fallback === true;
   realGraphEmpty.hidden = !show;
   if (show) {
     const text = realGraphEmpty.querySelector("p");
     if (text) {
-      text.textContent = payload.fallback
-        ? "Cognee has not produced graph data yet. Ingest notes or run source sync, then check back."
-        : "The knowledge graph is empty. Ingest notes or run source sync, then check back.";
+      const reason = String(payload.fallback_reason || "");
+      const degraded =
+        reason.startsWith("graph_access_unavailable") ||
+        reason.startsWith("graph_engine_error");
+      text.textContent = degraded
+        ? `Knowledge Mesh unavailable — showing seat presence only. (${reason})`
+        : "Cognee has not produced graph data yet. Ingest notes or run source sync, then check back.";
     }
   }
+}
+
+// Legend chips for the knowledge mode: one per kind present in the unfiltered
+// real graph, showing swatch + label + count; pressed = visible. Hidden in the
+// projection (live) mode.
+function renderGraphLegend() {
+  if (!graphLegend) return;
+  if (state.graphMode !== "knowledge" || !state.realGraph) {
+    graphLegend.hidden = true;
+    return;
+  }
+  const counts = new Map();
+  for (const node of state.realGraph.nodes.values()) {
+    const kind = nodeKind(node);
+    counts.set(kind, (counts.get(kind) || 0) + 1);
+  }
+  graphLegend.innerHTML = "";
+  // Counts are over the capped in-view slice, not the whole vault — say so on
+  // hover so "Chunks 140" doesn't read as vault composition.
+  graphLegend.title = "counts in this view";
+  for (const kind of GRAPH_KIND_ORDER) {
+    const count = counts.get(kind);
+    if (!count) continue;
+    const visible = !state.graphHiddenKinds.has(kind);
+    const chip = document.createElement("button");
+    chip.type = "button";
+    chip.className = `legend-chip${visible ? " active" : ""}`;
+    chip.setAttribute("aria-pressed", visible ? "true" : "false");
+    chip.title = visible ? `Hide ${GRAPH_KIND_LABELS[kind].toLowerCase()}` : `Show ${GRAPH_KIND_LABELS[kind].toLowerCase()}`;
+    const swatch = document.createElement("span");
+    swatch.className = "legend-swatch";
+    swatch.style.background = typeColor(kind);
+    chip.append(swatch, document.createTextNode(`${GRAPH_KIND_LABELS[kind]} ${count}`));
+    chip.addEventListener("click", () => toggleGraphKind(kind));
+    graphLegend.append(chip);
+  }
+  graphLegend.hidden = !graphLegend.children.length;
+}
+
+function toggleGraphKind(kind) {
+  if (state.graphHiddenKinds.has(kind)) {
+    state.graphHiddenKinds.delete(kind);
+  } else {
+    state.graphHiddenKinds.add(kind);
+  }
+  renderGraphLegend();
+  buildGraphScene();
+  updateGraphMeta();
 }
 
 function shapeRealGraph(payload) {
@@ -1585,13 +1922,25 @@ function shapeRealGraph(payload) {
   const list = Array.isArray(payload.nodes) ? payload.nodes : [];
   list.forEach((node) => {
     const links = degree.get(node.id) || 0;
+    const dataset = node.dataset || null;
+    const isDatasetHub = (node.type || "node") === "dataset";
+    const isSeatHub =
+      isDatasetHub && String(dataset || node.label || "").startsWith(SEAT_DATASET_PREFIX);
+    const metadata = { type: node.type || "node", links };
+    if (dataset) metadata.dataset = dataset;
+    // Presence metadata rides on dataset hubs ({documents: N}); pass it
+    // through untouched so the inspector can show counts without a fetch.
+    const presence =
+      node.presence && typeof node.presence === "object" ? node.presence : null;
     nodes.set(node.id, {
       id: node.id,
       label: node.label || node.id,
       type: node.type || "node",
-      status: "linked",
-      size: clamp(26 + links * 5, 24, 58),
-      metadata: { type: node.type || "node", links },
+      internal_name: node.internal_name || null,
+      presence,
+      status: isDatasetHub ? (isSeatHub ? "seat" : "dataset") : "linked",
+      size: isDatasetHub ? 72 : clamp(26 + links * 5, 24, 58),
+      metadata,
     });
   });
 
@@ -1602,30 +1951,70 @@ function shapeRealGraph(payload) {
   };
 }
 
+// Backoff schedule for a 429 from /api/mesh/graph. The mesh is the default
+// dashboard view, so ~15 seats hit it at once on login; a hard error toast on a
+// transient backpressure 429 is wrong. Retry a couple of times, jittered so the
+// seats don't resync onto the same retry instant, then degrade to a soft status.
+const MESH_GRAPH_RETRY_BASES_MS = [400, 1200];
+
+function meshGraphRetryDelay(index) {
+  const base = MESH_GRAPH_RETRY_BASES_MS[index] ?? 1200;
+  // Random jitter (per client) is what de-syncs 15 seats; the index scales it.
+  return Math.round(base + Math.random() * (base / 2));
+}
+
+async function fetchMeshGraphWithBackoff() {
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      return await api("/api/mesh/graph");
+    } catch (error) {
+      const retriable =
+        error && error.status === 429 && attempt < MESH_GRAPH_RETRY_BASES_MS.length;
+      if (!retriable) throw error;
+      if (state.graphMode === "knowledge") {
+        updateGraphMeta("Knowledge Mesh is busy — retrying");
+      }
+      await new Promise((resolve) => setTimeout(resolve, meshGraphRetryDelay(attempt)));
+    }
+  }
+}
+
 async function loadKnowledgeGraph(force = false) {
+  // The realGraphLoading guard spans the whole retry sequence, so backoff retries
+  // can never stack a second in-flight load (e.g. a concurrent setGraphMode).
   if (state.realGraphLoading) return;
   if (state.realGraph && !force) {
     buildGraphScene();
     resetGraphView();
     updateGraphMeta();
     updateRealGraphEmpty();
+    renderGraphLegend();
     return;
   }
   state.realGraphLoading = true;
-  updateGraphMeta("Loading knowledge graph");
+  updateGraphMeta("Loading Knowledge Mesh");
   try {
-    const payload = await api("/api/mesh/graph");
+    const payload = await fetchMeshGraphWithBackoff();
     state.realGraph = shapeRealGraph(payload);
     if (state.graphMode === "knowledge") {
       buildGraphScene();
       resetGraphView();
       updateGraphMeta();
       updateRealGraphEmpty();
+      renderGraphLegend();
     }
   } catch (error) {
-    showToast(`Could not load the knowledge graph: ${error.message}`, "error");
-    if (state.graphMode === "knowledge") {
-      updateGraphMeta("Knowledge graph unavailable");
+    if (error && error.status === 429) {
+      // Retries exhausted: soft, non-error status (no toast) so a login-burst
+      // 429 doesn't read as a failure. Next view switch / refresh retries.
+      if (state.graphMode === "knowledge") {
+        updateGraphMeta("Knowledge Mesh is busy — refresh in a moment");
+      }
+    } else {
+      showToast(`Could not load the Knowledge Mesh: ${error.message}`, "error");
+      if (state.graphMode === "knowledge") {
+        updateGraphMeta("Knowledge Mesh unavailable");
+      }
     }
   } finally {
     state.realGraphLoading = false;
@@ -1648,10 +2037,12 @@ function setGraphMode(mode) {
     buildGraphScene();
     updateGraphMeta();
     updateRealGraphEmpty();
+    renderGraphLegend();
     loadKnowledgeGraph();
     return;
   }
   realGraphEmpty.hidden = true;
+  if (graphLegend) graphLegend.hidden = true;
   buildGraphScene();
   resetGraphView();
   updateGraphMeta();
@@ -2298,6 +2689,7 @@ async function editSeatCapturePolicy(seatSlug) {
 }
 
 function renderSeats(seats = []) {
+  renderTokenSeatOptions(seats);
   accessSeatsList.innerHTML = "";
   if (!seats.length) {
     accessSeatsList.append(emptyState("No seats yet", "Create a seat to provision a private node."));
@@ -2344,6 +2736,46 @@ function renderSeats(seats = []) {
     item.append(policyButton);
     accessSeatsList.append(item);
   });
+}
+
+// Keep the token form's seat dropdown in sync with the seats list. Options use
+// textContent (no innerHTML) so seat-derived strings need no escaping.
+function renderTokenSeatOptions(seats = []) {
+  const select = document.getElementById("accessSeat");
+  if (!select) return;
+  const previous = select.value;
+  select.innerHTML = "";
+  const none = document.createElement("option");
+  none.value = "";
+  none.textContent = "No seat — service account";
+  select.append(none);
+  seats.forEach((seat) => {
+    const option = document.createElement("option");
+    option.value = seat.seat_slug;
+    option.textContent = `${seat.name} — ${seat.seat_slug}`;
+    select.append(option);
+  });
+  // Preserve the prior selection across refreshes when the seat still exists.
+  select.value = previous && seats.some((seat) => seat.seat_slug === previous) ? previous : "";
+  applyTokenSeatScopeToggle();
+}
+
+// When a seat is chosen the seat defines scope, so hide+disable the free-text
+// dataset inputs (disabled inputs are excluded from FormData) and show a hint.
+function applyTokenSeatScopeToggle() {
+  const select = document.getElementById("accessSeat");
+  if (!select) return;
+  const hasSeat = Boolean(select.value);
+  const datasetField = document.getElementById("accessDefaultDatasetField");
+  const allowedField = document.getElementById("accessAllowedDatasetsField");
+  const datasetInput = document.getElementById("accessDefaultDataset");
+  const allowedInput = document.getElementById("accessAllowedDatasets");
+  const hint = document.getElementById("accessSeatScopeHint");
+  if (datasetField) datasetField.hidden = hasSeat;
+  if (allowedField) allowedField.hidden = hasSeat;
+  if (datasetInput) datasetInput.disabled = hasSeat;
+  if (allowedInput) allowedInput.disabled = hasSeat;
+  if (hint) hint.hidden = !hasSeat;
 }
 
 function renderAuditAccessEvents(events = []) {
@@ -2646,6 +3078,14 @@ document.getElementById("refreshButton").addEventListener("click", () => {
     loadSettings();
   }
 });
+document.getElementById("logoutButton").addEventListener("click", async () => {
+  try {
+    await api("/admin/logout", { method: "POST" });
+  } catch {
+    // Cookie may already be gone/expired — the login page is right either way.
+  }
+  window.location.assign("/login");
+});
 document.getElementById("meshRetryButton").addEventListener("click", () => loadMesh());
 document.getElementById("fitButton").addEventListener("click", () => {
   resetGraphView();
@@ -2679,6 +3119,7 @@ if (graphDepthInput) {
   graphDepthInput.addEventListener("input", (event) => {
     state.graphDepth = Number(event.currentTarget.value) || 0;
     buildGraphScene();
+    updateGraphMeta();
     if (state.graphDepth > 0) resetGraphView();
   });
 }
@@ -2945,6 +3386,9 @@ document.getElementById("accessSeatForm").addEventListener("submit", async (even
   }
 });
 
+document
+  .getElementById("accessSeat")
+  ?.addEventListener("change", applyTokenSeatScopeToggle);
 document.getElementById("accessTokenForm").addEventListener("submit", async (event) => {
   event.preventDefault();
   const form = event.currentTarget;
@@ -2964,24 +3408,35 @@ document.getElementById("accessTokenForm").addEventListener("submit", async (eve
   accessTokenStatus.className = "status-chip status-standby";
   setBusy(button, true, { idle: "Create access token", loading: "Creating" });
   try {
-    const allowedRaw = String(formData.get("allowedDatasets") || "").trim();
-    const allowedDatasets = allowedRaw
-      ? allowedRaw.split(",").map((value) => value.trim()).filter(Boolean)
-      : null;
-    const defaultDataset = String(formData.get("defaultDataset") || "").trim() || null;
-    const defaultSession = String(formData.get("defaultSession") || "").trim() || null;
-    const response = await api("/api/access/tokens", {
-      method: "POST",
-      body: JSON.stringify({
-        name,
-        role: String(formData.get("role") || "reader"),
-        kind: String(formData.get("kind") || "service_account"),
-        team_id: String(formData.get("teamId") || "").trim() || null,
-        default_dataset: defaultDataset,
-        default_session: defaultSession,
-        allowed_datasets: allowedDatasets,
-      }),
-    });
+    const seatSlug = String(formData.get("seat") || "").trim();
+    let response;
+    if (seatSlug) {
+      // Seat selected: mint via the seat endpoint. Role/dataset scoping derive
+      // from the seat server-side, so only the token name is sent.
+      response = await api(`/api/access/seats/${encodeURIComponent(seatSlug)}/tokens`, {
+        method: "POST",
+        body: JSON.stringify({ token_name: name }),
+      });
+    } else {
+      const allowedRaw = String(formData.get("allowedDatasets") || "").trim();
+      const allowedDatasets = allowedRaw
+        ? allowedRaw.split(",").map((value) => value.trim()).filter(Boolean)
+        : null;
+      const defaultDataset = String(formData.get("defaultDataset") || "").trim() || null;
+      const defaultSession = String(formData.get("defaultSession") || "").trim() || null;
+      response = await api("/api/access/tokens", {
+        method: "POST",
+        body: JSON.stringify({
+          name,
+          role: String(formData.get("role") || "reader"),
+          kind: String(formData.get("kind") || "service_account"),
+          team_id: String(formData.get("teamId") || "").trim() || null,
+          default_dataset: defaultDataset,
+          default_session: defaultSession,
+          allowed_datasets: allowedDatasets,
+        }),
+      });
+    }
     newAccessToken.hidden = false;
     newAccessToken.innerHTML = `
       <strong>Token created</strong>
@@ -2989,6 +3444,9 @@ document.getElementById("accessTokenForm").addEventListener("submit", async (eve
       <code>${escapeHtml(response.token)}</code>
     `;
     form.reset();
+    // reset() clears the seat select but doesn't fire change; restore the
+    // dataset inputs so the "No seat" scope fields are visible+enabled again.
+    applyTokenSeatScopeToggle();
     await loadAccess();
   } catch (err) {
     error.textContent = err.message;
@@ -3266,6 +3724,11 @@ initializeNavigation();
 loadSession().then(() => {
   setPage(initialPage());
   loadMesh();
+  // The canvas opens on the Knowledge Mesh, so its payload must be fetched at
+  // boot — setGraphMode only loads it on a mode switch.
+  if (state.graphMode === "knowledge") {
+    loadKnowledgeGraph();
+  }
   loadGithubSync();
   loadPromotionQueue();
   loadObsidianSources();

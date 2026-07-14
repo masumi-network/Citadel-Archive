@@ -10,7 +10,7 @@ import os
 from pathlib import Path
 import re
 import secrets
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as _pkg_version
@@ -43,6 +43,7 @@ from kb.capture_policy import SeatCapturePolicy, capture_policy_payload
 from kb.backup_mirror import BackupMirror, BackupMirrorDisabled, BackupMirrorPublishError
 from kb.conflicts import KnowledgeConflictStore, obsidian_push_conflict_candidate
 from kb.tags import normalize_tags
+from kb.cognee_client import assert_cognee_dataset_api
 from kb.config import CitadelConfig
 from kb.github_sync import GitHubOrgSyncer
 from kb.linear_sync import LinearSyncer
@@ -86,42 +87,48 @@ _LAST_CANARY: dict[str, Any] | None = None
 _MIN_TRACKED_FOR_CORPUS = 10
 _INDEXED_FLOOR = 1
 
-# In-flight search count for the soft concurrency cap / 429 backpressure contract
-# (#50). Single-loop server → increment/decrement need no lock.
+# In-flight counts for the soft concurrency cap / 429 backpressure contract
+# (#50). Single-loop server → increment/decrement need no lock. Search and the
+# mesh graph read hold SEPARATE budgets: the Knowledge Mesh is the default
+# dashboard view, so a ~15-seat login burst on it must not consume /search's
+# budget (both would 429). Same limiter shape, independent counters.
 _search_inflight = 0
+_mesh_graph_inflight = 0
 
 
 class _SearchSlot:
-    """Soft concurrency cap for the read path (#50).
+    """Soft concurrency cap for a read path (#50).
 
     At capacity, returns a 429 + Retry-After + X-RateLimit-* contract instead of
     failing silently under load. Sync context manager so the slot is always
-    released, even when the search raises.
+    released, even when the wrapped read raises. ``counter`` names the
+    module-level in-flight global to bound, so distinct read paths (search vs the
+    mesh graph) keep independent budgets while sharing one limiter shape.
     """
 
-    def __init__(self, limit: int) -> None:
+    def __init__(self, limit: int, counter: str = "_search_inflight") -> None:
         self.limit = limit
         self.remaining = limit
+        self._counter = counter
 
     def __enter__(self) -> "_SearchSlot":
-        global _search_inflight
-        if _search_inflight >= self.limit:
+        inflight = globals()[self._counter]
+        if inflight >= self.limit:
             raise HTTPException(
                 status_code=429,
-                detail="Search is at capacity; retry after a moment.",
+                detail="Read path is at capacity; retry after a moment.",
                 headers={
                     "Retry-After": "1",
                     "X-RateLimit-Limit": str(self.limit),
                     "X-RateLimit-Remaining": "0",
                 },
             )
-        _search_inflight += 1
-        self.remaining = max(0, self.limit - _search_inflight)
+        globals()[self._counter] = inflight + 1
+        self.remaining = max(0, self.limit - globals()[self._counter])
         return self
 
     def __exit__(self, *exc: Any) -> None:
-        global _search_inflight
-        _search_inflight -= 1
+        globals()[self._counter] -= 1
 
 
 async def _search_within_budget(
@@ -317,6 +324,20 @@ async def lifespan(app: FastAPI) -> Any:
         # rehydrate must never block startup.
         mesh = MeshState()
         app.state.mesh = mesh
+        # Fail loud at boot if a cognee bump moved the private symbols dataset
+        # attribution depends on: without this the ImportError is swallowed and
+        # every scoped caller's vault silently blanks (fail-closed). Log ERROR,
+        # do not block startup — bypass callers still work, and the read-side is
+        # best-effort by design.
+        try:
+            assert_cognee_dataset_api()
+        except Exception:
+            logger.error(
+                "cognee dataset-attribution internals are missing (likely a cognee "
+                "version bump); ADR-0009 isolation will fail closed and hide content "
+                "for scoped callers until fixed",
+                exc_info=True,
+            )
         try:
             await mesh.rehydrate(get_citadel().config)
         except Exception:
@@ -920,6 +941,20 @@ def enforce_dataset_allowlist(identity: AccessIdentity, dataset: str) -> None:
     if not identity.allowed_datasets:
         return
     raise HTTPException(status_code=403, detail=f"Dataset not allowed: {dataset}.")
+
+
+def dataset_visible_to(identity: AccessIdentity, dataset: str) -> bool:
+    """Boolean twin of enforce_dataset_allowlist for read-side projections.
+
+    Used where a hidden dataset should silently disappear from a payload
+    (e.g. /api/mesh/graph attribution) instead of rejecting the request.
+    Delegates to enforce_dataset_allowlist so the two can never drift.
+    """
+    try:
+        enforce_dataset_allowlist(identity, dataset)
+    except HTTPException:
+        return False
+    return True
 
 
 def scope_override_active(
@@ -1597,13 +1632,34 @@ def with_result_id(result: dict[str, Any]) -> dict[str, Any]:
     return {"id": f"chunk:{derived}", **result}
 
 
-def with_result_metadata(result: Any, index: int, dataset: str) -> Any:
-    """Attach a reserved Citadel provenance envelope to dict search results."""
+def with_result_metadata(
+    result: Any,
+    index: int,
+    dataset: str,
+    *,
+    drilldown_predicate: Callable[[str], bool] | None = None,
+) -> Any:
+    """Attach a reserved Citadel provenance envelope to dict search results.
+
+    ``drilldown_predicate`` (when supplied) decides, per result id, whether
+    ``/api/documents`` would actually return 200 for THIS caller. The
+    ``document_drilldown_available`` hint and the ``document_endpoint`` URL are
+    then emitted only when the drill-down is honestly reachable, so an agent
+    that follows the hint never lands on an ADR-0009 404. Without a predicate
+    the flag falls back to "any id with a backing endpoint" (non-caller-scoped
+    callers/tests). Synthetic ``chunk:<hash>`` ids stay non-drillable either way.
+    """
     if not isinstance(result, dict):
         return result
     normalized = with_result_id(result)
     result_id = str(normalized["id"])
     document_endpoint = document_endpoint_for_result(result_id)
+    if not document_endpoint:
+        drilldown_available = False
+    elif drilldown_predicate is None:
+        drilldown_available = True
+    else:
+        drilldown_available = bool(drilldown_predicate(result_id))
     metadata: dict[str, Any] = {
         "rank": index + 1,
         "dataset": dataset,
@@ -1613,10 +1669,10 @@ def with_result_metadata(result: Any, index: int, dataset: str) -> Any:
         "retrieval": {
             "untrusted_context": True,
             "citation_required": True,
-            "document_drilldown_available": bool(document_endpoint),
+            "document_drilldown_available": drilldown_available,
         },
     }
-    if document_endpoint:
+    if drilldown_available:
         metadata["document_endpoint"] = document_endpoint
     return {**normalized, "_citadel": metadata}
 
@@ -2205,11 +2261,70 @@ async def readyz(request: Request) -> Any:
     return JSONResponse(payload, status_code=200 if ok else 503)
 
 
+def _mesh_dataset_visible(
+    identity: AccessIdentity, dataset: Any, cache: dict[str, bool]
+) -> bool:
+    if not isinstance(dataset, str) or not dataset:
+        return True
+    if dataset not in cache:
+        cache[dataset] = dataset_visible_to(identity, dataset)
+    return cache[dataset]
+
+
+def scope_mesh_snapshot(
+    snapshot: dict[str, Any], identity: AccessIdentity
+) -> dict[str, Any]:
+    """Strip other seats' content from the runtime-activity projection (ADR-0009).
+
+    The /api/mesh projection records each document's first line and each raw
+    search-query string as node labels keyed by ``metadata.dataset``, so an
+    unscoped read leaked every seat's Node content to any reader token (and, via
+    the citadel_get_mesh MCP tool that proxies /api/mesh with the caller's
+    bearer, to any agent). Bypass callers (admin/env) still see everything.
+    Scoped callers keep only nodes/edges/events whose dataset they may read.
+    Seat *presence* stays universal: ``dataset``-type nodes (the seat hub, whose
+    label is only the seat slug) are retained; only the content-bearing nodes
+    are dropped.
+    """
+    if can_bypass_dataset_allowlist(identity):
+        return snapshot
+    cache: dict[str, bool] = {}
+    dropped: set[str] = set()
+    kept_nodes: list[dict[str, Any]] = []
+    for node in snapshot.get("nodes", []):
+        dataset = (node.get("metadata") or {}).get("dataset")
+        if node.get("type") != "dataset" and not _mesh_dataset_visible(
+            identity, dataset, cache
+        ):
+            dropped.add(node.get("id"))
+            continue
+        kept_nodes.append(node)
+    kept_edges = [
+        edge
+        for edge in snapshot.get("edges", [])
+        if edge.get("source") not in dropped and edge.get("target") not in dropped
+    ]
+    kept_events = [
+        event
+        for event in snapshot.get("events", [])
+        if _mesh_dataset_visible(
+            identity, (event.get("details") or {}).get("dataset"), cache
+        )
+    ]
+    return {
+        **snapshot,
+        "nodes": kept_nodes,
+        "edges": kept_edges,
+        "events": kept_events,
+    }
+
+
 @app.get("/api/mesh")
 async def mesh(request: Request) -> Any:
-    require_access(request, "reader", "kb:read")
+    identity = require_access(request, "reader", "kb:read")
     citadel = get_citadel()
-    return jsonable_encoder(await get_mesh().snapshot(citadel.config))
+    snapshot = await get_mesh().snapshot(citadel.config)
+    return jsonable_encoder(scope_mesh_snapshot(snapshot, identity))
 
 
 @app.get("/api/knowledge/events")
@@ -2234,6 +2349,38 @@ async def knowledge_events(
     return jsonable_encoder({"ok": True, **timeline})
 
 
+def mesh_presence_hubs() -> list[dict[str, str]]:
+    """Universal Seat Presence list for the Knowledge Mesh (ADR-0009).
+
+    Every seat principal appears by its seat dataset name — slug ONLY,
+    presence metadata never carries member names or emails — plus Central,
+    so the hub inventory comes from the seat inventory, independent of which
+    content survives caller scoping.
+
+    Never breaks the graph endpoint: any failure reading the access store
+    degrades to a Central-only presence list instead of raising.
+    """
+    central = central_dataset(get_citadel().config)
+    entries: list[dict[str, str]] = [{"dataset": central, "label": central}]
+    seen = {central}
+    try:
+        # Principals-only read: never materializes the audit list or token
+        # roster on this latency-watched endpoint (#50).
+        for slug in get_access_store().seat_slugs():
+            name = f"{SEAT_DATASET_PREFIX}{slug}"
+            if name in seen:
+                continue
+            seen.add(name)
+            entries.append({"dataset": name, "label": name})
+    except Exception as exc:
+        logger.warning(
+            "Seat presence read failed with %s; degrading to Central-only presence",
+            exc.__class__.__name__,
+        )
+        return [{"dataset": central, "label": central}]
+    return entries
+
+
 @app.get("/api/mesh/graph")
 async def mesh_graph(request: Request, limit: int | None = None) -> Any:
     """The real Knowledge Mesh graph from Cognee (not the dashboard projection).
@@ -2241,11 +2388,34 @@ async def mesh_graph(request: Request, limit: int | None = None) -> Any:
     Never fails hard: returns an empty graph with ``fallback: true`` when
     Cognee has no data or graph access is unavailable.
     """
-    require_access(request, "reader", "kb:search")
+    identity = require_access(request, "reader", "kb:search")
     if limit is not None and not 1 <= limit <= 1000:
         raise HTTPException(status_code=422, detail="Graph limit must be between 1 and 1000.")
     effective_limit = limit or get_citadel().config.mesh_graph_max_nodes
-    graph = await get_knowledge_mesh().graph(limit=effective_limit)
+    # ADR-0009 read isolation: content follows the caller's search scope (own
+    # Node + Central + non-seat datasets), while every seat always appears as
+    # a presence hub. Bypass callers (admin/env) pass dataset_visible=None and
+    # see all content for support and audit.
+    #
+    # The graph read + per-caller shaping is the heaviest read-path endpoint and
+    # is now the default dashboard view, so cap it: at capacity it returns the
+    # 429 + Retry-After contract instead of piling full-graph reads onto the
+    # already-starved loop (#50). It uses its OWN budget (not search's) so a
+    # ~15-seat login burst on the default Knowledge Mesh view can't starve
+    # /search — and vice versa; graph_data() is TTL-cached + single-flight so a
+    # small dedicated cap is enough.
+    with _SearchSlot(
+        get_citadel().config.mesh_graph_max_concurrency, counter="_mesh_graph_inflight"
+    ):
+        graph = await get_knowledge_mesh().graph(
+            limit=effective_limit,
+            dataset_visible=(
+                None
+                if can_bypass_dataset_allowlist(identity)
+                else lambda name: dataset_visible_to(identity, name)
+            ),
+            presence=mesh_presence_hubs(),
+        )
     return jsonable_encoder({**graph, "limit": effective_limit})
 
 
@@ -2820,9 +2990,90 @@ async def resolve_obsidian_conflict(
     return {"ok": True, "conflict": jsonable_encoder(result)}
 
 
+async def load_node_dataset_map(
+    *, warn_unavailable: bool = True
+) -> dict[str, list[str]] | None:
+    """Fetch the gateway's cached node->dataset map ONCE for reuse across many
+    ADR-0009 visibility checks in a single request.
+
+    Returns the (possibly empty) mapping, or ``None`` when the map is
+    unavailable — the gateway exposes no ``node_dataset_map`` callable, or the
+    read raised. ``None`` and ``{}`` both fail closed for scoped callers; they
+    are kept distinct only so the empty-map case can be logged separately.
+    ``warn_unavailable=False`` silences the warnings on hot read-projection
+    paths (e.g. every /search) that degrade quietly rather than 404.
+    """
+    node_dataset_map = getattr(get_knowledge_mesh().gateway, "node_dataset_map", None)
+    if not callable(node_dataset_map):
+        if warn_unavailable:
+            logger.warning(
+                "Document drill-down denied: gateway exposes no node_dataset_map "
+                "(fail-closed for scoped callers)"
+            )
+        return None
+    try:
+        return await node_dataset_map()
+    except Exception:  # noqa: BLE001 - any failure fails closed
+        if warn_unavailable:
+            logger.warning(
+                "Document drill-down denied: node dataset map read failed "
+                "(fail-closed for scoped callers)",
+                exc_info=True,
+            )
+        return None
+
+
+def node_ids_visible_in_map(
+    identity: AccessIdentity,
+    node_ids: list[str],
+    mapping: dict[str, list[str]] | None,
+) -> bool:
+    """ADR-0009 visibility decision over an ALREADY-fetched node_dataset_map.
+
+    Pure and synchronous so a caller that fetched the (cached) map once can
+    reuse it across many ids without an await per id. Fail-closed: a
+    missing/empty ``mapping`` ({} or None), an id absent from the map, or an id
+    whose datasets are all hidden from ``identity`` all deny. This is exactly
+    the rule ``cognee_document_visible`` — and therefore /api/documents —
+    applies, so the search drill-down hint cannot drift from the endpoint.
+    """
+    if not mapping:
+        return False
+    datasets: set[str] = set()
+    for node_id in node_ids:
+        datasets.update(mapping.get(str(node_id), []))
+    if not datasets:
+        return False
+    return any(dataset_visible_to(identity, dataset) for dataset in datasets)
+
+
+async def cognee_document_visible(identity: AccessIdentity, node_ids: list[str]) -> bool:
+    """ADR-0009 drill-down isolation for cognee-resolved documents.
+
+    Resolves the document's datasets through the gateway's cached
+    ``node_dataset_map``: a direct map hit on the document node id, or (for
+    chunk ids) the map entry of the ``is_part_of``-linked document that
+    ``get_document`` already resolved into ``node_ids``. Fail-closed for
+    scoped callers: a missing/failed/empty map and unmappable nodes all deny —
+    the endpoint then serves the same 404 as a nonexistent id.
+    """
+    mapping = await load_node_dataset_map()
+    if mapping is None:
+        return False  # already logged: no callable / read failed
+    if not mapping:
+        # The cached/timed-out lookup degrades to {} on failure (#50) —
+        # indistinguishable from an empty store, so scoped callers are denied.
+        logger.warning(
+            "Document drill-down denied: empty node dataset map "
+            "(fail-closed for scoped callers)"
+        )
+        return False
+    return node_ids_visible_in_map(identity, node_ids, mapping)
+
+
 @app.get("/api/documents/{document_id}")
 async def source_document(document_id: str, request: Request) -> Any:
-    require_access(request, "reader", "kb:read")
+    identity = require_access(request, "reader", "kb:read")
     if document_id.startswith(f"{GITHUB_DOC_ID_PREFIX}:"):
         github_document = github_section_document(document_id, get_citadel().config)
         if github_document is None:
@@ -2835,6 +3086,16 @@ async def source_document(document_id: str, request: Request) -> Any:
         # search-hit id against the graph store (#28).
         cognee_document = await get_citadel().get_document(document_id)
         if cognee_document is None:
+            raise HTTPException(status_code=404, detail="Document not found.") from None
+        # dataset_node_ids is internal plumbing (ADR-0009 scope check), never
+        # part of the response — copy so cached fakes/documents stay intact.
+        cognee_document = dict(cognee_document)
+        owner_node_ids = cognee_document.pop("dataset_node_ids", None) or [document_id]
+        if not can_bypass_dataset_allowlist(identity) and not await cognee_document_visible(
+            identity, owner_node_ids
+        ):
+            # Same status, detail, and shape as a nonexistent id: a scoped
+            # caller must not learn whether a foreign document exists.
             raise HTTPException(status_code=404, detail="Document not found.") from None
         return {"ok": True, "document": jsonable_encoder(cognee_document)}
     return {"ok": True, "document": jsonable_encoder(document)}
@@ -3315,19 +3576,28 @@ async def test_learning_agent_gateway(
 
 @app.get("/events")
 async def events(request: Request) -> StreamingResponse:
-    require_access(request, "reader", "kb:read")
+    identity = require_access(request, "reader", "kb:read")
     mesh_state = get_mesh()
     queue = mesh_state.subscribe()
+    # ADR-0009: the SSE stream serves the same content-leaking projection as
+    # /api/mesh, so scope the initial snapshot and every live event to the
+    # caller (bypass callers see all). Cache visibility across events.
+    bypass = can_bypass_dataset_allowlist(identity)
+    visible_cache: dict[str, bool] = {}
 
     async def stream() -> Any:
         try:
             snapshot = await mesh_state.snapshot(get_citadel().config)
-            yield sse("snapshot", snapshot)
+            yield sse("snapshot", scope_mesh_snapshot(snapshot, identity))
             while True:
                 try:
                     event = await asyncio.wait_for(queue.get(), timeout=15)
                 except TimeoutError:
                     yield ": ping\n\n"
+                    continue
+                if not bypass and not _mesh_dataset_visible(
+                    identity, (event.get("details") or {}).get("dataset"), visible_cache
+                ):
                     continue
                 yield sse("mesh-event", event)
         finally:
@@ -3756,8 +4026,63 @@ async def search(body: SearchBody, request: Request, response: Response) -> Any:
             "scope_override": scope_override_active(actor, search_datasets),
         },
     )
+    # Honest drill-down hint (ADR-0009): the document_drilldown_available flag
+    # (and the document_endpoint URL) must be TRUE only when /api/documents would
+    # actually return 200 for THIS caller. Bypass callers reach any resolvable id,
+    # so they skip the check. For a scoped caller we resolve each id through the
+    # SAME steps /api/documents takes — get_document to recover its
+    # ``dataset_node_ids`` (a CHUNKS hit's datasets live on its is_part_of parent
+    # document, NOT the chunk node itself, so a raw-id map lookup would always
+    # miss), then the SAME visibility rule over the SAME once-fetched
+    # node_dataset_map — so the hint can never drift from the endpoint it points
+    # at. Resolved once per UNIQUE drillable id (results are already deduped and
+    # top_k-bounded); the shared map is fetched once and reused across ids.
+    bypass_drilldown = can_bypass_dataset_allowlist(actor)
+    drilldown_map = (
+        None if bypass_drilldown else await load_node_dataset_map(warn_unavailable=False)
+    )
+
+    async def _resolve_drilldown(result_id: str) -> bool:
+        if result_id.startswith(f"{GITHUB_DOC_ID_PREFIX}:"):
+            # github drill-down has no ADR-0009 scope gate and resolves via a
+            # different endpoint branch (github_section_document, not
+            # get_document); the endpoint returns 200 for any reader with a
+            # resolvable id.
+            return True
+        # Native cognee id: resolve exactly as the /api/documents cognee branch
+        # does. A missing document (None), a cold/empty map, or an id whose owner
+        # nodes are all hidden each deny (fail-closed) so the flag never promises
+        # a 404 — textless entities and foreign-seat docs/chunks fall out here.
+        try:
+            document = await get_citadel().get_document(result_id)
+        except Exception:  # noqa: BLE001 - any failure fails closed, like a 404
+            return False
+        if document is None:
+            return False
+        owner_node_ids = document.get("dataset_node_ids") or [result_id]
+        return node_ids_visible_in_map(actor, owner_node_ids, drilldown_map)
+
+    drilldown_hint: dict[str, bool] = {}
+    if not bypass_drilldown:
+        for _dataset, result in merged:
+            if not isinstance(result, dict):
+                continue
+            result_id = str(with_result_id(result)["id"])
+            if result_id in drilldown_hint or not document_endpoint_for_result(result_id):
+                # Already resolved, or a synthetic chunk:<hash> id with no backing
+                # store — with_result_metadata marks those non-drillable anyway.
+                continue
+            drilldown_hint[result_id] = await _resolve_drilldown(result_id)
+
+    def _drilldown_available(result_id: str) -> bool:
+        # Bypass callers reach any resolvable id; scoped callers get the honest
+        # per-endpoint decision precomputed above (default-deny for safety).
+        return True if bypass_drilldown else drilldown_hint.get(result_id, False)
+
     normalized = [
-        with_result_metadata(result, index, dataset)
+        with_result_metadata(
+            result, index, dataset, drilldown_predicate=_drilldown_available
+        )
         for index, (dataset, result) in enumerate(merged)
     ]
     primary_dataset = search_datasets[0]

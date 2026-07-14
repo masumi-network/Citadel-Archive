@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
-from time import perf_counter
+from time import monotonic, perf_counter
 from typing import Any, Protocol
 from urllib.parse import unquote, urlparse
 
@@ -12,6 +12,57 @@ logger = logging.getLogger(__name__)
 # Strong refs to detached background cognify tasks so the loop does not GC them
 # mid-flight (and so they can be awaited/observed in tests).
 _BACKGROUND_COGNIFY_TASKS: set[Any] = set()
+
+def _float_env(name: str, default: float) -> float:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    try:
+        return float(raw)
+    except ValueError:
+        return default
+
+
+# Dataset-attribution tuning (#50): /api/mesh/graph calls node_dataset_map on
+# every poll, so successful results are cached for the TTL, and the relational
+# read is time-bounded so a non-erroring outage (TCP blackhole, saturated pool)
+# degrades to "no attribution" instead of stalling the endpoint. All three are
+# env-overridable so a live node can be tuned without a redeploy.
+NODE_DATASET_MAP_TTL_SECONDS = _float_env("CITADEL_NODE_DATASET_MAP_TTL_SECONDS", 60.0)
+NODE_DATASET_MAP_TIMEOUT_SECONDS = _float_env(
+    "CITADEL_NODE_DATASET_MAP_TIMEOUT_SECONDS", 5.0
+)
+# A failed/timed-out read is cached only briefly (NOT the full content TTL): a
+# transient stall must re-read quickly instead of latching a 60s content
+# blackout for every scoped caller (#50). On failure we also prefer the last
+# known-good mapping over {} (stale-while-error) so a stall degrades to stale
+# attribution, never to an empty vault.
+NODE_DATASET_MAP_FAILURE_TTL_SECONDS = _float_env(
+    "CITADEL_NODE_DATASET_MAP_FAILURE_TTL_SECONDS", 5.0
+)
+# The whole-graph Kuzu read is expensive (5,382 nodes / 33,859 edges, ~0.3s+)
+# and is now front-loaded on every dashboard open. TTL-cache the RAW read so N
+# concurrent /api/mesh/graph opens collapse to one Kuzu read + one format pass
+# (#28/#50). Shaping still runs per caller (off-loop). Env-overridable.
+GRAPH_DATA_CACHE_TTL_SECONDS = _float_env("CITADEL_GRAPH_DATA_CACHE_TTL_SECONDS", 30.0)
+
+
+def assert_cognee_dataset_api() -> None:
+    """Import the cognee private symbols dataset attribution depends on.
+
+    ``_read_node_dataset_map`` reads cognee internals (``cognee.modules.data``
+    models + ``get_default_user``) that are NOT part of cognee's public API and
+    could move in any 1.x release. An ImportError there is swallowed by the
+    best-effort ``node_dataset_map`` guard and silently blanks every scoped
+    caller's vault (fail-closed). Call this at boot so a cognee version bump
+    surfaces as a loud error instead of a silent content blackout; a test also
+    calls it so the bump fails CI, not prod. Raises on any missing symbol.
+    """
+    from cognee.infrastructure.databases.relational import (  # noqa: F401
+        get_relational_engine,
+    )
+    from cognee.modules.data.models import Dataset, DatasetData  # noqa: F401
+    from cognee.modules.users.methods import get_default_user  # noqa: F401
 
 
 def _suppress_inline_cognify() -> bool:
@@ -130,6 +181,20 @@ class CogneePublicClient:
         # Phase-1 subprocess so the web never cognifies while the subprocess owns
         # the on-disk Kuzu lock.
         self.writer_lock = asyncio.Lock()
+        # node→dataset attribution cache: (monotonic_ts, mapping, ok). ``ok``
+        # distinguishes a fresh successful read (full TTL) from a cached
+        # failure (short failure TTL), and the last successful mapping is kept
+        # separately so a stall serves stale attribution instead of blanking
+        # the vault (#50). Single-flight lock collapses a cold-cache burst to
+        # one relational read. One client per Citadel singleton, so all of this
+        # is effectively process-wide.
+        self._node_dataset_cache: tuple[float, dict[str, list[str]], bool] | None = None
+        self._node_dataset_last_good: dict[str, list[str]] | None = None
+        self._node_dataset_lock = asyncio.Lock()
+        # Raw whole-graph read cache: (monotonic_ts, (nodes, edges)) with a
+        # single-flight lock so a burst of dashboard opens shares one Kuzu read.
+        self._graph_data_cache: tuple[float, tuple[list[Any], list[Any]]] | None = None
+        self._graph_data_lock = asyncio.Lock()
 
     def _copy_env_if_missing(self, target: str, *sources: str) -> None:
         if os.getenv(target):
@@ -444,12 +509,33 @@ class CogneePublicClient:
         )
 
     async def graph_data(self) -> tuple[list[Any], list[Any]]:
-        """Return raw nodes and edges from Cognee's graph engine.
+        """Return raw nodes and edges from Cognee's graph engine (TTL-cached).
 
         Nodes arrive as ``(node_id, properties)`` tuples and edges as
         ``(source_id, target_id, relationship_name, properties)`` tuples, per
         ``cognee.infrastructure.databases.graph.graph_db_interface``.
+
+        The read scans the ENTIRE graph (~0.3s+ on the prod node) and is now
+        front-loaded on every dashboard open, so the result is cached for
+        ``GRAPH_DATA_CACHE_TTL_SECONDS`` behind a single-flight lock: a burst of
+        concurrent /api/mesh/graph opens collapses to one Kuzu read instead of
+        one per caller (#28/#50). Per-caller shaping still runs per request.
         """
+        cached = self._graph_data_cache
+        if cached is not None and monotonic() - cached[0] < GRAPH_DATA_CACHE_TTL_SECONDS:
+            return cached[1]
+        async with self._graph_data_lock:
+            cached = self._graph_data_cache
+            if (
+                cached is not None
+                and monotonic() - cached[0] < GRAPH_DATA_CACHE_TTL_SECONDS
+            ):
+                return cached[1]
+            result = await self._read_graph_data()
+            self._graph_data_cache = (monotonic(), result)
+            return result
+
+    async def _read_graph_data(self) -> tuple[list[Any], list[Any]]:
         self._prepare_cognee_environment()
         import cognee
 
@@ -459,6 +545,104 @@ class CogneePublicClient:
         engine = await get_graph_engine()
         nodes, edges = await engine.get_graph_data()
         return list(nodes), list(edges)
+
+    async def node_dataset_map(self) -> dict[str, list[str]]:
+        """Map document graph-node ids to the cognee dataset names they belong to.
+
+        A TextDocument graph node's id IS the relational ``Data.id`` (same UUID),
+        and dataset membership lives only in the relational store (datasets ↔
+        dataset_data ↔ data) — node properties do not reliably carry the dataset
+        name. Read-only relational query, so no ``writer_lock``. A Data item can
+        belong to multiple datasets (mirrors), hence list values. Attribution is
+        best-effort: any failure (timeout included) degrades to ``{}`` and never
+        breaks callers.
+
+        Called on every /api/mesh/graph poll, so a SUCCESSFUL result is cached
+        for ``NODE_DATASET_MAP_TTL_SECONDS`` and the relational read is bounded
+        by ``NODE_DATASET_MAP_TIMEOUT_SECONDS``. A single-flight lock collapses a
+        cold-cache burst (15 seats opening the dashboard) to one relational read
+        instead of a thundering herd. A FAILED read is cached only for
+        ``NODE_DATASET_MAP_FAILURE_TTL_SECONDS`` and prefers the last known-good
+        mapping over ``{}`` (stale-while-error), so a transient stall degrades to
+        stale attribution — never a fail-closed content blackout (#50).
+        """
+        fresh = self._fresh_cached_map()
+        if fresh is not None:
+            return fresh
+        async with self._node_dataset_lock:
+            # Re-check under the lock: a race loser serves the just-populated
+            # cache instead of issuing its own read.
+            fresh = self._fresh_cached_map()
+            if fresh is not None:
+                return fresh
+            try:
+                mapping = await asyncio.wait_for(
+                    self._read_node_dataset_map(),
+                    timeout=NODE_DATASET_MAP_TIMEOUT_SECONDS,
+                )
+                self._node_dataset_last_good = mapping
+                self._node_dataset_cache = (monotonic(), mapping, True)
+                return mapping
+            except Exception:  # noqa: BLE001 - dataset attribution is best-effort
+                if self._node_dataset_last_good is not None:
+                    logger.warning(
+                        "node dataset map read failed; isolation degraded, "
+                        "serving last known-good attribution (stale-while-error)",
+                        exc_info=True,
+                    )
+                    mapping = self._node_dataset_last_good
+                else:
+                    logger.warning(
+                        "node dataset map read failed with no prior good read; "
+                        "isolation degraded, content hidden for scoped callers",
+                        exc_info=True,
+                    )
+                    mapping = {}
+                self._node_dataset_cache = (monotonic(), mapping, False)
+                return mapping
+
+    def _fresh_cached_map(self) -> dict[str, list[str]] | None:
+        """Return the cached mapping if still within its (success/failure) TTL."""
+        cached = self._node_dataset_cache
+        if cached is None:
+            return None
+        ts, mapping, ok = cached
+        ttl = (
+            NODE_DATASET_MAP_TTL_SECONDS if ok else NODE_DATASET_MAP_FAILURE_TTL_SECONDS
+        )
+        if monotonic() - ts < ttl:
+            return mapping
+        return None
+
+    async def _read_node_dataset_map(self) -> dict[str, list[str]]:
+        self._prepare_cognee_environment()
+        import cognee
+
+        await self._ensure_cognee_ready(cognee)
+        from cognee.infrastructure.databases.relational import get_relational_engine
+        from cognee.modules.data.models import Dataset, DatasetData
+        from cognee.modules.users.methods import get_default_user
+
+        # One joined query returns exactly (data_id, dataset_name) pairs — no
+        # per-dataset round-trips, no ORM hydration of full Data rows (JSON
+        # pipeline_status/external_metadata), no lazy selectin re-loads. 19x
+        # faster than the prior get_datasets + get_dataset_data-per-dataset loop
+        # and mostly off the event loop (#50).
+        from sqlalchemy import select
+
+        user = await get_default_user()
+        engine = get_relational_engine()
+        mapping: dict[str, list[str]] = {}
+        async with engine.get_async_session() as session:
+            query = (
+                select(DatasetData.data_id, Dataset.name)
+                .join(Dataset, Dataset.id == DatasetData.dataset_id)
+                .filter(Dataset.owner_id == user.id)
+            )
+            rows = await session.execute(query)
+            for data_id, dataset_name in rows.all():
+                mapping.setdefault(str(data_id), []).append(dataset_name)
+        return mapping
 
     async def delete_graph_nodes(self, node_ids: list[str]) -> int:
         """Delete nodes by id from BOTH the graph and the chunk vector store (#15).
@@ -500,41 +684,171 @@ class CogneePublicClient:
         except Exception:  # noqa: BLE001 - vector cleanup is best-effort
             logger.warning("vector-store cleanup delete skipped/failed", exc_info=True)
 
+    async def _graph_engine(self) -> Any:
+        """Return cognee's graph engine (seam for targeted reads and tests)."""
+        self._prepare_cognee_environment()
+        import cognee
+
+        await self._ensure_cognee_ready(cognee)
+        from cognee.infrastructure.databases.graph import get_graph_engine
+
+        return await get_graph_engine()
+
+    async def _document_graph(self, document_id: str) -> tuple[list[Any], list[Any]]:
+        """Targeted read of one document node + its immediate connections (#28).
+
+        Resolving a single id previously loaded the ENTIRE graph via
+        ``graph_data()`` (5,382 nodes / 33,859 edges) on every drill-down click
+        and every ``citadel_get_document`` call. Instead read only the document
+        node (``get_node``) and its incident edges (``get_connections``) through
+        the graph engine, returning the same ``(nodes, edges)`` tuple shape
+        ``graph_data`` yields so the assembly logic in ``get_document`` is
+        unchanged. Falls back to the full ``graph_data()`` read when the engine
+        lacks these primitives or the targeted read raises — a shape surprise
+        degrades to correct-but-slow, never a spurious 404. A genuinely missing
+        node returns an empty graph (``get_node`` -> None, ``get_connections``
+        -> []) so ``get_document`` still resolves it to None without a fallback.
+        """
+        try:
+            engine = await self._graph_engine()
+        except Exception:  # noqa: BLE001 - engine unavailable -> full-read fallback
+            engine = None
+        get_node = getattr(engine, "get_node", None)
+        get_connections = getattr(engine, "get_connections", None)
+        if engine is None or not callable(get_node) or not callable(get_connections):
+            return await self.graph_data()
+        try:
+            nodes: list[Any] = []
+            edges: list[Any] = []
+            seen: set[str] = set()
+            doc_props = await get_node(document_id)
+            if isinstance(doc_props, dict):
+                nodes.append((document_id, doc_props))
+                seen.add(str(document_id))
+            for source, relationship, target in await get_connections(document_id):
+                if not isinstance(source, dict) or not isinstance(target, dict):
+                    continue
+                source_id = str(source.get("id"))
+                target_id = str(target.get("id"))
+                rel_name = (
+                    relationship.get("relationship_name")
+                    if isinstance(relationship, dict)
+                    else str(relationship)
+                )
+                for node_id, node_props in ((source_id, source), (target_id, target)):
+                    if node_id not in seen:
+                        seen.add(node_id)
+                        nodes.append((node_id, node_props))
+                edges.append((source_id, target_id, rel_name or "related", {}))
+            return nodes, edges
+        except Exception:  # noqa: BLE001 - targeted read surprise -> full-read fallback
+            logger.warning(
+                "targeted document graph read failed; falling back to full graph read",
+                exc_info=True,
+            )
+            return await self.graph_data()
+
     async def get_document(self, document_id: str) -> dict[str, Any] | None:
-        """Resolve a search-hit node id back to its stored chunk text (#28).
+        """Resolve a search-hit node id back to its stored text (#28).
 
         cognee search hits carry a graph node/chunk id with no backing document
         store, so ``/api/documents`` previously 404'd on every cognee hit. Look
         the node up in the graph and return its text plus the remaining
-        properties; ``None`` when the node is missing or carries no text.
+        properties. Document nodes (e.g. TextDocument) carry no text themselves
+        — it lives on linked DocumentChunk nodes — so a textless match is
+        assembled from its ``is_part_of`` chunk neighbors, ordered by
+        ``chunk_index``; ``None`` when the node is missing or no text is found
+        either way (textless entities keep resolving to None/404).
         """
         try:
-            nodes, _ = await self.graph_data()
+            nodes, edges = await self._document_graph(str(document_id))
         except Exception as exc:  # noqa: BLE001
             if self._is_no_data_error(exc):
                 return None
             raise
-        for node_id, properties in nodes:
-            if str(node_id) != str(document_id):
-                continue
-            props = dict(properties or {})
-            text: str | None = None
-            text_key: str | None = None
+
+        def _extract_text(props: dict[str, Any]) -> tuple[str | None, str | None]:
             for key in ("text", "chunk", "content", "raw_content"):
                 value = props.get(key)
                 if isinstance(value, str) and value.strip():
-                    text, text_key = value, key
-                    break
-            if text is None:
-                return None
+                    return value, key
+            return None, None
+
+        # One pass over nodes: props by str id for O(1) neighbor lookup
+        # (setdefault keeps first-encounter semantics on duplicate ids).
+        props_by_id: dict[str, dict[str, Any]] = {}
+        for node_id, properties in nodes:
+            props_by_id.setdefault(str(node_id), dict(properties or {}))
+        doc_id = str(document_id)
+        props = props_by_id.get(doc_id)
+        if props is None:
+            return None
+        # ``is_part_of`` neighbors (either direction), collected once and used
+        # twice: assembling a textless document's body from its chunks, and
+        # dataset attribution for read-scope checks — a chunk id has no
+        # relational Data row of its own, so its datasets live on the linked
+        # document's node id. ``dataset_node_ids`` plumbs those candidate ids
+        # to the caller (kb/server.py drill-down isolation, ADR-0009) so the
+        # graph is never re-walked. Duplicate edges to one neighbor count once.
+        part_neighbor_ids: list[str] = []
+        seen: set[str] = set()
+        for source_id, target_id, relationship, _edge_props in edges:
+            if str(relationship) != "is_part_of":
+                continue
+            if str(source_id) == doc_id:
+                neighbor_id = str(target_id)
+            elif str(target_id) == doc_id:
+                neighbor_id = str(source_id)
+            else:
+                continue
+            if neighbor_id in seen:
+                continue
+            seen.add(neighbor_id)
+            part_neighbor_ids.append(neighbor_id)
+        text, text_key = _extract_text(props)
+        if text is not None:
             return {
-                "id": str(document_id),
+                "id": doc_id,
                 "source_type": "cognee",
                 "title": props.get("title") or None,
                 "body": text,
                 "metadata": {k: v for k, v in props.items() if k != text_key},
+                "dataset_node_ids": [doc_id, *part_neighbor_ids],
             }
-        return None
+        # Textless document node: its text lives on DocumentChunk neighbors
+        # linked via ``is_part_of`` (chunk --is_part_of--> doc; stay
+        # direction-agnostic on endpoints but ONLY follow is_part_of edges —
+        # entities are also graph-adjacent to text-bearing chunks via
+        # ``contains``/``mentions``, and assembling those would fabricate a
+        # document for a textless entity, which must stay None (404).
+        # Textless neighbors are skipped; chunks sort by numeric chunk_index,
+        # unindexed ones trail in encounter order.
+        chunks: list[tuple[tuple[int, float], str]] = []
+        for neighbor_id in part_neighbor_ids:
+            neighbor_props = props_by_id.get(neighbor_id)
+            if neighbor_props is None:
+                continue
+            neighbor_text, _ = _extract_text(neighbor_props)
+            if neighbor_text is None:
+                continue
+            index = neighbor_props.get("chunk_index")
+            if isinstance(index, (int, float)):
+                sort_key = (0, float(index))
+            else:
+                sort_key = (1, float(len(chunks)))
+            chunks.append((sort_key, neighbor_text))
+        if not chunks:
+            return None
+        chunks.sort(key=lambda item: item[0])
+        return {
+            "id": doc_id,
+            "source_type": "cognee",
+            "title": props.get("title") or props.get("name") or None,
+            "body": "\n\n".join(chunk_text for _, chunk_text in chunks),
+            "chunk_count": len(chunks),
+            "metadata": dict(props),
+            "dataset_node_ids": [doc_id],
+        }
 
     async def cognify(self, *, datasets: list[str], force: bool = False) -> Any:
         """Cognify already-added data in ``datasets``.

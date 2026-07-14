@@ -1561,6 +1561,37 @@ def test_search_returns_429_when_at_capacity(monkeypatch: Any) -> None:
     assert r.headers["X-RateLimit-Remaining"] == "0"
 
 
+def test_mesh_graph_and_search_have_independent_budgets(
+    monkeypatch: Any, tmp_path: Any
+) -> None:
+    # CHANGE 2 (#50): the mesh graph read and /search hold SEPARATE concurrency
+    # budgets, so a ~15-seat login burst on the default Knowledge Mesh view can't
+    # 429 /search — and vice versa. This is a WIRING test (distinct in-flight
+    # counters via the real endpoints); real concurrency under the single-loop
+    # TestClient would be flaky, so we saturate one budget and assert the other
+    # still serves.
+    app.state.access_store = AccessStore(tmp_path / "access.json")
+    client = authed_client("test-reader")
+    app.state.knowledge_mesh = None  # fallback graph → cheap, deterministic 200
+
+    # Search saturated, mesh free → mesh serves (own budget, not search's).
+    monkeypatch.setattr(server_module, "_search_inflight", 9999)
+    monkeypatch.setattr(server_module, "_mesh_graph_inflight", 0)
+    assert client.get("/api/mesh/graph").status_code == 200
+
+    # Mesh saturated → mesh 429s with the same contract, but /search stays free.
+    monkeypatch.setattr(server_module, "_search_inflight", 0)
+    monkeypatch.setattr(server_module, "_mesh_graph_inflight", 9999)
+    mesh = client.get("/api/mesh/graph")
+    assert mesh.status_code == 429
+    assert mesh.headers["Retry-After"] == "1"
+    assert mesh.headers["X-RateLimit-Limit"] == str(
+        FakeCitadel.config.mesh_graph_max_concurrency
+    )
+    assert mesh.headers["X-RateLimit-Remaining"] == "0"
+    assert client.post("/search", json={"query": "q", "top_k": 3}).status_code == 200
+
+
 def test_search_sets_ratelimit_headers_when_served() -> None:
     client = authed_client("test-reader")
     r = client.post("/search", json={"query": "q", "top_k": 3})
@@ -1731,7 +1762,8 @@ def test_knowledge_conflicts_require_authentication() -> None:
     )
 
 
-def test_mesh_graph_returns_fallback_without_cognee_graph_access() -> None:
+def test_mesh_graph_returns_fallback_without_cognee_graph_access(tmp_path: Any) -> None:
+    app.state.access_store = AccessStore(tmp_path / "access.json")
     client = authed_client("test-reader")
     app.state.knowledge_mesh = None  # force rebuild from FakeCitadel (no gateway)
 
@@ -1742,12 +1774,54 @@ def test_mesh_graph_returns_fallback_without_cognee_graph_access() -> None:
     assert body["ok"] is True
     assert body["fallback"] is True
     assert body["fallback_reason"] == "graph_access_unavailable"
-    assert body["nodes"] == []
+    # ADR-0009: presence hubs render even on fallback payloads — Central is
+    # always there (no seats exist in this fresh access store).
+    assert [node["id"] for node in body["nodes"]] == ["dataset:masumi-network"]
+    assert body["nodes"][0]["presence"] == {"documents": 0}
     assert body["edges"] == []
+    assert body["total_nodes"] == 0
     assert body["limit"] == 200
 
 
-def test_mesh_graph_serves_real_graph_through_injected_gateway() -> None:
+class BrokenSnapshotAccessStore:
+    """Delegates to a real store except snapshot(), which raises."""
+
+    def __init__(self, inner: AccessStore) -> None:
+        self._inner = inner
+
+    def snapshot(self) -> dict[str, Any]:
+        raise RuntimeError("access store offline")
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._inner, name)
+
+
+def test_mesh_graph_survives_access_store_read_failure(tmp_path: Any) -> None:
+    # A broken access-store read degrades presence to Central-only; the graph
+    # endpoint must keep returning 200 with the Central hub present.
+    class FakeGraphGateway:
+        async def graph_data(self) -> tuple[list[Any], list[Any]]:
+            return ([("n1", {"name": "Citadel", "type": "Entity"})], [])
+
+    store = AccessStore(tmp_path / "access.json")
+    app.state.access_store = store
+    client = authed_client("test-reader")
+    app.state.knowledge_mesh = KnowledgeMesh(FakeGraphGateway())
+    app.state.access_store = BrokenSnapshotAccessStore(store)
+    try:
+        response = client.get("/api/mesh/graph")
+    finally:
+        app.state.knowledge_mesh = None
+        app.state.access_store = store
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["ok"] is True
+    assert any(node["id"] == "dataset:masumi-network" for node in body["nodes"])
+    assert any(node["id"] == "n1" for node in body["nodes"])
+
+
+def test_mesh_graph_serves_real_graph_through_injected_gateway(tmp_path: Any) -> None:
     class FakeGraphGateway:
         async def graph_data(self) -> tuple[list[Any], list[Any]]:
             return (
@@ -1759,6 +1833,7 @@ def test_mesh_graph_serves_real_graph_through_injected_gateway() -> None:
                 [("n1", "n2", "uses", {}), ("n2", "n3", "embeds", {})],
             )
 
+    app.state.access_store = AccessStore(tmp_path / "access.json")
     client = authed_client("test-reader")
     app.state.knowledge_mesh = KnowledgeMesh(FakeGraphGateway())
     try:
@@ -1769,9 +1844,15 @@ def test_mesh_graph_serves_real_graph_through_injected_gateway() -> None:
     finally:
         app.state.knowledge_mesh = None
 
+    def content_nodes(payload: dict[str, Any]) -> list[dict[str, Any]]:
+        return [node for node in payload["nodes"] if node["type"] != "dataset"]
+
     assert full.status_code == 200
     assert full.json()["fallback"] is False
-    assert [node["id"] for node in full.json()["nodes"]] == ["n1", "n2", "n3"]
+    assert [node["id"] for node in content_nodes(full.json())] == ["n1", "n2", "n3"]
+    # Universal presence (ADR-0009): the Central hub rides along for every
+    # caller, independent of content.
+    assert any(node["id"] == "dataset:masumi-network" for node in full.json()["nodes"])
     assert {
         "source": "n2",
         "target": "n3",
@@ -1779,10 +1860,554 @@ def test_mesh_graph_serves_real_graph_through_injected_gateway() -> None:
     } in full.json()["edges"]
     assert capped.status_code == 200
     assert capped.json()["truncated"] is True
-    assert len(capped.json()["nodes"]) == 2
+    assert len(content_nodes(capped.json())) == 2
     assert capped.json()["limit"] == 2
     assert invalid.status_code == 422
     assert unauthenticated.status_code == 401
+
+
+def test_mesh_graph_hides_seat_attribution_from_plain_readers(tmp_path: Any) -> None:
+    # Seat datasets are default-deny private memory (enforce_dataset_allowlist):
+    # graph attribution must not let any kb:search reader durably enumerate
+    # which seat contributed which document. Non-seat datasets stay open for
+    # unscoped tokens, mirroring the allowlist rules exactly.
+    class FakeDatasetGateway:
+        async def graph_data(self) -> tuple[list[Any], list[Any]]:
+            return (
+                [
+                    ("doc-1", {"name": "Seat doc", "type": "TextDocument"}),
+                    ("doc-2", {"name": "Org doc", "type": "TextDocument"}),
+                ],
+                [],
+            )
+
+        async def node_dataset_map(self) -> dict[str, list[str]]:
+            return {"doc-1": ["seat:alice"], "doc-2": ["masumi-network"]}
+
+    app.state.access_store = AccessStore(tmp_path / "access.json")
+    admin = authed_client()
+    app.state.knowledge_mesh = KnowledgeMesh(FakeDatasetGateway())
+    token = admin.post(
+        "/api/access/tokens",
+        json={"name": "plain-reader", "role": "reader", "kind": "service_account"},
+    ).json()["token"]
+    try:
+        admin_view = admin.get("/api/mesh/graph").json()
+        reader_view = (
+            TestClient(app, base_url="https://testserver")
+            .get("/api/mesh/graph", headers={"Authorization": f"Bearer {token}"})
+            .json()
+        )
+    finally:
+        app.state.knowledge_mesh = None
+
+    # Bypassing callers (admin) keep full attribution, seat hubs included.
+    assert any(node["id"] == "dataset:seat:alice" for node in admin_view["nodes"])
+    # Plain readers: the seat name appears nowhere in the payload...
+    assert "seat:alice" not in json.dumps(reader_view)
+    # ...but non-seat attribution is retained.
+    assert any(node["id"] == "dataset:masumi-network" for node in reader_view["nodes"])
+    doc = next(node for node in reader_view["nodes"] if node["id"] == "doc-2")
+    assert doc["dataset"] == "masumi-network"
+
+
+def test_mesh_projection_hides_seat_content_from_plain_readers(tmp_path: Any) -> None:
+    # ADR-0009 blocker: /api/mesh (its SSE twin /events, and the citadel_get_mesh
+    # MCP tool that proxies it) is a runtime-activity projection that recorded
+    # each seat's document first line and raw search-query text as node labels
+    # keyed by dataset. A plain reader/agent token must not receive another
+    # seat's content; the seat's presence (dataset hub) stays universal; bypass
+    # callers (admin) still see everything.
+    app.state.access_store = AccessStore(tmp_path / "access.json")
+    admin = authed_client()
+    alice_token = admin.post(
+        "/api/access/seats",
+        json={"name": "Alice Example", "slug": "alice", "email": "alice@example.com"},
+    ).json()["token"]
+    reader_token = admin.post(
+        "/api/access/tokens",
+        json={"name": "plain-reader", "role": "reader", "kind": "service_account"},
+    ).json()["token"]
+
+    config = server_module.get_citadel().config
+    mesh = server_module.get_mesh()
+    secret = "SECRET_ACQUISITION_TARGET is BetaCorp at $50M valuation"
+    org_doc = "Public roadmap milestone for the org"
+    secret_query = "alice private acquisition query"
+
+    async def _populate() -> None:
+        await mesh.record_ingest(
+            config,
+            IngestResult(accepted=True, reason="stored", dataset="seat:alice", tags=()),
+            data=secret,
+            dataset="seat:alice",
+            tags=[],
+        )
+        await mesh.record_search(
+            config, query=secret_query, dataset="seat:alice", result_count=1
+        )
+        await mesh.record_ingest(
+            config,
+            IngestResult(
+                accepted=True, reason="stored", dataset="masumi-network", tags=()
+            ),
+            data=org_doc,
+            dataset="masumi-network",
+            tags=[],
+        )
+
+    asyncio.run(_populate())
+
+    api = TestClient(app, base_url="https://testserver")
+    reader_view = api.get(
+        "/api/mesh", headers={"Authorization": f"Bearer {reader_token}"}
+    ).json()
+    alice_view = api.get(
+        "/api/mesh", headers={"Authorization": f"Bearer {alice_token}"}
+    ).json()
+    admin_view = admin.get("/api/mesh").json()
+
+    reader_blob = json.dumps(reader_view)
+    # The leak: neither the seat's document first line nor its query text may
+    # reach a plain reader.
+    assert secret not in reader_blob
+    assert secret_query not in reader_blob
+    # Org (non-seat) content stays visible to every reader.
+    assert org_doc in reader_blob
+    # Seat presence stays universal: the seat's dataset hub is still there.
+    assert any(
+        node.get("metadata", {}).get("dataset") == "seat:alice"
+        and node["type"] == "dataset"
+        for node in reader_view["nodes"]
+    )
+    # No content-bearing seat node survives for the reader.
+    assert not any(
+        node.get("metadata", {}).get("dataset") == "seat:alice"
+        and node["type"] != "dataset"
+        for node in reader_view["nodes"]
+    )
+    # Owner and admin both retain their own/all content.
+    assert secret in json.dumps(alice_view)
+    assert secret in json.dumps(admin_view)
+
+
+class IsolationDatasetGateway:
+    """Three docs across two seats and Central, with a controllable map."""
+
+    def __init__(self, *, map_error: bool = False, empty_map: bool = False) -> None:
+        self.map_error = map_error
+        self.empty_map = empty_map
+
+    async def graph_data(self) -> tuple[list[Any], list[Any]]:
+        return (
+            [
+                ("doc-a", {"name": "Alice doc", "type": "TextDocument"}),
+                ("doc-b", {"name": "Bob doc", "type": "TextDocument"}),
+                ("doc-c", {"name": "Org doc", "type": "TextDocument"}),
+            ],
+            [],
+        )
+
+    async def node_dataset_map(self) -> dict[str, list[str]]:
+        if self.map_error:
+            raise RuntimeError("relational store offline")
+        if self.empty_map:
+            return {}
+        return {
+            "doc-a": ["seat:alice"],
+            "doc-b": ["seat:bob"],
+            "doc-c": ["masumi-network"],
+        }
+
+
+def test_mesh_graph_isolates_content_per_caller_but_presence_is_universal(
+    tmp_path: Any,
+) -> None:
+    # ADR-0009: content follows the caller's search scope (own Node + Central),
+    # while every seat always appears as a presence hub — slug only.
+    app.state.access_store = AccessStore(tmp_path / "access.json")
+    admin = authed_client()
+    admin.post(
+        "/api/access/seats",
+        json={"name": "Alice Example", "slug": "alice", "email": "alice@example.com"},
+    )
+    bob_token = admin.post(
+        "/api/access/seats",
+        json={"name": "Bob Example", "slug": "bob", "email": "bob@example.com"},
+    ).json()["token"]
+    reader_token = admin.post(
+        "/api/access/tokens",
+        json={"name": "plain-reader", "role": "reader", "kind": "service_account"},
+    ).json()["token"]
+    app.state.knowledge_mesh = KnowledgeMesh(IsolationDatasetGateway())
+    api = TestClient(app, base_url="https://testserver")
+    try:
+        reader_view = api.get(
+            "/api/mesh/graph", headers={"Authorization": f"Bearer {reader_token}"}
+        ).json()
+        bob_view = api.get(
+            "/api/mesh/graph", headers={"Authorization": f"Bearer {bob_token}"}
+        ).json()
+        admin_view = admin.get("/api/mesh/graph").json()
+    finally:
+        app.state.knowledge_mesh = None
+
+    def content_ids(view: dict[str, Any]) -> set[str]:
+        return {node["id"] for node in view["nodes"] if node["type"] != "dataset"}
+
+    def hub_ids(view: dict[str, Any]) -> set[str]:
+        return {node["id"] for node in view["nodes"] if node["type"] == "dataset"}
+
+    all_hubs = {"dataset:masumi-network", "dataset:seat:alice", "dataset:seat:bob"}
+
+    # Plain reader: Central content only, yet every seat hub is present.
+    assert content_ids(reader_view) == {"doc-c"}
+    assert hub_ids(reader_view) == all_hubs
+    assert reader_view["visible_nodes"] == 1
+    assert reader_view["total_nodes"] == 3
+
+    # Seat holder: own Node + Central, never the other seat's content.
+    assert content_ids(bob_view) == {"doc-b", "doc-c"}
+    assert hub_ids(bob_view) == all_hubs
+    assert bob_view["visible_nodes"] == 2
+
+    # Presence metadata (contribution counts) is visible to scoped callers.
+    alice_hub = next(n for n in bob_view["nodes"] if n["id"] == "dataset:seat:alice")
+    assert alice_hub["presence"] == {"documents": 1}
+    # Seat hubs anchor to the Central hub instead of floating.
+    assert {
+        "source": "dataset:seat:bob",
+        "target": "dataset:masumi-network",
+        "relationship": "presence",
+    } in reader_view["edges"]
+
+    # Admin bypass: all content, all hubs, no caller-scope field.
+    assert content_ids(admin_view) == {"doc-a", "doc-b", "doc-c"}
+    assert hub_ids(admin_view) == all_hubs
+    assert "visible_nodes" not in admin_view
+
+    # Presence never carries member names or emails (ADR-0009).
+    for view in (reader_view, bob_view, admin_view):
+        payload = json.dumps(view)
+        assert "alice@example.com" not in payload
+        assert "bob@example.com" not in payload
+        assert "Alice Example" not in payload
+        assert "Bob Example" not in payload
+        assert "@" not in payload
+
+
+def test_mesh_graph_map_failure_fails_closed_for_scoped_callers(tmp_path: Any) -> None:
+    app.state.access_store = AccessStore(tmp_path / "access.json")
+    admin = authed_client()
+    bob_token = admin.post(
+        "/api/access/seats", json={"name": "Bob", "slug": "bob"}
+    ).json()["token"]
+    app.state.knowledge_mesh = KnowledgeMesh(IsolationDatasetGateway(map_error=True))
+    try:
+        bob_view = (
+            TestClient(app, base_url="https://testserver")
+            .get("/api/mesh/graph", headers={"Authorization": f"Bearer {bob_token}"})
+            .json()
+        )
+        admin_view = admin.get("/api/mesh/graph").json()
+    finally:
+        app.state.knowledge_mesh = None
+
+    # Without attribution nothing is provably in scope: content is withheld,
+    # presence hubs still render the org.
+    assert [n for n in bob_view["nodes"] if n["type"] != "dataset"] == []
+    assert {n["id"] for n in bob_view["nodes"] if n["type"] == "dataset"} == {
+        "dataset:masumi-network",
+        "dataset:seat:bob",
+    }
+    assert bob_view["visible_nodes"] == 0
+    # Bypass callers keep the unfiltered graph even when attribution fails.
+    assert {n["id"] for n in admin_view["nodes"] if n["type"] != "dataset"} == {
+        "doc-a",
+        "doc-b",
+        "doc-c",
+    }
+
+
+class DrilldownIsolationCitadel(FakeCitadel):
+    cognee_documents: dict[str, dict[str, Any]] = {
+        "doc-a": {
+            "id": "doc-a",
+            "source_type": "cognee",
+            "title": "Alice doc",
+            "body": "alice text",
+            "metadata": {},
+            "dataset_node_ids": ["doc-a"],
+        },
+        "doc-b": {
+            "id": "doc-b",
+            "source_type": "cognee",
+            "title": "Bob doc",
+            "body": "bob text",
+            "metadata": {},
+            "dataset_node_ids": ["doc-b"],
+        },
+        # A chunk id resolves through its is_part_of-linked document's map entry.
+        "chunk-b": {
+            "id": "chunk-b",
+            "source_type": "cognee",
+            "title": None,
+            "body": "bob chunk text",
+            "metadata": {},
+            "dataset_node_ids": ["chunk-b", "doc-b"],
+        },
+        "doc-c": {
+            "id": "doc-c",
+            "source_type": "cognee",
+            "title": "Org doc",
+            "body": "org text",
+            "metadata": {},
+            "dataset_node_ids": ["doc-c"],
+        },
+    }
+
+    async def get_document(self, document_id: str) -> dict[str, Any] | None:
+        return self.cognee_documents.get(document_id)
+
+
+def test_document_drilldown_enforces_read_scope_without_existence_oracle(
+    tmp_path: Any,
+) -> None:
+    app.state.access_store = AccessStore(tmp_path / "access.json")
+    app.state.obsidian_sync = ObsidianSyncStore(tmp_path / "obsidian.json")
+    admin = authed_client()
+    bob_token = admin.post(
+        "/api/access/seats", json={"name": "Bob", "slug": "bob"}
+    ).json()["token"]
+    app.state.citadel = DrilldownIsolationCitadel()  # authed_client resets citadel
+    app.state.knowledge_mesh = KnowledgeMesh(IsolationDatasetGateway())
+    api = TestClient(app, base_url="https://testserver")
+    bob = {"Authorization": f"Bearer {bob_token}"}
+    try:
+        missing = api.get("/api/documents/does-not-exist", headers=bob)
+        foreign = api.get("/api/documents/doc-a", headers=bob)
+        own = api.get("/api/documents/doc-b", headers=bob)
+        own_chunk = api.get("/api/documents/chunk-b", headers=bob)
+        central = api.get("/api/documents/doc-c", headers=bob)
+        admin_foreign = admin.get("/api/documents/doc-a")
+    finally:
+        app.state.knowledge_mesh = None
+
+    # A foreign seat's document is byte-identical to a nonexistent id: same
+    # status, same body — no existence oracle.
+    assert missing.status_code == 404
+    assert foreign.status_code == 404
+    assert foreign.content == missing.content
+
+    # Search drill-down (#28) keeps working for the caller's own Node and
+    # Central, chunk ids included.
+    assert own.status_code == 200
+    assert own.json()["document"]["body"] == "bob text"
+    assert own_chunk.status_code == 200
+    assert own_chunk.json()["document"]["body"] == "bob chunk text"
+    assert central.status_code == 200
+    # Internal attribution plumbing never leaks into the response.
+    assert "dataset_node_ids" not in own.json()["document"]
+
+    # Admin bypass: support/audit access to any seat's document.
+    assert admin_foreign.status_code == 200
+    assert admin_foreign.json()["document"]["body"] == "alice text"
+    assert "dataset_node_ids" not in admin_foreign.json()["document"]
+
+
+def test_document_drilldown_map_failure_fails_closed_for_scoped_callers(
+    tmp_path: Any,
+) -> None:
+    app.state.access_store = AccessStore(tmp_path / "access.json")
+    app.state.obsidian_sync = ObsidianSyncStore(tmp_path / "obsidian.json")
+    admin = authed_client()
+    bob_token = admin.post(
+        "/api/access/seats", json={"name": "Bob", "slug": "bob"}
+    ).json()["token"]
+    app.state.citadel = DrilldownIsolationCitadel()
+    api = TestClient(app, base_url="https://testserver")
+    bob = {"Authorization": f"Bearer {bob_token}"}
+
+    for gateway in (
+        IsolationDatasetGateway(map_error=True),
+        IsolationDatasetGateway(empty_map=True),
+    ):
+        app.state.knowledge_mesh = KnowledgeMesh(gateway)
+        try:
+            own = api.get("/api/documents/doc-b", headers=bob)
+            admin_doc = admin.get("/api/documents/doc-a")
+        finally:
+            app.state.knowledge_mesh = None
+
+        # Even the caller's own document denies when attribution cannot be
+        # resolved (fail-closed) — while bypass callers are unaffected.
+        assert own.status_code == 404
+        assert own.json()["detail"] == "Document not found."
+        assert admin_doc.status_code == 200
+
+
+def test_document_drilldown_denies_when_gateway_lacks_node_dataset_map(
+    tmp_path: Any,
+) -> None:
+    # A gateway that exposes no node_dataset_map must fail closed for scoped
+    # callers (any future gateway MUST expose it), while admins bypass.
+    class _NoMapGateway:
+        async def graph_data(self) -> tuple[list[Any], list[Any]]:
+            return ([], [])
+
+    app.state.access_store = AccessStore(tmp_path / "access.json")
+    app.state.obsidian_sync = ObsidianSyncStore(tmp_path / "obsidian.json")
+    admin = authed_client()
+    bob_token = admin.post(
+        "/api/access/seats", json={"name": "Bob", "slug": "bob"}
+    ).json()["token"]
+    app.state.citadel = DrilldownIsolationCitadel()
+    app.state.knowledge_mesh = KnowledgeMesh(_NoMapGateway())
+    api = TestClient(app, base_url="https://testserver")
+    try:
+        own = api.get(
+            "/api/documents/doc-b", headers={"Authorization": f"Bearer {bob_token}"}
+        )
+        admin_doc = admin.get("/api/documents/doc-a")
+    finally:
+        app.state.knowledge_mesh = None
+
+    assert own.status_code == 404
+    assert own.json()["detail"] == "Document not found."
+    assert admin_doc.status_code == 200
+
+
+class DrilldownSearchCitadel(DrilldownIsolationCitadel):
+    """Search returns native cognee ids whose drill-down status varies by caller:
+    a Central doc (readable), a foreign seat's doc (404 for a scoped reader), a
+    CHUNKS hit on the caller's own doc (whose datasets live on its is_part_of
+    parent, not the chunk node), and a textless entity (404 for anyone).
+    ``get_document`` (inherited) resolves the docs+chunk and returns None for the
+    entity, so /api/documents status is real."""
+
+    async def search(self, query: str, **kwargs: Any) -> list[dict[str, Any]]:
+        # Same set for every queried dataset; /search dedups by text.
+        return [
+            {"id": "doc-c", "text": "org text"},
+            {"id": "doc-a", "text": "alice text"},
+            {"id": "chunk-b", "text": "bob chunk text"},
+            {"id": "entity-x", "text": "an entity"},
+        ]
+
+
+def _search_hint(body: dict[str, Any]) -> dict[str, bool]:
+    return {
+        hit["_citadel"]["result_id"]: hit["_citadel"]["retrieval"][
+            "document_drilldown_available"
+        ]
+        for hit in body["results"]
+    }
+
+
+def test_search_drilldown_hint_matches_document_endpoint_per_caller(
+    tmp_path: Any,
+) -> None:
+    # ADR-0009: document_drilldown_available is TRUE only when /api/documents
+    # would return 200 for THIS caller — asserted against the actual endpoint
+    # status for the same id+caller (the whole point of the honest hint).
+    app.state.access_store = AccessStore(tmp_path / "access.json")
+    app.state.obsidian_sync = ObsidianSyncStore(tmp_path / "obsidian.json")
+    admin = authed_client()
+    bob_token = admin.post(
+        "/api/access/seats", json={"name": "Bob", "slug": "bob"}
+    ).json()["token"]
+    app.state.citadel = DrilldownSearchCitadel()  # authed_client resets citadel
+    app.state.knowledge_mesh = KnowledgeMesh(IsolationDatasetGateway())
+    api = TestClient(app, base_url="https://testserver")
+    bob = {"Authorization": f"Bearer {bob_token}"}
+    ids = ("doc-c", "doc-a", "chunk-b", "entity-x")
+    try:
+        bob_body = api.post("/search", json={"query": "x"}, headers=bob).json()
+        admin_body = admin.post("/search", json={"query": "x"}).json()
+        bob_status = {
+            doc: api.get(f"/api/documents/{doc}", headers=bob).status_code
+            for doc in ids
+        }
+        # Admin's textless entity 404s too (get_document is None), which the
+        # bypass hint cannot cheaply foresee; assert consistency on resolvable ids.
+        admin_status = {
+            doc: admin.get(f"/api/documents/{doc}").status_code
+            for doc in ("doc-c", "doc-a", "chunk-b")
+        }
+    finally:
+        app.state.knowledge_mesh = None
+
+    bob_hint = _search_hint(bob_body)
+    admin_hint = _search_hint(admin_body)
+    bob_meta = {h["_citadel"]["result_id"]: h["_citadel"] for h in bob_body["results"]}
+
+    # Scoped reader: Central doc AND own-doc chunk drillable (the chunk resolves
+    # through its is_part_of parent doc-b -> seat:bob); foreign-seat doc and
+    # textless entity not. The chunk case is exactly what a raw-id map lookup got
+    # wrong: hint False while the endpoint served 200.
+    assert bob_hint == {
+        "doc-c": True,
+        "doc-a": False,
+        "chunk-b": True,
+        "entity-x": False,
+    }
+    assert bob_status == {"doc-c": 200, "doc-a": 404, "chunk-b": 200, "entity-x": 404}
+    # The flag never disagrees with the endpoint it points at.
+    for doc in ids:
+        assert bob_hint[doc] is (bob_status[doc] == 200)
+    # An unavailable hint also withholds the URL — no agent is handed a 404 link.
+    assert "document_endpoint" in bob_meta["doc-c"]
+    assert "document_endpoint" in bob_meta["chunk-b"]
+    assert "document_endpoint" not in bob_meta["doc-a"]
+    assert "document_endpoint" not in bob_meta["entity-x"]
+
+    # Admin bypass: every resolvable id is drillable, consistent with the endpoint.
+    assert admin_hint == {
+        "doc-c": True,
+        "doc-a": True,
+        "chunk-b": True,
+        "entity-x": True,
+    }
+    assert admin_status == {"doc-c": 200, "doc-a": 200, "chunk-b": 200}
+
+
+def test_search_drilldown_hint_fails_closed_on_cold_map(tmp_path: Any) -> None:
+    # A cold/empty node_dataset_map denies the hint for scoped callers (better a
+    # false "unavailable" than a promised 404) while admin bypass is unaffected —
+    # matching the /api/documents fail-closed behavior for the same ids.
+    app.state.access_store = AccessStore(tmp_path / "access.json")
+    app.state.obsidian_sync = ObsidianSyncStore(tmp_path / "obsidian.json")
+    admin = authed_client()
+    bob_token = admin.post(
+        "/api/access/seats", json={"name": "Bob", "slug": "bob"}
+    ).json()["token"]
+    app.state.citadel = DrilldownSearchCitadel()
+    app.state.knowledge_mesh = KnowledgeMesh(IsolationDatasetGateway(empty_map=True))
+    api = TestClient(app, base_url="https://testserver")
+    bob = {"Authorization": f"Bearer {bob_token}"}
+    try:
+        bob_body = api.post("/search", json={"query": "x"}, headers=bob).json()
+        admin_body = admin.post("/search", json={"query": "x"}).json()
+        # Even the Central doc the reader normally reads 404s under a cold map.
+        bob_central = api.get("/api/documents/doc-c", headers=bob).status_code
+        admin_central = admin.get("/api/documents/doc-c").status_code
+    finally:
+        app.state.knowledge_mesh = None
+
+    assert _search_hint(bob_body) == {
+        "doc-c": False,
+        "doc-a": False,
+        "chunk-b": False,
+        "entity-x": False,
+    }
+    assert bob_central == 404  # hint False is consistent with the endpoint
+    assert _search_hint(admin_body) == {
+        "doc-c": True,
+        "doc-a": True,
+        "chunk-b": True,
+        "entity-x": True,
+    }
+    assert admin_central == 200
 
 
 class KnowledgeCitadel(FakeCitadel):

@@ -12,8 +12,11 @@ receive an empty graph with ``fallback: true`` instead of an error.
 
 from __future__ import annotations
 
+import asyncio
+import functools
 import logging
-from typing import Any
+import re
+from typing import Any, Callable
 
 logger = logging.getLogger(__name__)
 
@@ -22,11 +25,70 @@ DEFAULT_MAX_NODES = 200
 _LABEL_KEYS = ("name", "label", "title", "text", "id")
 _TYPE_KEYS = ("type", "node_type", "entity_type", "category")
 
+# Cognee names document nodes ``text_<md5>``/``data_<md5>`` — useless to
+# humans. Labels matching this (or a bare node id) are candidates for
+# derivation from their DocumentChunk neighbors' text.
+_INTERNAL_NAME_RE = re.compile(r"^(?:text|data)_[0-9a-f]{16,}$", re.IGNORECASE)
+
+_DOC_LABEL_MAX = 80
+_CHUNK_LABEL_MAX = 64
+
+# Seat datasets are namespaced "seat:<slug>" (kb.access.SEAT_DATASET_PREFIX);
+# inlined so this module keeps zero kb imports.
+_SEAT_PREFIX = "seat:"
+
+# YAML frontmatter closing fences are searched within this many leading lines.
+_FRONTMATTER_SCAN_LINES = 30
+
+# A line of only dashes/punctuation (a stray "---" fence, "***" rule, …) never
+# makes a useful label.
+_PUNCT_ONLY_RE = re.compile(r"^[\W_]+$")
+
+
+def _first_line_label(text: str, max_len: int) -> str:
+    """First non-empty line, whitespace-collapsed, ellipsis-truncated when cut.
+
+    Text opening with a ``---`` fence skips the whole YAML frontmatter block —
+    up to and including the closing ``---``/``...`` fence within the first
+    ``_FRONTMATTER_SCAN_LINES`` lines; when no closing fence is found only the
+    opening fence line is skipped. Lines that are only dashes/punctuation are
+    never returned as labels.
+    """
+    lines = text.splitlines()
+    start = 0
+    if lines and lines[0].strip() == "---":
+        start = 1
+        for index in range(1, min(len(lines), _FRONTMATTER_SCAN_LINES)):
+            if lines[index].strip() in ("---", "..."):
+                start = index + 1
+                break
+    for line in lines[start:]:
+        collapsed = " ".join(line.split())
+        if not collapsed or _PUNCT_ONLY_RE.match(collapsed):
+            continue
+        if len(collapsed) <= max_len:
+            return collapsed
+        return collapsed[: max_len - 1] + "…"
+    return ""
+
+
+def _is_internal_label(node_id: str, label: str) -> bool:
+    return label == node_id or bool(_INTERNAL_NAME_RE.match(label))
+
 
 def _node_label(node_id: str, properties: dict[str, Any]) -> str:
     for key in _LABEL_KEYS:
         value = properties.get(key)
         if isinstance(value, str) and value.strip():
+            if key == "text":
+                # Chunk nodes: raw chunk bodies are paragraphs, not names —
+                # keep the first non-empty line, tightly capped. Bodies with
+                # no labelable line (e.g. only dashes) fall through to the
+                # next key.
+                label = _first_line_label(value, _CHUNK_LABEL_MAX)
+                if label:
+                    return label
+                continue
             return " ".join(value.split())[:120]
     return str(node_id)[:120]
 
@@ -39,11 +101,138 @@ def _node_type(properties: dict[str, Any]) -> str:
     return "node"
 
 
+def _raw_id(raw: Any) -> str | None:
+    try:
+        return str(raw[0])
+    except (TypeError, IndexError, KeyError):
+        return None
+
+
+def _raw_endpoints(raw: Any) -> tuple[str, str] | None:
+    try:
+        return str(raw[0]), str(raw[1])
+    except (TypeError, IndexError, KeyError):
+        return None
+
+
+def _content_visible_ids(
+    raw_nodes: list[Any],
+    raw_edges: list[Any],
+    dataset_map: dict[str, list[str]],
+    dataset_visible: Callable[[str], bool],
+) -> set[str]:
+    """Layered content visibility for scoped callers (ADR-0009).
+
+    Deliberately NOT unbounded reachability: cognee dedupes entities across
+    datasets, so a BFS from visible documents through a shared entity would
+    resurface a hidden seat's documents and chunks. Layered passes instead:
+
+    - Pass 1: a node in ``dataset_map`` is visible iff ANY of its datasets is
+      visible; a mapped node with NO visible dataset is hidden permanently —
+      later passes never revive it.
+    - Pass 2: untagged nodes linked to a mapped document by an ``is_part_of``
+      edge (chunks) take that document's visibility: visible via ANY visible
+      linked document, permanently hidden when every linked mapped document
+      is hidden.
+    - Pass 3: remaining untagged nodes (entities) adjacent to any visible
+      document/chunk become visible.
+    - Pass 4: remaining untagged nodes that are themselves type nodes
+      (``EntityType``) linked to a pass-3 node by a type-lineage edge
+      (``is_a``, case-insensitive) become visible (EntityType second ring).
+      Both conditions are required: generic relationships never promote,
+      and an ``is_a`` edge alone does not either — extraction can name an
+      entity→entity edge "is_a", which would otherwise leak a hidden-only
+      entity's NAME. Nothing in the denied set is ever promoted. Expansion
+      stops there.
+
+    Everything still unresolved stays hidden — fail-closed, so an empty
+    ``dataset_map`` (failed attribution read included) hides all content.
+    """
+    node_ids: set[str] = set()
+    type_node_ids: set[str] = set()  # nodes that ARE types (EntityType), pass-4 pool
+    for raw in raw_nodes:
+        try:
+            node_id = str(raw[0])
+            properties = raw[1] if isinstance(raw[1], dict) else {}
+        except (TypeError, IndexError, KeyError):
+            continue
+        node_ids.add(node_id)
+        if "entitytype" in _node_type(properties).lower():
+            type_node_ids.add(node_id)
+
+    visible: set[str] = set()  # pass 1 + pass 2: documents and their chunks
+    denied: set[str] = set()  # permanently hidden, never revived
+    for node_id in node_ids:
+        names = dataset_map.get(node_id)
+        if names is None:
+            continue
+        if any(dataset_visible(name) for name in names):
+            visible.add(node_id)
+        else:
+            denied.add(node_id)
+
+    # One edge sweep: pass-2 inputs (chunk -> mapped documents), the full
+    # adjacency used by pass 3, and the type-lineage adjacency used by pass 4.
+    chunk_docs: dict[str, set[str]] = {}
+    adjacency: dict[str, set[str]] = {}
+    type_adjacency: dict[str, set[str]] = {}
+    for raw in raw_edges:
+        try:
+            source, target, relationship = str(raw[0]), str(raw[1]), str(raw[2])
+        except (TypeError, IndexError, KeyError):
+            continue
+        adjacency.setdefault(source, set()).add(target)
+        adjacency.setdefault(target, set()).add(source)
+        if relationship.lower() == "is_a":
+            type_adjacency.setdefault(source, set()).add(target)
+            type_adjacency.setdefault(target, set()).add(source)
+        if relationship != "is_part_of":
+            continue
+        for doc_id, other_id in ((source, target), (target, source)):
+            if doc_id in dataset_map and other_id not in dataset_map:
+                chunk_docs.setdefault(other_id, set()).add(doc_id)
+
+    for chunk_id, doc_ids in chunk_docs.items():
+        if chunk_id not in node_ids:
+            continue
+        if doc_ids & visible:
+            visible.add(chunk_id)
+        else:
+            # Pass 1 resolved every mapped node, so all linked documents are
+            # hidden here — the chunk IS that hidden content.
+            denied.add(chunk_id)
+
+    def _touches(node_id: str, pool: set[str]) -> bool:
+        neighbors = adjacency.get(node_id)
+        return bool(neighbors) and not neighbors.isdisjoint(pool)
+
+    def _type_touches(node_id: str, pool: set[str]) -> bool:
+        neighbors = type_adjacency.get(node_id)
+        return bool(neighbors) and not neighbors.isdisjoint(pool)
+
+    unresolved = node_ids - visible - denied
+    ring1 = {node_id for node_id in unresolved if _touches(node_id, visible)}
+    unresolved -= ring1
+    # Type-lineage ONLY, and the promoted node must itself BE a type node:
+    # extraction can emit an entity→entity edge literally named "is_a"
+    # ("SecretFork is_a graph database"), so trusting the edge name alone
+    # would still surface a hidden-only entity's name — that name is the
+    # leak (unresolved already excludes the denied set).
+    ring2 = {
+        node_id
+        for node_id in unresolved
+        if node_id in type_node_ids and _type_touches(node_id, ring1)
+    }
+    return visible | ring1 | ring2
+
+
 def build_graph_payload(
     raw_nodes: list[Any],
     raw_edges: list[Any],
     *,
     limit: int = DEFAULT_MAX_NODES,
+    dataset_map: dict[str, list[str]] | None = None,
+    presence: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Shape raw Cognee graph tuples into the ``{nodes, edges}`` contract.
 
@@ -51,10 +240,37 @@ def build_graph_payload(
     ``(source_id, target_id, relationship_name, properties)`` tuples. The node
     list is capped at ``limit`` and edges are kept only when both endpoints
     survive the cap.
+
+    ``dataset_map`` (``{data_id: [dataset_name, ...]}``) optionally attributes
+    document nodes to their cognee datasets (per-seat ``seat:<slug>`` datasets):
+    mapped nodes gain ``dataset``/``datasets`` keys, chunks inherit the dataset
+    of their document via ``is_part_of`` edges, and one synthetic hub node per
+    dataset (``dataset:<name>``) is appended with ``belongs_to`` edges. Hubs are
+    synthetic: they do not count against ``limit`` or into ``total_nodes``.
+    ``None``/``{}`` keeps the exact pre-attribution behavior.
+
+    ``presence`` (``[{"dataset": name, "label": label, "documents": count?},
+    ...]``) appends a universal hub per entry regardless of surviving content
+    (ADR-0009 Seat Presence: content-derived hubs vanish exactly when isolation
+    hides the content). Presence entries dedupe against content-derived hubs —
+    one hub per dataset total. When ``presence`` is given, every hub carries
+    ``presence: {"documents": N}`` (the entry's ``documents`` when provided,
+    else counted from ``dataset_map``; 0 for empty seats) and every seat hub
+    (``seat:``-prefixed dataset) gains one ``presence`` edge to the Central hub
+    — the first non-seat presence entry — so hubs never float disconnected.
+    ``None`` keeps the exact pre-presence behavior.
+
+    Kept nodes labeled with cognee-internal names (``text_<md5>``/``data_<md5>``
+    or the bare node id) are relabeled with the first non-empty line of their
+    lowest-``chunk_index`` DocumentChunk neighbor's text (via ``is_part_of``
+    edges, either direction); the internal name is preserved under
+    ``internal_name``. This applies regardless of ``dataset_map``.
     """
     limit = max(1, limit)
+    dataset_map = dataset_map or {}
     nodes: list[dict[str, Any]] = []
     kept_ids: set[str] = set()
+    node_by_id: dict[str, dict[str, Any]] = {}
     for raw in raw_nodes:
         try:
             node_id, properties = raw[0], raw[1]
@@ -66,15 +282,91 @@ def build_graph_payload(
         if node_key in kept_ids:
             continue
         kept_ids.add(node_key)
-        nodes.append(
-            {
-                "id": node_key,
-                "label": _node_label(node_key, properties),
-                "type": _node_type(properties),
-            }
-        )
+        node: dict[str, Any] = {
+            "id": node_key,
+            "label": _node_label(node_key, properties),
+            "type": _node_type(properties),
+        }
+        names = dataset_map.get(node_key)
+        if names:
+            node["dataset"] = names[0]
+            node["datasets"] = list(names)
+        nodes.append(node)
+        node_by_id[node_key] = node
         if len(nodes) >= limit:
             break
+
+    # Kept nodes still wearing a cognee-internal label (``text_<md5>`` or the
+    # bare node id) get a human label derived from their chunk text below.
+    internal_nodes: dict[str, dict[str, Any]] = {
+        node["id"]: node
+        for node in nodes
+        if _is_internal_label(node["id"], node["label"])
+    }
+    doc_chunk_ids: dict[str, list[str]] = {}
+
+    if dataset_map or internal_nodes:
+        # Single shared pass over is_part_of edges (either direction):
+        # 1) chunk-level attribution — a DocumentChunk links to its document
+        #    via is_part_of; tag kept, untagged endpoints with the mapped
+        #    document's dataset(s); 2) label derivation — collect the chunk
+        #    neighbors of internally-named nodes. Single pass, no recursion.
+        for raw in raw_edges:
+            try:
+                source, target, relationship = str(raw[0]), str(raw[1]), str(raw[2])
+            except (TypeError, IndexError, KeyError):
+                continue
+            if relationship != "is_part_of":
+                continue
+            for doc_id, other_id in ((source, target), (target, source)):
+                names = dataset_map.get(doc_id)
+                other = node_by_id.get(other_id)
+                if names and other is not None and "dataset" not in other:
+                    other["dataset"] = names[0]
+                    other["datasets"] = list(names)
+                if doc_id in internal_nodes:
+                    doc_chunk_ids.setdefault(doc_id, []).append(other_id)
+
+    if doc_chunk_ids:
+        # Derive readable document labels: pick the chunk with the smallest
+        # numeric chunk_index (fallback: first encountered) and use the first
+        # non-empty line of its text. Chunks beyond the node cap still count —
+        # properties come from raw_nodes, not the kept set.
+        wanted = {cid for ids in doc_chunk_ids.values() for cid in ids}
+        chunk_props: dict[str, dict[str, Any]] = {}
+        for raw in raw_nodes:
+            try:
+                chunk_id, properties = str(raw[0]), raw[1]
+            except (TypeError, IndexError, KeyError):
+                continue
+            if (
+                chunk_id in wanted
+                and chunk_id not in chunk_props
+                and isinstance(properties, dict)
+            ):
+                chunk_props[chunk_id] = properties
+        for doc_id, chunk_ids in doc_chunk_ids.items():
+            best: tuple[tuple[int, float, int], str] | None = None
+            for position, chunk_id in enumerate(chunk_ids):
+                properties = chunk_props.get(chunk_id, {})
+                text = properties.get("text")
+                if not isinstance(text, str) or not text.strip():
+                    continue
+                index = properties.get("chunk_index")
+                if isinstance(index, (int, float)) and not isinstance(index, bool):
+                    key = (0, float(index), position)
+                else:
+                    key = (1, 0.0, position)
+                if best is None or key < best[0]:
+                    best = (key, text)
+            if best is None:
+                continue
+            label = _first_line_label(best[1], _DOC_LABEL_MAX)
+            if not label:
+                continue
+            node = internal_nodes[doc_id]
+            node["internal_name"] = node["label"]
+            node["label"] = label
 
     edges: list[dict[str, Any]] = []
     for raw in raw_edges:
@@ -92,23 +384,102 @@ def build_graph_payload(
             }
         )
 
+    # Raw-count semantics captured before synthetic hubs are appended.
+    truncated = len(raw_nodes) > len(nodes)
+
+    if dataset_map or presence:
+        # Synthesize one hub node per dataset attached to at least one KEPT
+        # node, plus belongs_to edges. The "dataset:" prefix cannot collide
+        # with kuzu UUID ids, so only intra-hub dedupe is needed.
+        hub_names: list[str] = []
+        seen_hubs: set[str] = set()
+        for node in nodes:
+            for name in node.get("datasets", []):
+                edges.append(
+                    {
+                        "source": node["id"],
+                        "target": f"dataset:{name}",
+                        "relationship": "belongs_to",
+                    }
+                )
+                if name not in seen_hubs:
+                    seen_hubs.add(name)
+                    hub_names.append(name)
+        # Universal presence hubs (ADR-0009): every listed seat plus Central
+        # appears for every caller, independent of surviving content. Deduped
+        # against the content-derived hubs above — one hub per dataset total.
+        presence_labels: dict[str, str] = {}
+        presence_documents: dict[str, int] = {}
+        central_name: str | None = None
+        for entry in presence or []:
+            name = str(entry.get("dataset") or "").strip()
+            if not name:
+                continue
+            presence_labels.setdefault(name, str(entry.get("label") or name))
+            documents = entry.get("documents")
+            if isinstance(documents, int) and not isinstance(documents, bool):
+                presence_documents.setdefault(name, documents)
+            if central_name is None and not name.startswith(_SEAT_PREFIX):
+                central_name = name
+            if name not in seen_hubs:
+                seen_hubs.add(name)
+                hub_names.append(name)
+        map_counts: dict[str, int] = {}
+        if presence is not None:
+            for names in dataset_map.values():
+                for name in names:
+                    map_counts[name] = map_counts.get(name, 0) + 1
+        for name in hub_names:
+            hub_id = f"dataset:{name}"
+            kept_ids.add(hub_id)
+            hub: dict[str, Any] = {
+                "id": hub_id,
+                "label": presence_labels.get(name, name),
+                "type": "dataset",
+                "dataset": name,
+            }
+            if presence is not None:
+                hub["presence"] = {
+                    "documents": presence_documents.get(name, map_counts.get(name, 0))
+                }
+            nodes.append(hub)
+        if presence is not None and central_name is not None:
+            # Seat hubs anchor to the Central hub so zero-content seats never
+            # float disconnected on the canvas.
+            central_hub_id = f"dataset:{central_name}"
+            for name in hub_names:
+                if not name.startswith(_SEAT_PREFIX):
+                    continue
+                edges.append(
+                    {
+                        "source": f"dataset:{name}",
+                        "target": central_hub_id,
+                        "relationship": "presence",
+                    }
+                )
+
     return {
         "nodes": nodes,
         "edges": edges,
         "total_nodes": len(raw_nodes),
         "total_edges": len(raw_edges),
-        "truncated": len(raw_nodes) > len(nodes),
+        "truncated": truncated,
     }
 
 
-def fallback_graph(reason: str) -> dict[str, Any]:
+def fallback_graph(
+    reason: str, presence: list[dict[str, Any]] | None = None
+) -> dict[str, Any]:
+    """Empty-graph payload; ``presence`` still appends Seat Presence hubs.
+
+    ADR-0009: every seat is ALWAYS visible, so fallback payloads carry the
+    universal hubs (and their ``presence`` edges to the Central hub) too.
+    Hubs are synthetic — the raw ``total_nodes``/``total_edges`` stay 0.
+    ``None`` keeps the exact pre-presence fallback shape.
+    """
     return {
         "ok": True,
-        "nodes": [],
-        "edges": [],
-        "total_nodes": 0,
-        "total_edges": 0,
-        "truncated": False,
+        **build_graph_payload([], [], presence=presence),
         "fallback": True,
         "fallback_reason": reason,
     }
@@ -120,10 +491,34 @@ class KnowledgeMesh:
     def __init__(self, gateway: Any) -> None:
         self.gateway = gateway
 
-    async def graph(self, *, limit: int = DEFAULT_MAX_NODES) -> dict[str, Any]:
+    async def graph(
+        self,
+        *,
+        limit: int = DEFAULT_MAX_NODES,
+        dataset_visible: Callable[[str], bool] | None = None,
+        presence: list[dict[str, Any]] | None = None,
+    ) -> dict[str, Any]:
+        """Shaped graph payload; ``dataset_visible`` scopes CONTENT per caller.
+
+        ``dataset_visible`` (dataset name -> bool) applies ADR-0009 content
+        isolation before shaping: content nodes survive only per the layered
+        ``_content_visible_ids`` passes (fail-closed — a failed dataset-map
+        read hides all content), edges survive only between surviving nodes,
+        the node cap applies AFTER filtering, and attribution names the caller
+        may not read are stripped — no node tag, no hub, no belongs_to edge.
+        ``total_nodes``/``total_edges`` keep the raw org-wide counts while
+        ``visible_nodes`` reports the caller-scoped count so the UI can be
+        honest. ``None`` applies no filtering (bypass/admin callers) and keeps
+        the exact unfiltered behavior.
+
+        ``presence`` appends universal Seat Presence hubs for every caller;
+        entry ``documents`` counts are filled from the RAW dataset map —
+        presence metadata (slug + contribution counts) is org-visible by
+        design (ADR-0009), unlike content.
+        """
         graph_data = getattr(self.gateway, "graph_data", None)
         if not callable(graph_data):
-            return fallback_graph("graph_access_unavailable")
+            return fallback_graph("graph_access_unavailable", presence)
         try:
             raw_nodes, raw_edges = await graph_data()
         except Exception as exc:
@@ -131,8 +526,82 @@ class KnowledgeMesh:
                 "Knowledge mesh graph read failed with %s; returning fallback graph",
                 exc.__class__.__name__,
             )
-            return fallback_graph(f"graph_engine_error:{exc.__class__.__name__}")
+            return fallback_graph(
+                f"graph_engine_error:{exc.__class__.__name__}", presence
+            )
+        raw_nodes = list(raw_nodes)
+        raw_edges = list(raw_edges)
+        dataset_map: dict[str, list[str]] = {}
+        node_dataset_map = getattr(self.gateway, "node_dataset_map", None)
+        if callable(node_dataset_map):
+            try:
+                dataset_map = await node_dataset_map() or {}
+            except Exception as exc:
+                logger.warning(
+                    "Knowledge mesh dataset map read failed with %s; "
+                    "omitting dataset attribution",
+                    exc.__class__.__name__,
+                )
+                dataset_map = {}
+        if presence:
+            # Fill presence document counts from the RAW map, before caller
+            # scoping strips hidden names: contribution counts are presence
+            # metadata every Vault Member may see (ADR-0009).
+            counts: dict[str, int] = {}
+            for names in dataset_map.values():
+                for name in names:
+                    counts[name] = counts.get(name, 0) + 1
+            presence = [
+                {**entry, "documents": counts.get(str(entry.get("dataset")), 0)}
+                for entry in presence
+            ]
         if not raw_nodes:
-            return fallback_graph("graph_empty")
-        payload = build_graph_payload(list(raw_nodes), list(raw_edges), limit=limit)
+            # ADR-0009: seats are ALWAYS visible — the empty-graph fallback
+            # still renders presence hubs, with document counts from the
+            # dataset map read above (0 when nothing is mapped).
+            return fallback_graph("graph_empty", presence)
+        total_nodes = len(raw_nodes)
+        total_edges = len(raw_edges)
+        visible_nodes: int | None = None
+        if dataset_visible is not None:
+            # ADR-0009 scoping is pure Python over already-materialized tuples/
+            # dicts and closures (dataset_visible touches no cognee/Kuzu/loop
+            # objects), so run the ~100ms visibility scan off the single event
+            # loop to avoid starving concurrent requests (#50).
+            visible_ids = await asyncio.to_thread(
+                _content_visible_ids, raw_nodes, raw_edges, dataset_map, dataset_visible
+            )
+            visible_nodes = len(visible_ids)
+            raw_nodes = [raw for raw in raw_nodes if _raw_id(raw) in visible_ids]
+            raw_edges = [
+                raw
+                for raw in raw_edges
+                if (endpoints := _raw_endpoints(raw)) is not None
+                and endpoints[0] in visible_ids
+                and endpoints[1] in visible_ids
+            ]
+            filtered: dict[str, list[str]] = {}
+            for node_id, names in dataset_map.items():
+                kept = [name for name in names if dataset_visible(name)]
+                if kept:
+                    filtered[node_id] = kept
+            dataset_map = filtered
+        # build_graph_payload is likewise pure Python over plain tuples/dicts —
+        # shape it off the loop too (#50).
+        payload = await asyncio.to_thread(
+            functools.partial(
+                build_graph_payload,
+                raw_nodes,
+                raw_edges,
+                limit=limit,
+                dataset_map=dataset_map,
+                presence=presence,
+            )
+        )
+        if dataset_visible is not None:
+            # Raw org-wide totals stay honest about what exists; the caller's
+            # scope is reported separately.
+            payload["total_nodes"] = total_nodes
+            payload["total_edges"] = total_edges
+            payload["visible_nodes"] = visible_nodes
         return {"ok": True, "fallback": False, **payload}

@@ -23,6 +23,9 @@
           <button id="refreshButton" class="secondary-button compact-button" type="button">
             Refresh
           </button>
+          <button id="logoutButton" class="secondary-button compact-button" type="button">
+            Log out
+          </button>
         </div>
       </header>
 
@@ -138,11 +141,23 @@
                   </div>
                   <div class="toolbar-actions">
                     <div class="segmented-control graph-mode" role="group" aria-label="Graph data source">
-                      <button class="segment-button active" type="button" data-graph-mode="live" aria-pressed="true">
-                        Activity
+                      <button
+                        class="segment-button"
+                        type="button"
+                        data-graph-mode="live"
+                        aria-pressed="false"
+                        title="Vault Activity: what the vault is doing right now — syncs, searches, ingests"
+                      >
+                        Vault Activity
                       </button>
-                      <button class="segment-button" type="button" data-graph-mode="knowledge" aria-pressed="false">
-                        Knowledge graph
+                      <button
+                        class="segment-button active"
+                        type="button"
+                        data-graph-mode="knowledge"
+                        aria-pressed="true"
+                        title="Knowledge Mesh: what the vault knows — documents, entities, and the seats they come from"
+                      >
+                        Knowledge Mesh
                       </button>
                     </div>
                     <label class="graph-depth-control">
@@ -167,16 +182,17 @@
                     id="graphCanvas"
                     tabindex="0"
                     role="img"
-                    aria-label="Live knowledge graph visualization"
+                    aria-label="Vault Activity and Knowledge Mesh visualization"
                   ></div>
                   <div id="canvasEmpty" class="canvas-empty" hidden>
                     <h3>No graph notes yet</h3>
                     <p>Ingest a memory or run source sync to create the first linked nodes.</p>
                   </div>
                   <div id="realGraphEmpty" class="canvas-empty" hidden>
-                    <h3>No knowledge graph yet</h3>
+                    <h3>No Knowledge Mesh yet</h3>
                     <p>Cognee has not produced graph data yet. Ingest notes or run source sync, then check back.</p>
                   </div>
+                  <div id="graphLegend" class="graph-legend" role="group" aria-label="Node kinds" hidden></div>
                 </div>
                 <div id="selectedNode" class="selection" aria-live="polite">
                   Select a note or node to inspect its links.
@@ -898,8 +914,15 @@
                     />
                   </div>
                 </div>
+                <div class="field">
+                  <label for="accessSeat">Assign to seat</label>
+                  <select id="accessSeat" name="seat">
+                    <option value="">No seat — service account</option>
+                  </select>
+                  <p id="accessSeatScopeHint" class="hint" hidden>Scope is set by the seat.</p>
+                </div>
                 <div class="field-grid">
-                  <div class="field">
+                  <div class="field" id="accessDefaultDatasetField">
                     <label for="accessDefaultDataset">Default dataset</label>
                     <input
                       id="accessDefaultDataset"
@@ -920,7 +943,7 @@
                     />
                   </div>
                 </div>
-                <div class="field">
+                <div class="field" id="accessAllowedDatasetsField">
                   <label for="accessAllowedDatasets">Allowed datasets</label>
                   <input
                     id="accessAllowedDatasets"
