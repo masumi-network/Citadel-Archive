@@ -480,6 +480,23 @@ def test_remote_http_base_url_is_rejected_without_escape_hatch(
     assert client.base_url == "http://citadel.example"
 
 
+def test_public_client_targets_self_base_url_not_localhost_8000(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Hosted /mcp has no fallback client, so the public path builds a client with
+    # base_url=None. On Railway the app listens on $PORT, not 8000, so the default
+    # must resolve to the in-process self base URL, never http://localhost:8000.
+    monkeypatch.delenv("CITADEL_HTTP_BASE_URL", raising=False)
+    monkeypatch.delenv("CITADEL_MCP_SELF_BASE_URL", raising=False)
+    monkeypatch.setenv("PORT", "9137")
+
+    client = CitadelHttpClient(base_url=None, access_token="")
+
+    assert client.base_url == mcp_server._self_base_url()
+    assert client.base_url == "http://127.0.0.1:9137"
+    assert client.base_url != "http://localhost:8000"
+
+
 def test_missing_access_token_error_does_not_leak_env_values(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
