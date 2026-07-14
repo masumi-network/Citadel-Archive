@@ -38,8 +38,12 @@ evolves only through governed promotion and org sync.
   `citadel_ingest` / `citadel_contribute` to write. Per-call audit.
 - **Governed sharing** — seat writes stay on your Node; Central updates via org
   sync and the Promotion Agent. Secrets blocked on every write path.
-- **Live knowledge graph** — Central + all seat Nodes on one canvas, plus a
-  real-time activity timeline in the web UI.
+- **Knowledge Mesh + Vault Activity** — two canvases in the web UI: the
+  **Knowledge Mesh** (source-linked documents, concepts, and the seats they
+  belong to) and **Vault Activity** (the live sync/search/ingest timeline).
+  Every seat is visible as a presence hub, but content stays caller-scoped —
+  you see Central plus your own Node, never another seat's Node content
+  (ADR-0009). Click any node to read its document.
 - **Zero-dependency client** — `pip install citadel-archive` is pure stdlib; the
   server stack is an opt-in extra.
 
