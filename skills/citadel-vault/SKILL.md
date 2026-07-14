@@ -10,13 +10,17 @@ description: Use when a user asks project, source, architecture, or operational 
 **Public vs private:** `https://citadel-archive-production.up.railway.app/skills/boundary`
 
 Organization memory lives on the **private Railway vault**, not in the public
-Citadel-Archive git repo. Access it only through MCP/HTTP with the user's `ctdl_`
-token. Never commit vault content or tokens to git.
+Citadel-Archive git repo. Access it only through the CLI, HTTP API, or MCP with
+the user's `ctdl_` token. Never commit vault content or tokens to git.
 
-Use the Citadel MCP server as the capability boundary for organization memory.
-Prefer reader service-account tokens. Treat writer and admin tokens as elevated
-access, and use them only when the user has clearly asked for the corresponding
-write or operational action.
+The headless CLI is the dependable default for agents — `citadel search --json`,
+`citadel status --json`, `citadel ingest` work in any terminal or runner with
+just `CITADEL_MCP_ACCESS_TOKEN` set. The MCP server offers the same capabilities
+as in-session tools when your client has them registered; if it shows no
+`citadel_*` tools, fall back to the CLI instead of retrying. Prefer reader
+service-account tokens. Treat writer and admin tokens as elevated access, and
+use them only when the user has clearly asked for the corresponding write or
+operational action.
 
 ## Access Roles
 
@@ -58,10 +62,10 @@ For project questions, search Citadel before answering when current team memory,
 architecture decisions, source-learning status, or prior operational context
 could matter.
 
-Use:
+Use (CLI first; MCP tool names in parentheses when your session has them):
 
-- `citadel_session` to verify the connection and check your role.
-- `citadel_search` for vault search. Include `dataset` when targeting a known dataset.
+- `citadel status --json` (`citadel_session`) to verify the connection and check your role.
+- `citadel search "<query>" --json` (`citadel_search`) for vault search. Include `dataset` when targeting a known dataset.
 - `citadel_get_mesh` for the current knowledge mesh state.
 - `citadel_list_sources` for GitHub/Linear/source-learning/index status.
 - `citadel_linear_my_issues` for your assigned Linear tasks (Node mirror).

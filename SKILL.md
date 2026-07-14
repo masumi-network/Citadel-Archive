@@ -63,11 +63,50 @@ requirements, tool policy metadata, and public/private boundary rules.
 
 ## How To Access Citadel
 
-### Option A — Through the MCP Server (Recommended)
+### Option A — Headless CLI (Recommended for agents)
 
-The hosted MCP server is the cleanest integration for coding agents. Point the
-client at the hosted `/mcp/` URL and send the token in the `Authorization` header
-— no clone, no local Python. Full per-client setup: `…/skills/connect`.
+The `citadel` CLI is the most dependable agent integration: plain HTTPS against
+the Node from any terminal, CI job, hook, or headless runner — no MCP wiring,
+no tool registration to depend on. Install the standalone client (zero-dep base):
+
+```bash
+pipx install citadel-archive
+# upgrade: citadel update   (pipx-aware self-update; skips the stale wheel cache)
+# bootstrap installer: curl -fsSL https://raw.githubusercontent.com/masumi-network/Citadel-Archive/main/install.sh | sh
+```
+
+Auth: export `CITADEL_MCP_ACCESS_TOKEN` (or run `citadel onboard` once — it
+writes the export to your shell rc). Add `--json` to reads for machine output.
+
+```bash
+citadel search "What did I learn about Railway?" --json --top-k 5
+citadel ingest "A useful note" --tag personal --tag research   # writes to your Node
+citadel status --json          # connection · identity · local setup
+citadel promotion list --json  # your pending Promotion Approval queue
+citadel onboard            # token (keep-or-replace, verified up front) + hooks +
+                           # .mcp.json + capture roots + checkbox tool selection
+citadel token set          # rotate this machine's seat token (verify-first)
+citadel update             # self-update the CLI (alias: upgrade)
+citadel doctor --fix       # diagnose / repair local setup
+citadel mcp add claude     # add the Citadel MCP server to a client (`citadel mcp list`)
+citadel seat create        # admin: mint a seat token (needs CITADEL_ADMIN_KEY)
+citadel seat token <slug>  # admin: mint a fresh token for an existing seat
+```
+
+`citadel search` and `citadel ingest` are HTTP-backed against the Node by
+default (no `[server]` extra); `--local` runs the in-process server stack
+instead. **Agents should shell out to these commands rather than depending on
+MCP tool registration** — the CLI works even when a client's MCP session
+carries no tools.
+
+### Option B — MCP Server (in-session tools)
+
+The hosted MCP endpoint gives coding agents in-session tools without shelling
+out. Point the client at the hosted `/mcp/` URL and send the token in the
+`Authorization` header — no clone, no local Python. Full per-client setup:
+`…/skills/connect`. Treat MCP as an accelerator: **if your session shows no
+`citadel_*` tools, do not keep retrying or re-authing — fall back to the
+headless CLI (Option A) or the HTTP API.**
 
 ```json
 {
@@ -118,9 +157,9 @@ client at the hosted `/mcp/` URL and send the token in the `Authorization` heade
 - `citadel_ingest_decision` — decide whether context should become vault memory
 - `citadel_summarize_source_changes` — summarize recent source-learning changes
 
-### Option B — Direct HTTP API
+### Option C — Direct HTTP API
 
-When MCP is not available, call the HTTP API directly with `Authorization: Bearer <token>`.
+When neither the CLI nor MCP is available, call the HTTP API directly with `Authorization: Bearer <token>`.
 
 **Key endpoints:**
 
@@ -156,7 +195,7 @@ GET  /api/access                       # list access state (admin)
 GET  /api/audit                        # audit trail (admin)
 ```
 
-### Option C — Python API (local development)
+### Option D — Python API (local development)
 
 ```python
 import asyncio
@@ -169,33 +208,6 @@ async def main():
     print(results)
 
 asyncio.run(main())
-```
-
-### Option D — CLI
-
-Install the standalone client (zero-dep base) — no clone, no `uv`:
-
-```bash
-pipx install citadel-archive
-# upgrade: citadel update   (pipx-aware self-update; skips the stale wheel cache)
-# bootstrap installer: curl -fsSL https://raw.githubusercontent.com/masumi-network/Citadel-Archive/main/install.sh | sh
-```
-
-`citadel search` and `citadel ingest` are HTTP-backed against the Node by
-default (no `[server]` extra). Add `--json` for machine output, or `--local` to
-run the in-process server stack instead (needs the `[server]` extra).
-
-```bash
-citadel search "What did I learn about Railway?"        # HTTP-backed by default
-citadel ingest "A useful note" --tag personal --tag research
-citadel onboard            # token (keep-or-replace, verified up front) + hooks +
-                           # .mcp.json + capture roots + checkbox tool selection
-citadel token set          # rotate this machine's seat token (verify-first)
-citadel update             # self-update the CLI (alias: upgrade)
-citadel doctor --fix       # diagnose / repair local setup
-citadel mcp add claude     # add the Citadel MCP server to a client (`citadel mcp list`)
-citadel seat create        # admin: mint a seat token (needs CITADEL_ADMIN_KEY)
-citadel seat token <slug>  # admin: mint a fresh token for an existing seat
 ```
 
 ## Access Roles & Permissions
@@ -218,7 +230,8 @@ citadel seat token <slug>  # admin: mint a fresh token for an existing seat
 ### Reading from Citadel
 
 - **Search before answering** when the question involves project history, architecture decisions, past incidents, team knowledge, or anything that may already be in the vault.
-- Use `citadel_search` with specific queries. Include `dataset` when targeting a known dataset (e.g. `masumi-network`).
+- Use `citadel search "<query>" --json` (headless CLI) or the `citadel_search` MCP tool with specific queries. Include `dataset` when targeting a known dataset (e.g. `masumi-network`).
+- **No `citadel_*` tools registered in your session?** Don't retry or re-auth MCP — shell out to the CLI (`citadel search --json`, `citadel status --json`) or call the HTTP API; same token, same access.
 - Use `citadel_get_mesh` to understand the current knowledge graph relationships.
 - Use `citadel_list_sources` to check GitHub sync status and index health.
 - Use `citadel_linear_my_issues` when the user asks about their assigned tasks
@@ -305,7 +318,11 @@ Summary:
 6. **Verify.** After writing config, restart the client and call
    `citadel_discovery`, then `citadel_session`. If both work, try a small
    `citadel_search`.
-7. **Debug.** If the server fails: run `uv sync --dev` in the repo, check the token is present, check the URL is reachable. Do not print the token.
+7. **Debug.** If the MCP tools never register or calls hang: verify access
+   headlessly first — `citadel status --json` and `citadel search "test" --json`
+   use the same token over plain HTTPS. If those work, the vault and token are
+   fine; use the CLI and move on rather than fighting the MCP transport. Do not
+   print the token.
 8. **Autonomous capture.** For personal **Node** sync, run `citadel onboard`
    once per clone (idempotent — installs the git pre-push hook and SessionEnd hook).
    Onboarding: [`docs/onboarding/teammate-rollout.md`](docs/onboarding/teammate-rollout.md).
@@ -334,8 +351,9 @@ Railway cron keeps org memory fresh. Devs never trigger these.
 | `linear-sync` | Linear workspace → **Central**; assignee issues **Seat-Scoped Mirror** → each **Node** |
 | `pipeline` | GitHub + skills refresh + self-improve + backup mirror |
 
-**Agent policy:** read via `citadel_search` / `citadel_linear_my_issues`; write
-via `citadel_ingest` when durable facts crystallize; **do not** trigger admin
+**Agent policy:** read via `citadel search --json` (CLI) or `citadel_search` /
+`citadel_linear_my_issues` (MCP, when registered); write via `citadel ingest`
+or `citadel_ingest` when durable facts crystallize; **do not** trigger admin
 sync unless the user explicitly asks.
 
 Skill: `https://citadel-archive-production.up.railway.app/skills/proactive-ingest`

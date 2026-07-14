@@ -50,8 +50,10 @@ proposal in the **Operations Dashboard**, MCP, or `citadel promotion` CLI.
 
 ## Layer 1 — proactive mid-session ingest (agent behavior)
 
-While working in an org repo, when a durable fact crystallizes, call
-`citadel_ingest` without waiting to be asked. Keep each note small and curated.
+While working in an org repo, when a durable fact crystallizes, capture it
+without waiting to be asked — via the headless CLI (`citadel ingest`), or the
+`citadel_ingest` MCP tool when your session has it registered. Keep each note
+small and curated.
 
 **Ingest proactively when:**
 - A decision is made (approach chosen, tradeoff settled, library picked).
@@ -61,7 +63,14 @@ While working in an org repo, when a durable fact crystallizes, call
 
 **Personal-by-default call (lands in your node):**
 
+```bash
+# Headless CLI — works in any terminal/runner with CITADEL_MCP_ACCESS_TOKEN set
+citadel ingest "Picked urllib over requests for the SessionEnd hook so it stays stdlib-only and dependency-free." \
+  --tag dev-session --tag decision
 ```
+
+```
+# MCP equivalent (when citadel_* tools are registered in-session)
 citadel_ingest(
   data="Picked urllib over requests for the SessionEnd hook so it stays "
        "stdlib-only and dependency-free.",
