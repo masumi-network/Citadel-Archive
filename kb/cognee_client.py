@@ -597,25 +597,14 @@ class CogneePublicClient:
         props = props_by_id.get(doc_id)
         if props is None:
             return None
-        text, text_key = _extract_text(props)
-        if text is not None:
-            return {
-                "id": doc_id,
-                "source_type": "cognee",
-                "title": props.get("title") or None,
-                "body": text,
-                "metadata": {k: v for k, v in props.items() if k != text_key},
-            }
-        # Textless document node: its text lives on DocumentChunk neighbors
-        # linked via ``is_part_of`` (chunk --is_part_of--> doc; stay
-        # direction-agnostic on endpoints but ONLY follow is_part_of edges —
-        # entities are also graph-adjacent to text-bearing chunks via
-        # ``contains``/``mentions``, and assembling those would fabricate a
-        # document for a textless entity, which must stay None (404).
-        # One pass over edges; textless neighbors are skipped; chunks sort by
-        # numeric chunk_index, unindexed ones trail in encounter order;
-        # duplicate edges to the same neighbor count once.
-        chunks: list[tuple[tuple[int, float], str]] = []
+        # ``is_part_of`` neighbors (either direction), collected once and used
+        # twice: assembling a textless document's body from its chunks, and
+        # dataset attribution for read-scope checks — a chunk id has no
+        # relational Data row of its own, so its datasets live on the linked
+        # document's node id. ``dataset_node_ids`` plumbs those candidate ids
+        # to the caller (kb/server.py drill-down isolation, ADR-0009) so the
+        # graph is never re-walked. Duplicate edges to one neighbor count once.
+        part_neighbor_ids: list[str] = []
         seen: set[str] = set()
         for source_id, target_id, relationship, _edge_props in edges:
             if str(relationship) != "is_part_of":
@@ -629,6 +618,27 @@ class CogneePublicClient:
             if neighbor_id in seen:
                 continue
             seen.add(neighbor_id)
+            part_neighbor_ids.append(neighbor_id)
+        text, text_key = _extract_text(props)
+        if text is not None:
+            return {
+                "id": doc_id,
+                "source_type": "cognee",
+                "title": props.get("title") or None,
+                "body": text,
+                "metadata": {k: v for k, v in props.items() if k != text_key},
+                "dataset_node_ids": [doc_id, *part_neighbor_ids],
+            }
+        # Textless document node: its text lives on DocumentChunk neighbors
+        # linked via ``is_part_of`` (chunk --is_part_of--> doc; stay
+        # direction-agnostic on endpoints but ONLY follow is_part_of edges —
+        # entities are also graph-adjacent to text-bearing chunks via
+        # ``contains``/``mentions``, and assembling those would fabricate a
+        # document for a textless entity, which must stay None (404).
+        # Textless neighbors are skipped; chunks sort by numeric chunk_index,
+        # unindexed ones trail in encounter order.
+        chunks: list[tuple[tuple[int, float], str]] = []
+        for neighbor_id in part_neighbor_ids:
             neighbor_props = props_by_id.get(neighbor_id)
             if neighbor_props is None:
                 continue
@@ -651,6 +661,7 @@ class CogneePublicClient:
             "body": "\n\n".join(chunk_text for _, chunk_text in chunks),
             "chunk_count": len(chunks),
             "metadata": dict(props),
+            "dataset_node_ids": [doc_id],
         }
 
     async def cognify(self, *, datasets: list[str], force: bool = False) -> Any:

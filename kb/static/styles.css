@@ -847,6 +847,106 @@ pre {
   word-break: break-word;
 }
 
+/* Cognee-internal node name (text_<md5>) under the inspector header. */
+.selection .node-internal-name {
+  color: var(--quiet);
+  font-family: var(--mono);
+  font-size: 11px;
+}
+
+/* Presence counts for dataset hubs (Seat presence / Central) — shown instead
+   of document text, which hubs never have. */
+.selection .node-presence {
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+/* Neighbor list for the selected knowledge-graph node. Block display
+   overrides `.selection div` flex, like .node-document above. */
+.selection .node-connections {
+  display: block;
+  margin-top: 8px;
+}
+
+.selection .node-connections > strong {
+  display: block;
+  margin-bottom: 4px;
+  font-size: 12px;
+}
+
+.selection .node-connection {
+  display: block;
+  width: 100%;
+  min-height: 0;
+  margin-top: 2px;
+  padding: 3px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--field);
+  color: var(--muted);
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.selection .node-connection:hover {
+  border-color: var(--primary);
+  color: var(--text);
+}
+
+.selection .node-connections-more {
+  display: block;
+  margin-top: 4px;
+  color: var(--quiet);
+  font-size: 11px;
+}
+
+/* Kind legend overlaid on the knowledge-graph canvas; chips toggle kinds
+   (aria-pressed = visible). Hidden entirely in the live projection mode. */
+.graph-legend {
+  position: absolute;
+  left: 10px;
+  bottom: 10px;
+  z-index: 2;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  max-width: calc(100% - 20px);
+}
+
+.legend-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 0;
+  padding: 3px 9px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: rgba(30, 30, 30, 0.92);
+  color: var(--muted);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.legend-chip.active {
+  color: var(--text);
+}
+
+.legend-chip:not(.active) {
+  opacity: 0.55;
+}
+
+.legend-swatch {
+  flex: none;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+}
+
 .inline-alert {
   display: flex;
   justify-content: space-between;

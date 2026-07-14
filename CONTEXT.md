@@ -30,7 +30,11 @@ _Avoid_: database, file store, raw storage
 
 **Knowledge Mesh**:
 A relationship map that connects **Structured Knowledge** by source, concept, and provenance.
-_Avoid_: decorative graph, chat history, raw sync map
+_Avoid_: decorative graph, chat history, raw sync map, activity view
+
+**Vault Activity**:
+A live, ephemeral projection of vault operations — source syncs, searches, ingests, index updates — shown on the **Operations Dashboard**. Operational signal only; it is not **Structured Knowledge** and not the **Knowledge Mesh**, and it resets with the service.
+_Avoid_: knowledge mesh, audit log, chat history
 
 **Learning Process**:
 The governed transformation of **Source Material** into **Structured Knowledge**.
@@ -55,6 +59,10 @@ _Avoid_: organization vault, central, shared memory
 **Central**:
 The organization-wide shared knowledge base. Distinct from any seat **Node**.
 _Avoid_: seat node, personal vault, private agent memory
+
+**Seat Presence**:
+The org-visible operational footprint of a **Seat**: it exists, its activity level, sync recency, contribution counts, and promotion-queue depth. Visible to every **Vault Member**; never includes **Node** content (documents, session titles, text, or concepts extracted only from that **Node**).
+_Avoid_: activity feed, people report, session list, surveillance
 
 **Token**:
 The credential a **Seat** uses to access their **Node** (and **Central** per read rules). Not the storage boundary — the **Node** is.
@@ -101,8 +109,8 @@ The **Vault Member** response when the **Promotion Agent** automatically propose
 _Avoid_: auto-approve novel work, silent admin override, chat-only approval, standing bypass for external repos
 
 **Operations Dashboard**:
-The Citadel web UI for operators and **Vault Members** to monitor vault health, seat activity, memory and usage, **Promotion Approval**, and **Access** — not the primary dev write surface (MCP and autonomous capture feed the **Node**).
-_Avoid_: main editor, Obsidian replacement, admin-only console
+The Citadel web UI for operators and **Vault Members** to monitor vault health, seat activity (as **Seat Presence**), memory and usage, **Promotion Approval**, and **Access** — not the primary dev write surface (MCP and autonomous capture feed the **Node**). A member's own **Node** content (recent sessions, drill-down) is visible to that member; other seats show **Seat Presence** only; admins may drill into content for support and audit.
+_Avoid_: main editor, Obsidian replacement, admin-only console, per-person activity report
 
 **Seat Node Write Policy**:
 A **Seat** or its **Agent Identities** may write only to that seat's **Node**. **Central** is read-only for seat-scoped callers; **Central** receives **Structured Knowledge** only through governed upstream paths (org source sync, **Promotion**, service-account **Vault Contributions**, operator/admin jobs).
@@ -207,14 +215,28 @@ Register **Approved Capture Roots** locally, assign **Capture Root Tags**, and m
 admin sync (`POST /api/linear-sync/run`, learning-agent runs) unless the user
 explicitly asks for an immediate refresh.
 
-## Knowledge Mesh (Phase 2 graph)
+## Graph views (Phase 2)
 
-The live mesh canvas shows a **universal org view**: every seat **Node** and
-**Central** (`masumi-network`) on one force-directed graph. **Central** is pinned
-at the centre as the largest hub; seat vaults are tiered by activity. A depth
-slider (0–3 hops) filters the neighbourhood around the selected node; optional
-Central↔seat spokes link the hub to each `seat:{slug}` vault. There is no
-All/My Node/Central scope toggle — org memory is one connected view.
+The **Operations Dashboard** renders two canvases over org memory, both showing
+a **universal org view** — every seat and **Central** (`masumi-network`) on one
+force-directed graph, **Central** pinned at the centre as the largest hub, with
+a depth slider (0–3 hops) filtering the neighbourhood around the selected node.
+There is no All/My Node/Central scope toggle — org memory is one connected view.
+
+- **Vault Activity** — the live operations projection: seat vaults tiered by
+  activity, optional Central↔seat spokes, source/sync/search events as they
+  happen. Restart-transient by design.
+- **Knowledge Mesh** — the source-linked relationship map itself: documents,
+  concepts, and the **Seat Presence** hubs their content belongs to.
+
+**Presence vs content (2026-07-13):** "universal" means every seat is *visible*,
+not that every seat's memory is *readable*. Other seats appear as **presence** —
+the seat exists, with activity level and contribution counts. **Structured
+Knowledge** content (documents, their text, extracted concepts) follows the same
+read scope as search: **Central** plus the caller's own **Node**, never another
+seat's **Node** content (ADR-0003 read isolation). Admin/operator callers see all
+content for support and audit. This applies to every content surface of the
+mesh, including per-item drill-down.
 
 ## Example Dialogue
 
@@ -289,3 +311,4 @@ All/My Node/Central scope toggle — org memory is one connected view.
 - "member adds then rejects promotion items" was confused with queue ownership; resolved: the **Promotion Agent** queues **New Org Project** proposals automatically; **Promotion Approval** is the member's approve/reject response.
 - "org-ready tag promotes seat MCP writes to Central" (ADR-0003 era); resolved: **Seat Node Write Policy** — seat writes stay on the **Node**; **Central** only via **Promotion Agent**, org sync, or service accounts (ADR-0007).
 - "who gates promotion to Central?" (2026-06-27 grill); resolved: known masumi-org work auto-promotes after secret scan + LLM; **New Org Project** requires **Vault Member** **Promotion Approval** (admin may delegate with audit); admin governs org repos and operator cron, not every member note.
+- "universal org view" (2026-07-13 grill) was being read as every seat's content on one canvas; resolved: universal means every seat's *presence* (hub, activity, counts) is visible to all **Vault Members**, while **Structured Knowledge** content stays scoped to **Central** plus the caller's own **Node** — the **Knowledge Mesh** view and its drill-down enforce the same read isolation as search (ADR-0003).

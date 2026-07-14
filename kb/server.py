@@ -2248,6 +2248,39 @@ async def knowledge_events(
     return jsonable_encoder({"ok": True, **timeline})
 
 
+def mesh_presence_hubs() -> list[dict[str, str]]:
+    """Universal Seat Presence list for the Knowledge Mesh (ADR-0009).
+
+    Every seat principal appears by its seat dataset name — slug ONLY,
+    presence metadata never carries member names or emails — plus Central,
+    so the hub inventory comes from the seat inventory, independent of which
+    content survives caller scoping.
+
+    Never breaks the graph endpoint: any failure reading the access store
+    degrades to a Central-only presence list instead of raising.
+    """
+    central = central_dataset(get_citadel().config)
+    entries: list[dict[str, str]] = [{"dataset": central, "label": central}]
+    seen = {central}
+    try:
+        for principal in get_access_store().snapshot()["principals"]:
+            slug = principal.get("seat_slug")
+            if not slug:
+                continue
+            name = f"{SEAT_DATASET_PREFIX}{slug}"
+            if name in seen:
+                continue
+            seen.add(name)
+            entries.append({"dataset": name, "label": name})
+    except Exception as exc:
+        logger.warning(
+            "Seat presence read failed with %s; degrading to Central-only presence",
+            exc.__class__.__name__,
+        )
+        return [{"dataset": central, "label": central}]
+    return entries
+
+
 @app.get("/api/mesh/graph")
 async def mesh_graph(request: Request, limit: int | None = None) -> Any:
     """The real Knowledge Mesh graph from Cognee (not the dashboard projection).
@@ -2259,11 +2292,18 @@ async def mesh_graph(request: Request, limit: int | None = None) -> Any:
     if limit is not None and not 1 <= limit <= 1000:
         raise HTTPException(status_code=422, detail="Graph limit must be between 1 and 1000.")
     effective_limit = limit or get_citadel().config.mesh_graph_max_nodes
+    # ADR-0009 read isolation: content follows the caller's search scope (own
+    # Node + Central + non-seat datasets), while every seat always appears as
+    # a presence hub. Bypass callers (admin/env) pass dataset_visible=None and
+    # see all content for support and audit.
     graph = await get_knowledge_mesh().graph(
         limit=effective_limit,
-        # Seat datasets are private memory: dataset attribution is filtered per
-        # caller so a plain reader cannot enumerate who contributed what.
-        dataset_visible=lambda name: dataset_visible_to(identity, name),
+        dataset_visible=(
+            None
+            if can_bypass_dataset_allowlist(identity)
+            else lambda name: dataset_visible_to(identity, name)
+        ),
+        presence=mesh_presence_hubs(),
     )
     return jsonable_encoder({**graph, "limit": effective_limit})
 
@@ -2839,9 +2879,51 @@ async def resolve_obsidian_conflict(
     return {"ok": True, "conflict": jsonable_encoder(result)}
 
 
+async def cognee_document_visible(identity: AccessIdentity, node_ids: list[str]) -> bool:
+    """ADR-0009 drill-down isolation for cognee-resolved documents.
+
+    Resolves the document's datasets through the gateway's cached
+    ``node_dataset_map``: a direct map hit on the document node id, or (for
+    chunk ids) the map entry of the ``is_part_of``-linked document that
+    ``get_document`` already resolved into ``node_ids``. Fail-closed for
+    scoped callers: a missing/failed/empty map and unmappable nodes all deny —
+    the endpoint then serves the same 404 as a nonexistent id.
+    """
+    node_dataset_map = getattr(get_knowledge_mesh().gateway, "node_dataset_map", None)
+    if not callable(node_dataset_map):
+        logger.warning(
+            "Document drill-down denied: gateway exposes no node_dataset_map "
+            "(fail-closed for scoped callers)"
+        )
+        return False
+    try:
+        mapping = await node_dataset_map()
+    except Exception:  # noqa: BLE001 - any failure fails closed
+        logger.warning(
+            "Document drill-down denied: node dataset map read failed "
+            "(fail-closed for scoped callers)",
+            exc_info=True,
+        )
+        return False
+    if not mapping:
+        # The cached/timed-out lookup degrades to {} on failure (#50) —
+        # indistinguishable from an empty store, so scoped callers are denied.
+        logger.warning(
+            "Document drill-down denied: empty node dataset map "
+            "(fail-closed for scoped callers)"
+        )
+        return False
+    datasets: set[str] = set()
+    for node_id in node_ids:
+        datasets.update(mapping.get(str(node_id), []))
+    if not datasets:
+        return False
+    return any(dataset_visible_to(identity, dataset) for dataset in datasets)
+
+
 @app.get("/api/documents/{document_id}")
 async def source_document(document_id: str, request: Request) -> Any:
-    require_access(request, "reader", "kb:read")
+    identity = require_access(request, "reader", "kb:read")
     if document_id.startswith(f"{GITHUB_DOC_ID_PREFIX}:"):
         github_document = github_section_document(document_id, get_citadel().config)
         if github_document is None:
@@ -2854,6 +2936,16 @@ async def source_document(document_id: str, request: Request) -> Any:
         # search-hit id against the graph store (#28).
         cognee_document = await get_citadel().get_document(document_id)
         if cognee_document is None:
+            raise HTTPException(status_code=404, detail="Document not found.") from None
+        # dataset_node_ids is internal plumbing (ADR-0009 scope check), never
+        # part of the response — copy so cached fakes/documents stay intact.
+        cognee_document = dict(cognee_document)
+        owner_node_ids = cognee_document.pop("dataset_node_ids", None) or [document_id]
+        if not can_bypass_dataset_allowlist(identity) and not await cognee_document_visible(
+            identity, owner_node_ids
+        ):
+            # Same status, detail, and shape as a nonexistent id: a scoped
+            # caller must not learn whether a foreign document exists.
             raise HTTPException(status_code=404, detail="Document not found.") from None
         return {"ok": True, "document": jsonable_encoder(cognee_document)}
     return {"ok": True, "document": jsonable_encoder(document)}

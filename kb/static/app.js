@@ -20,6 +20,9 @@ const state = {
   graphMode: "live",
   graphDepth: 0,
   graphSpokes: true,
+  // Knowledge-mode legend filter: node kinds hidden from the canvas. Chunks
+  // start hidden — they dominate the node count and bury the entities.
+  graphHiddenKinds: new Set(["chunk"]),
   realGraph: null,
   realGraphLoading: false,
   conflicts: [],
@@ -114,6 +117,7 @@ const conflictFilterButtons = Array.from(document.querySelectorAll("[data-confli
 const graphModeButtons = Array.from(document.querySelectorAll("[data-graph-mode]"));
 const graphDepthInput = document.getElementById("graphDepthInput");
 const realGraphEmpty = document.getElementById("realGraphEmpty");
+const graphLegend = document.getElementById("graphLegend");
 const toastStack = document.getElementById("toastStack");
 const searchResultStatus = document.getElementById("searchResultStatus");
 const pageButtons = Array.from(document.querySelectorAll("[data-page-target]"));
@@ -212,6 +216,10 @@ function brandColors() {
     source: cssToken("--info", "#7dd4c0"),
     repository: cssToken("--primary-strong", "#c4b1ff"),
     seat: cssToken("--primary-strong", "#c4b1ff"),
+    // Knowledge-mode kinds (nodeKind); "dataset"/"document"/"seat" above are
+    // shared. Legend swatches read the same map so chips always match nodes.
+    chunk: cssToken("--quiet", "#8f8f8f"),
+    entity: cssToken("--info", "#7dd4c0"),
     other: cssToken("--muted", "#b3b3b3"),
   };
 }
@@ -254,6 +262,30 @@ function resolveCentralId(nodes) {
 function isSeatNode(node) {
   const dataset = node.metadata?.dataset || node.label || "";
   return node.type === "dataset" && String(dataset).startsWith(SEAT_DATASET_PREFIX);
+}
+
+// Coarse node kinds for the knowledge-mode legend, filter, and colors.
+const GRAPH_KIND_ORDER = ["seat", "dataset", "document", "chunk", "entity"];
+const GRAPH_KIND_LABELS = {
+  seat: "Seats",
+  dataset: "Datasets",
+  document: "Documents",
+  chunk: "Chunks",
+  entity: "Entities",
+};
+
+// Map a node to its legend kind. Cognee document nodes may surface either the
+// class name ("TextDocument") or a short type ("text"/"pdf"). Chunk is checked
+// before document because "DocumentChunk" contains both words.
+function nodeKind(node) {
+  if (isSeatNode(node)) return "seat";
+  const type = String(node.type || "").toLowerCase();
+  if (type === "dataset") return "dataset";
+  if (type.includes("chunk")) return "chunk";
+  if (type.includes("document") || ["text", "pdf", "audio", "image"].includes(type)) {
+    return "document";
+  }
+  return "entity";
 }
 
 // nodeVal tiers (area-proportional): Central is the biggest fixed hub, seat:
@@ -346,9 +378,23 @@ function buildForceGraphData() {
     neighbors: [],
     links: [],
   }));
+  // Knowledge mode only: drop legend-hidden kinds and any edge touching them.
+  // The projection (live) data and state.realGraph itself stay unfiltered.
+  if (state.graphMode === "knowledge" && state.graphHiddenKinds.size) {
+    nodes = nodes.filter((node) => !state.graphHiddenKinds.has(nodeKind(node)));
+  }
+  const nodeIds = new Set(nodes.map((node) => node.id));
   let links = [];
   for (const edge of source.edges) {
-    links.push({ source: edge.source, target: edge.target, label: edge.label });
+    if (!nodeIds.has(edge.source) || !nodeIds.has(edge.target)) continue;
+    // Projection edges carry "label", knowledge edges "relationship" —
+    // normalize so linkLabel tooltips work in both modes.
+    links.push({
+      source: edge.source,
+      target: edge.target,
+      label: edge.label || edge.relationship,
+      relationship: edge.relationship || edge.label,
+    });
   }
   graph.centralId = resolveCentralId(nodes);
   let byId = rebuildNeighborLinks(nodes, links);
@@ -1345,6 +1391,9 @@ function initializeGraph() {
     .nodeVal(nodeValue)
     .nodeColor(nodeColor)
     .nodeLabel((node) => escapeHtml(String(node.label || node.id)))
+    // The vendored build injects string tooltips via innerHTML, so escape here
+    // exactly like nodeLabel above.
+    .linkLabel((link) => escapeHtml(String(link.relationship || link.label || "")))
     .nodeCanvasObjectMode(() => "after")
     .nodeCanvasObject(drawNodeLabel)
     .linkColor(linkColor)
@@ -1365,7 +1414,12 @@ function initializeGraph() {
 // Per-type node colour, dimmed to ~20% alpha when a hover highlight is active
 // and this node is not part of the highlighted set.
 function nodeColor(node) {
-  const base = typeColor(isSeatNode(node) ? "seat" : node.type);
+  // Knowledge mode colors by legend kind so nodes always match the legend
+  // swatches; projection (live) mode keeps its per-type palette untouched.
+  const base =
+    state.graphMode === "knowledge"
+      ? typeColor(nodeKind(node))
+      : typeColor(isSeatNode(node) ? "seat" : node.type);
   if (graph.highlightNodes.size && !graph.highlightNodes.has(node.id)) {
     return withAlpha(base, 0.2);
   }
@@ -1506,19 +1560,123 @@ function selectNode(node) {
     updateNodeSelection();
     return;
   }
-  selectedNode.innerHTML = `
-    <div>
-      <strong>${escapeHtml(node.label)}</strong>
-      <span>${escapeHtml(node.type)} - ${escapeHtml(node.status)}</span>
-    </div>
-    <p>${escapeHtml(formatDetails(node.metadata || {}))}</p>
-  `;
-  if (state.graphMode === "knowledge" && node.id) {
+  if (state.graphMode === "knowledge") {
+    renderKnowledgeInspector(node);
+  } else {
+    selectedNode.innerHTML = `
+      <div>
+        <strong>${escapeHtml(node.label)}</strong>
+        <span>${escapeHtml(node.type)} - ${escapeHtml(node.status)}</span>
+      </div>
+      <p>${escapeHtml(formatDetails(node.metadata || {}))}</p>
+    `;
+  }
+  // Dataset hubs (seat presence + Central) never have stored document text —
+  // the inspector shows their presence counts instead, so skip the fetch
+  // rather than fire a guaranteed 404.
+  if (state.graphMode === "knowledge" && node.id && node.type !== "dataset") {
     loadNodeDocument(node);
   }
   updateNodeSelection();
   if (state.graphDepth > 0) {
     buildGraphScene();
+    updateGraphMeta();
+  }
+}
+
+const MAX_INSPECTOR_NEIGHBORS = 8;
+
+// Knowledge-mode inspector: label, kind + dataset, internal name when the
+// backend provides one, then up to MAX_INSPECTOR_NEIGHBORS clickable
+// connections from the unfiltered real graph (hidden kinds still listed).
+// loadNodeDocument appends the stored document text after this content.
+function renderKnowledgeInspector(node) {
+  const kind = nodeKind(node);
+  const dataset = node.metadata?.dataset;
+  const kindLine = dataset ? `${kind} · ${dataset}` : kind;
+  let markup = `
+    <div>
+      <strong>${escapeHtml(node.label || node.id)}</strong>
+      <span>${escapeHtml(kindLine)}</span>
+    </div>
+  `;
+  if (node.internal_name) {
+    markup += `<p class="node-internal-name">${escapeHtml(node.internal_name)}</p>`;
+  }
+  // Dataset hubs carry presence counts instead of document text (selectNode
+  // skips loadNodeDocument for them). Central gets its own label when it
+  // matches exactly; seat:* hubs are "Seat presence" even at zero documents;
+  // any other hub (auxiliary dataset, renamed central) is plain "Dataset".
+  if (kind === "seat" || kind === "dataset") {
+    const documents = Number(node.presence?.documents);
+    if (Number.isFinite(documents)) {
+      const isCentral = dataset === CENTRAL_DATASET || node.label === CENTRAL_DATASET;
+      const isSeat = String(dataset || "").startsWith(SEAT_DATASET_PREFIX);
+      const prefix = isCentral ? "Central" : isSeat ? "Seat presence" : "Dataset";
+      const line = `${prefix} · ${documents} ${
+        documents === 1 ? "document" : "documents"
+      }`;
+      markup += `<p class="node-presence">${escapeHtml(line)}</p>`;
+    }
+  }
+  selectedNode.innerHTML = markup;
+
+  const neighbors = knowledgeNeighbors(node.id);
+  if (!neighbors.length) return;
+  const container = document.createElement("div");
+  container.className = "node-connections";
+  const heading = document.createElement("strong");
+  heading.textContent = "Connections";
+  container.append(heading);
+  neighbors.slice(0, MAX_INSPECTOR_NEIGHBORS).forEach((item) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "node-connection";
+    button.textContent = `${item.relationship} · ${item.node.label || item.node.id}`;
+    // Resolve by id at click time: a graph refresh replaces state.realGraph
+    // while this button persists, so the captured node object may be stale.
+    const targetId = item.node.id;
+    button.addEventListener("click", () => {
+      const target = state.realGraph?.nodes.get(targetId);
+      if (!target) return;
+      focusGraphNode(targetId);
+      selectNode(target);
+    });
+    container.append(button);
+  });
+  if (neighbors.length > MAX_INSPECTOR_NEIGHBORS) {
+    const more = document.createElement("span");
+    more.className = "node-connections-more";
+    more.textContent = `+${neighbors.length - MAX_INSPECTOR_NEIGHBORS} more`;
+    container.append(more);
+  }
+  selectedNode.append(container);
+}
+
+// Neighbors of a node straight from state.realGraph edges (either direction).
+function knowledgeNeighbors(nodeId) {
+  const real = state.realGraph;
+  if (!real) return [];
+  const result = [];
+  for (const edge of real.edges) {
+    let otherId = null;
+    if (edge.source === nodeId) otherId = edge.target;
+    else if (edge.target === nodeId) otherId = edge.source;
+    else continue;
+    const other = real.nodes.get(otherId);
+    if (!other) continue;
+    result.push({ relationship: edge.relationship || edge.label || "related", node: other });
+  }
+  return result;
+}
+
+// Centre the viewport on a rendered node by id, mirroring handleNodeClick.
+// Nodes hidden by the legend filter are not rendered, so those just skip.
+function focusGraphNode(nodeId) {
+  if (!graph.instance || typeof graph.instance.graphData !== "function") return;
+  const rendered = (graph.instance.graphData().nodes || []).find((item) => item.id === nodeId);
+  if (rendered && Number.isFinite(rendered.x) && Number.isFinite(rendered.y)) {
+    graph.instance.centerAt(rendered.x, rendered.y, 600);
   }
 }
 
@@ -1589,12 +1747,59 @@ function updateGraphMeta(message) {
   if (state.graphMode === "knowledge") {
     const payload = state.realGraph?.payload;
     if (!payload) {
-      graphMeta.textContent = "Loading knowledge graph";
+      graphMeta.textContent = "Loading Knowledge Mesh";
       return;
     }
-    const shown = state.realGraph.nodes.size;
-    const truncated = payload.truncated ? ` of ${payload.total_nodes}` : "";
-    graphMeta.textContent = `Cognee graph - ${shown}${truncated} nodes - ${state.realGraph.edges.length} edges`;
+    const hiddenPresent = new Set();
+    for (const node of state.realGraph.nodes.values()) {
+      const kind = nodeKind(node);
+      if (state.graphHiddenKinds.has(kind)) hiddenPresent.add(kind);
+    }
+    // Count through the same pipeline the renderer uses (kind filter + depth
+    // drill-down) so "Showing N" never overstates what is on the canvas.
+    // Content nodes only: synthetic dataset hubs are excluded so the units
+    // match visible_nodes (a content count).
+    const shown = buildForceGraphData().nodes.filter(
+      (node) => node.type !== "dataset",
+    ).length;
+    // Isolation-aware payloads report visible_nodes (caller scope) alongside
+    // total_nodes (org-wide); older payloads only have total_nodes.
+    const visible = Number(payload.visible_nodes);
+    let meta;
+    if (Number.isFinite(visible)) {
+      if (visible === 0) {
+        // Isolation can leave a caller with zero content while every seat
+        // still renders as a presence hub — say that, not "Showing N of 0".
+        let seatCount = 0;
+        for (const node of state.realGraph.nodes.values()) {
+          if (nodeKind(node) === "seat") seatCount += 1;
+        }
+        meta = `No content in your scope · ${seatCount} seats visible`;
+      } else {
+        meta = `Showing ${shown} of ${visible} in your scope`;
+        const orgWide = Number(payload.total_nodes);
+        if (Number.isFinite(orgWide) && orgWide > visible) {
+          meta += ` · ${orgWide} org-wide`;
+        }
+      }
+    } else {
+      // Same units as `shown`: content nodes only, so synthetic presence hubs
+      // never inflate the denominator (total_nodes is already a raw content
+      // count when the payload is truncated).
+      let contentTotal = 0;
+      for (const node of state.realGraph.nodes.values()) {
+        if (node.type !== "dataset") contentTotal += 1;
+      }
+      const total = payload.truncated ? payload.total_nodes : contentTotal;
+      meta = `Showing ${shown} of ${total} nodes`;
+    }
+    if (hiddenPresent.size) {
+      const names = GRAPH_KIND_ORDER.filter((kind) => hiddenPresent.has(kind)).map((kind) =>
+        GRAPH_KIND_LABELS[kind].toLowerCase(),
+      );
+      meta += ` · ${names.join(", ")} hidden`;
+    }
+    graphMeta.textContent = meta;
     return;
   }
   if (state.snapshot) {
@@ -1614,9 +1819,54 @@ function updateRealGraphEmpty() {
     if (text) {
       text.textContent = payload.fallback
         ? "Cognee has not produced graph data yet. Ingest notes or run source sync, then check back."
-        : "The knowledge graph is empty. Ingest notes or run source sync, then check back.";
+        : "The Knowledge Mesh is empty. Ingest notes or run source sync, then check back.";
     }
   }
+}
+
+// Legend chips for the knowledge mode: one per kind present in the unfiltered
+// real graph, showing swatch + label + count; pressed = visible. Hidden in the
+// projection (live) mode.
+function renderGraphLegend() {
+  if (!graphLegend) return;
+  if (state.graphMode !== "knowledge" || !state.realGraph) {
+    graphLegend.hidden = true;
+    return;
+  }
+  const counts = new Map();
+  for (const node of state.realGraph.nodes.values()) {
+    const kind = nodeKind(node);
+    counts.set(kind, (counts.get(kind) || 0) + 1);
+  }
+  graphLegend.innerHTML = "";
+  for (const kind of GRAPH_KIND_ORDER) {
+    const count = counts.get(kind);
+    if (!count) continue;
+    const visible = !state.graphHiddenKinds.has(kind);
+    const chip = document.createElement("button");
+    chip.type = "button";
+    chip.className = `legend-chip${visible ? " active" : ""}`;
+    chip.setAttribute("aria-pressed", visible ? "true" : "false");
+    chip.title = visible ? `Hide ${GRAPH_KIND_LABELS[kind].toLowerCase()}` : `Show ${GRAPH_KIND_LABELS[kind].toLowerCase()}`;
+    const swatch = document.createElement("span");
+    swatch.className = "legend-swatch";
+    swatch.style.background = typeColor(kind);
+    chip.append(swatch, document.createTextNode(`${GRAPH_KIND_LABELS[kind]} ${count}`));
+    chip.addEventListener("click", () => toggleGraphKind(kind));
+    graphLegend.append(chip);
+  }
+  graphLegend.hidden = !graphLegend.children.length;
+}
+
+function toggleGraphKind(kind) {
+  if (state.graphHiddenKinds.has(kind)) {
+    state.graphHiddenKinds.delete(kind);
+  } else {
+    state.graphHiddenKinds.add(kind);
+  }
+  renderGraphLegend();
+  buildGraphScene();
+  updateGraphMeta();
 }
 
 function shapeRealGraph(payload) {
@@ -1637,10 +1887,16 @@ function shapeRealGraph(payload) {
       isDatasetHub && String(dataset || node.label || "").startsWith(SEAT_DATASET_PREFIX);
     const metadata = { type: node.type || "node", links };
     if (dataset) metadata.dataset = dataset;
+    // Presence metadata rides on dataset hubs ({documents: N}); pass it
+    // through untouched so the inspector can show counts without a fetch.
+    const presence =
+      node.presence && typeof node.presence === "object" ? node.presence : null;
     nodes.set(node.id, {
       id: node.id,
       label: node.label || node.id,
       type: node.type || "node",
+      internal_name: node.internal_name || null,
+      presence,
       status: isDatasetHub ? (isSeatHub ? "seat" : "dataset") : "linked",
       size: isDatasetHub ? 72 : clamp(26 + links * 5, 24, 58),
       metadata,
@@ -1661,10 +1917,11 @@ async function loadKnowledgeGraph(force = false) {
     resetGraphView();
     updateGraphMeta();
     updateRealGraphEmpty();
+    renderGraphLegend();
     return;
   }
   state.realGraphLoading = true;
-  updateGraphMeta("Loading knowledge graph");
+  updateGraphMeta("Loading Knowledge Mesh");
   try {
     const payload = await api("/api/mesh/graph");
     state.realGraph = shapeRealGraph(payload);
@@ -1673,11 +1930,12 @@ async function loadKnowledgeGraph(force = false) {
       resetGraphView();
       updateGraphMeta();
       updateRealGraphEmpty();
+      renderGraphLegend();
     }
   } catch (error) {
-    showToast(`Could not load the knowledge graph: ${error.message}`, "error");
+    showToast(`Could not load the Knowledge Mesh: ${error.message}`, "error");
     if (state.graphMode === "knowledge") {
-      updateGraphMeta("Knowledge graph unavailable");
+      updateGraphMeta("Knowledge Mesh unavailable");
     }
   } finally {
     state.realGraphLoading = false;
@@ -1700,10 +1958,12 @@ function setGraphMode(mode) {
     buildGraphScene();
     updateGraphMeta();
     updateRealGraphEmpty();
+    renderGraphLegend();
     loadKnowledgeGraph();
     return;
   }
   realGraphEmpty.hidden = true;
+  if (graphLegend) graphLegend.hidden = true;
   buildGraphScene();
   resetGraphView();
   updateGraphMeta();
@@ -2731,6 +2991,7 @@ if (graphDepthInput) {
   graphDepthInput.addEventListener("input", (event) => {
     state.graphDepth = Number(event.currentTarget.value) || 0;
     buildGraphScene();
+    updateGraphMeta();
     if (state.graphDepth > 0) resetGraphView();
   });
 }

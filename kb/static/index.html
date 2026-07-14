@@ -138,11 +138,23 @@
                   </div>
                   <div class="toolbar-actions">
                     <div class="segmented-control graph-mode" role="group" aria-label="Graph data source">
-                      <button class="segment-button active" type="button" data-graph-mode="live" aria-pressed="true">
-                        Activity
+                      <button
+                        class="segment-button active"
+                        type="button"
+                        data-graph-mode="live"
+                        aria-pressed="true"
+                        title="Vault Activity: what the vault is doing right now — syncs, searches, ingests"
+                      >
+                        Vault Activity
                       </button>
-                      <button class="segment-button" type="button" data-graph-mode="knowledge" aria-pressed="false">
-                        Knowledge graph
+                      <button
+                        class="segment-button"
+                        type="button"
+                        data-graph-mode="knowledge"
+                        aria-pressed="false"
+                        title="Knowledge Mesh: what the vault knows — documents, entities, and the seats they come from"
+                      >
+                        Knowledge Mesh
                       </button>
                     </div>
                     <label class="graph-depth-control">
@@ -167,16 +179,17 @@
                     id="graphCanvas"
                     tabindex="0"
                     role="img"
-                    aria-label="Live knowledge graph visualization"
+                    aria-label="Vault Activity and Knowledge Mesh visualization"
                   ></div>
                   <div id="canvasEmpty" class="canvas-empty" hidden>
                     <h3>No graph notes yet</h3>
                     <p>Ingest a memory or run source sync to create the first linked nodes.</p>
                   </div>
                   <div id="realGraphEmpty" class="canvas-empty" hidden>
-                    <h3>No knowledge graph yet</h3>
+                    <h3>No Knowledge Mesh yet</h3>
                     <p>Cognee has not produced graph data yet. Ingest notes or run source sync, then check back.</p>
                   </div>
+                  <div id="graphLegend" class="graph-legend" role="group" aria-label="Node kinds" hidden></div>
                 </div>
                 <div id="selectedNode" class="selection" aria-live="polite">
                   Select a note or node to inspect its links.
