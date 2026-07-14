@@ -152,6 +152,14 @@ class CitadelConfig:
     # that yields a 429 + Retry-After backpressure contract instead of silent fails.
     search_timeout_seconds: float = 20.0
     search_max_concurrency: int = 8
+    # The Knowledge Mesh graph read is the DEFAULT dashboard view, so a ~15-seat
+    # login burst must not compete with /search for the same budget (both would
+    # 429). It gets its own dedicated cap. graph_data() is TTL-cached +
+    # single-flight, so concurrent mesh reads mostly hit cache and are cheap —
+    # a small cpu-based cap is plenty.
+    mesh_graph_max_concurrency: int = field(
+        default_factory=lambda: max(4, os.cpu_count() or 4)
+    )
     default_session: str = "personal-session"
     default_tags: tuple[str, ...] = field(default_factory=tuple)
     min_chars: int = 3
@@ -268,6 +276,10 @@ class CitadelConfig:
             ),
             search_max_concurrency=_int(
                 os.getenv("CITADEL_SEARCH_MAX_CONCURRENCY"), default=8
+            ),
+            mesh_graph_max_concurrency=_int(
+                os.getenv("CITADEL_MESH_GRAPH_MAX_CONCURRENCY"),
+                default=max(4, os.cpu_count() or 4),
             ),
             default_session=os.getenv("CITADEL_DEFAULT_SESSION", "personal-session"),
             default_tags=tuple(_csv(os.getenv("CITADEL_DEFAULT_TAGS"))),

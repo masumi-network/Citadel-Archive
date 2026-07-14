@@ -1561,6 +1561,37 @@ def test_search_returns_429_when_at_capacity(monkeypatch: Any) -> None:
     assert r.headers["X-RateLimit-Remaining"] == "0"
 
 
+def test_mesh_graph_and_search_have_independent_budgets(
+    monkeypatch: Any, tmp_path: Any
+) -> None:
+    # CHANGE 2 (#50): the mesh graph read and /search hold SEPARATE concurrency
+    # budgets, so a ~15-seat login burst on the default Knowledge Mesh view can't
+    # 429 /search — and vice versa. This is a WIRING test (distinct in-flight
+    # counters via the real endpoints); real concurrency under the single-loop
+    # TestClient would be flaky, so we saturate one budget and assert the other
+    # still serves.
+    app.state.access_store = AccessStore(tmp_path / "access.json")
+    client = authed_client("test-reader")
+    app.state.knowledge_mesh = None  # fallback graph → cheap, deterministic 200
+
+    # Search saturated, mesh free → mesh serves (own budget, not search's).
+    monkeypatch.setattr(server_module, "_search_inflight", 9999)
+    monkeypatch.setattr(server_module, "_mesh_graph_inflight", 0)
+    assert client.get("/api/mesh/graph").status_code == 200
+
+    # Mesh saturated → mesh 429s with the same contract, but /search stays free.
+    monkeypatch.setattr(server_module, "_search_inflight", 0)
+    monkeypatch.setattr(server_module, "_mesh_graph_inflight", 9999)
+    mesh = client.get("/api/mesh/graph")
+    assert mesh.status_code == 429
+    assert mesh.headers["Retry-After"] == "1"
+    assert mesh.headers["X-RateLimit-Limit"] == str(
+        FakeCitadel.config.mesh_graph_max_concurrency
+    )
+    assert mesh.headers["X-RateLimit-Remaining"] == "0"
+    assert client.post("/search", json={"query": "q", "top_k": 3}).status_code == 200
+
+
 def test_search_sets_ratelimit_headers_when_served() -> None:
     client = authed_client("test-reader")
     r = client.post("/search", json={"query": "q", "top_k": 3})
@@ -2244,6 +2275,139 @@ def test_document_drilldown_denies_when_gateway_lacks_node_dataset_map(
     assert own.status_code == 404
     assert own.json()["detail"] == "Document not found."
     assert admin_doc.status_code == 200
+
+
+class DrilldownSearchCitadel(DrilldownIsolationCitadel):
+    """Search returns native cognee ids whose drill-down status varies by caller:
+    a Central doc (readable), a foreign seat's doc (404 for a scoped reader), a
+    CHUNKS hit on the caller's own doc (whose datasets live on its is_part_of
+    parent, not the chunk node), and a textless entity (404 for anyone).
+    ``get_document`` (inherited) resolves the docs+chunk and returns None for the
+    entity, so /api/documents status is real."""
+
+    async def search(self, query: str, **kwargs: Any) -> list[dict[str, Any]]:
+        # Same set for every queried dataset; /search dedups by text.
+        return [
+            {"id": "doc-c", "text": "org text"},
+            {"id": "doc-a", "text": "alice text"},
+            {"id": "chunk-b", "text": "bob chunk text"},
+            {"id": "entity-x", "text": "an entity"},
+        ]
+
+
+def _search_hint(body: dict[str, Any]) -> dict[str, bool]:
+    return {
+        hit["_citadel"]["result_id"]: hit["_citadel"]["retrieval"][
+            "document_drilldown_available"
+        ]
+        for hit in body["results"]
+    }
+
+
+def test_search_drilldown_hint_matches_document_endpoint_per_caller(
+    tmp_path: Any,
+) -> None:
+    # ADR-0009: document_drilldown_available is TRUE only when /api/documents
+    # would return 200 for THIS caller — asserted against the actual endpoint
+    # status for the same id+caller (the whole point of the honest hint).
+    app.state.access_store = AccessStore(tmp_path / "access.json")
+    app.state.obsidian_sync = ObsidianSyncStore(tmp_path / "obsidian.json")
+    admin = authed_client()
+    bob_token = admin.post(
+        "/api/access/seats", json={"name": "Bob", "slug": "bob"}
+    ).json()["token"]
+    app.state.citadel = DrilldownSearchCitadel()  # authed_client resets citadel
+    app.state.knowledge_mesh = KnowledgeMesh(IsolationDatasetGateway())
+    api = TestClient(app, base_url="https://testserver")
+    bob = {"Authorization": f"Bearer {bob_token}"}
+    ids = ("doc-c", "doc-a", "chunk-b", "entity-x")
+    try:
+        bob_body = api.post("/search", json={"query": "x"}, headers=bob).json()
+        admin_body = admin.post("/search", json={"query": "x"}).json()
+        bob_status = {
+            doc: api.get(f"/api/documents/{doc}", headers=bob).status_code
+            for doc in ids
+        }
+        # Admin's textless entity 404s too (get_document is None), which the
+        # bypass hint cannot cheaply foresee; assert consistency on resolvable ids.
+        admin_status = {
+            doc: admin.get(f"/api/documents/{doc}").status_code
+            for doc in ("doc-c", "doc-a", "chunk-b")
+        }
+    finally:
+        app.state.knowledge_mesh = None
+
+    bob_hint = _search_hint(bob_body)
+    admin_hint = _search_hint(admin_body)
+    bob_meta = {h["_citadel"]["result_id"]: h["_citadel"] for h in bob_body["results"]}
+
+    # Scoped reader: Central doc AND own-doc chunk drillable (the chunk resolves
+    # through its is_part_of parent doc-b -> seat:bob); foreign-seat doc and
+    # textless entity not. The chunk case is exactly what a raw-id map lookup got
+    # wrong: hint False while the endpoint served 200.
+    assert bob_hint == {
+        "doc-c": True,
+        "doc-a": False,
+        "chunk-b": True,
+        "entity-x": False,
+    }
+    assert bob_status == {"doc-c": 200, "doc-a": 404, "chunk-b": 200, "entity-x": 404}
+    # The flag never disagrees with the endpoint it points at.
+    for doc in ids:
+        assert bob_hint[doc] is (bob_status[doc] == 200)
+    # An unavailable hint also withholds the URL — no agent is handed a 404 link.
+    assert "document_endpoint" in bob_meta["doc-c"]
+    assert "document_endpoint" in bob_meta["chunk-b"]
+    assert "document_endpoint" not in bob_meta["doc-a"]
+    assert "document_endpoint" not in bob_meta["entity-x"]
+
+    # Admin bypass: every resolvable id is drillable, consistent with the endpoint.
+    assert admin_hint == {
+        "doc-c": True,
+        "doc-a": True,
+        "chunk-b": True,
+        "entity-x": True,
+    }
+    assert admin_status == {"doc-c": 200, "doc-a": 200, "chunk-b": 200}
+
+
+def test_search_drilldown_hint_fails_closed_on_cold_map(tmp_path: Any) -> None:
+    # A cold/empty node_dataset_map denies the hint for scoped callers (better a
+    # false "unavailable" than a promised 404) while admin bypass is unaffected —
+    # matching the /api/documents fail-closed behavior for the same ids.
+    app.state.access_store = AccessStore(tmp_path / "access.json")
+    app.state.obsidian_sync = ObsidianSyncStore(tmp_path / "obsidian.json")
+    admin = authed_client()
+    bob_token = admin.post(
+        "/api/access/seats", json={"name": "Bob", "slug": "bob"}
+    ).json()["token"]
+    app.state.citadel = DrilldownSearchCitadel()
+    app.state.knowledge_mesh = KnowledgeMesh(IsolationDatasetGateway(empty_map=True))
+    api = TestClient(app, base_url="https://testserver")
+    bob = {"Authorization": f"Bearer {bob_token}"}
+    try:
+        bob_body = api.post("/search", json={"query": "x"}, headers=bob).json()
+        admin_body = admin.post("/search", json={"query": "x"}).json()
+        # Even the Central doc the reader normally reads 404s under a cold map.
+        bob_central = api.get("/api/documents/doc-c", headers=bob).status_code
+        admin_central = admin.get("/api/documents/doc-c").status_code
+    finally:
+        app.state.knowledge_mesh = None
+
+    assert _search_hint(bob_body) == {
+        "doc-c": False,
+        "doc-a": False,
+        "chunk-b": False,
+        "entity-x": False,
+    }
+    assert bob_central == 404  # hint False is consistent with the endpoint
+    assert _search_hint(admin_body) == {
+        "doc-c": True,
+        "doc-a": True,
+        "chunk-b": True,
+        "entity-x": True,
+    }
+    assert admin_central == 200
 
 
 class KnowledgeCitadel(FakeCitadel):

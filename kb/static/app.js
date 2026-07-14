@@ -438,7 +438,9 @@ function api(path, options = {}) {
     const data = text ? JSON.parse(text) : null;
     if (!response.ok) {
       const message = formatApiError(data?.detail) || data?.message || "Request failed";
-      throw new Error(message);
+      const error = new Error(message);
+      error.status = response.status;
+      throw error;
     }
     return data;
   });
@@ -1949,7 +1951,37 @@ function shapeRealGraph(payload) {
   };
 }
 
+// Backoff schedule for a 429 from /api/mesh/graph. The mesh is the default
+// dashboard view, so ~15 seats hit it at once on login; a hard error toast on a
+// transient backpressure 429 is wrong. Retry a couple of times, jittered so the
+// seats don't resync onto the same retry instant, then degrade to a soft status.
+const MESH_GRAPH_RETRY_BASES_MS = [400, 1200];
+
+function meshGraphRetryDelay(index) {
+  const base = MESH_GRAPH_RETRY_BASES_MS[index] ?? 1200;
+  // Random jitter (per client) is what de-syncs 15 seats; the index scales it.
+  return Math.round(base + Math.random() * (base / 2));
+}
+
+async function fetchMeshGraphWithBackoff() {
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      return await api("/api/mesh/graph");
+    } catch (error) {
+      const retriable =
+        error && error.status === 429 && attempt < MESH_GRAPH_RETRY_BASES_MS.length;
+      if (!retriable) throw error;
+      if (state.graphMode === "knowledge") {
+        updateGraphMeta("Knowledge Mesh is busy — retrying");
+      }
+      await new Promise((resolve) => setTimeout(resolve, meshGraphRetryDelay(attempt)));
+    }
+  }
+}
+
 async function loadKnowledgeGraph(force = false) {
+  // The realGraphLoading guard spans the whole retry sequence, so backoff retries
+  // can never stack a second in-flight load (e.g. a concurrent setGraphMode).
   if (state.realGraphLoading) return;
   if (state.realGraph && !force) {
     buildGraphScene();
@@ -1962,7 +1994,7 @@ async function loadKnowledgeGraph(force = false) {
   state.realGraphLoading = true;
   updateGraphMeta("Loading Knowledge Mesh");
   try {
-    const payload = await api("/api/mesh/graph");
+    const payload = await fetchMeshGraphWithBackoff();
     state.realGraph = shapeRealGraph(payload);
     if (state.graphMode === "knowledge") {
       buildGraphScene();
@@ -1972,9 +2004,17 @@ async function loadKnowledgeGraph(force = false) {
       renderGraphLegend();
     }
   } catch (error) {
-    showToast(`Could not load the Knowledge Mesh: ${error.message}`, "error");
-    if (state.graphMode === "knowledge") {
-      updateGraphMeta("Knowledge Mesh unavailable");
+    if (error && error.status === 429) {
+      // Retries exhausted: soft, non-error status (no toast) so a login-burst
+      // 429 doesn't read as a failure. Next view switch / refresh retries.
+      if (state.graphMode === "knowledge") {
+        updateGraphMeta("Knowledge Mesh is busy — refresh in a moment");
+      }
+    } else {
+      showToast(`Could not load the Knowledge Mesh: ${error.message}`, "error");
+      if (state.graphMode === "knowledge") {
+        updateGraphMeta("Knowledge Mesh unavailable");
+      }
     }
   } finally {
     state.realGraphLoading = false;
@@ -2649,6 +2689,7 @@ async function editSeatCapturePolicy(seatSlug) {
 }
 
 function renderSeats(seats = []) {
+  renderTokenSeatOptions(seats);
   accessSeatsList.innerHTML = "";
   if (!seats.length) {
     accessSeatsList.append(emptyState("No seats yet", "Create a seat to provision a private node."));
@@ -2695,6 +2736,46 @@ function renderSeats(seats = []) {
     item.append(policyButton);
     accessSeatsList.append(item);
   });
+}
+
+// Keep the token form's seat dropdown in sync with the seats list. Options use
+// textContent (no innerHTML) so seat-derived strings need no escaping.
+function renderTokenSeatOptions(seats = []) {
+  const select = document.getElementById("accessSeat");
+  if (!select) return;
+  const previous = select.value;
+  select.innerHTML = "";
+  const none = document.createElement("option");
+  none.value = "";
+  none.textContent = "No seat — service account";
+  select.append(none);
+  seats.forEach((seat) => {
+    const option = document.createElement("option");
+    option.value = seat.seat_slug;
+    option.textContent = `${seat.name} — ${seat.seat_slug}`;
+    select.append(option);
+  });
+  // Preserve the prior selection across refreshes when the seat still exists.
+  select.value = previous && seats.some((seat) => seat.seat_slug === previous) ? previous : "";
+  applyTokenSeatScopeToggle();
+}
+
+// When a seat is chosen the seat defines scope, so hide+disable the free-text
+// dataset inputs (disabled inputs are excluded from FormData) and show a hint.
+function applyTokenSeatScopeToggle() {
+  const select = document.getElementById("accessSeat");
+  if (!select) return;
+  const hasSeat = Boolean(select.value);
+  const datasetField = document.getElementById("accessDefaultDatasetField");
+  const allowedField = document.getElementById("accessAllowedDatasetsField");
+  const datasetInput = document.getElementById("accessDefaultDataset");
+  const allowedInput = document.getElementById("accessAllowedDatasets");
+  const hint = document.getElementById("accessSeatScopeHint");
+  if (datasetField) datasetField.hidden = hasSeat;
+  if (allowedField) allowedField.hidden = hasSeat;
+  if (datasetInput) datasetInput.disabled = hasSeat;
+  if (allowedInput) allowedInput.disabled = hasSeat;
+  if (hint) hint.hidden = !hasSeat;
 }
 
 function renderAuditAccessEvents(events = []) {
@@ -3305,6 +3386,9 @@ document.getElementById("accessSeatForm").addEventListener("submit", async (even
   }
 });
 
+document
+  .getElementById("accessSeat")
+  ?.addEventListener("change", applyTokenSeatScopeToggle);
 document.getElementById("accessTokenForm").addEventListener("submit", async (event) => {
   event.preventDefault();
   const form = event.currentTarget;
@@ -3324,24 +3408,35 @@ document.getElementById("accessTokenForm").addEventListener("submit", async (eve
   accessTokenStatus.className = "status-chip status-standby";
   setBusy(button, true, { idle: "Create access token", loading: "Creating" });
   try {
-    const allowedRaw = String(formData.get("allowedDatasets") || "").trim();
-    const allowedDatasets = allowedRaw
-      ? allowedRaw.split(",").map((value) => value.trim()).filter(Boolean)
-      : null;
-    const defaultDataset = String(formData.get("defaultDataset") || "").trim() || null;
-    const defaultSession = String(formData.get("defaultSession") || "").trim() || null;
-    const response = await api("/api/access/tokens", {
-      method: "POST",
-      body: JSON.stringify({
-        name,
-        role: String(formData.get("role") || "reader"),
-        kind: String(formData.get("kind") || "service_account"),
-        team_id: String(formData.get("teamId") || "").trim() || null,
-        default_dataset: defaultDataset,
-        default_session: defaultSession,
-        allowed_datasets: allowedDatasets,
-      }),
-    });
+    const seatSlug = String(formData.get("seat") || "").trim();
+    let response;
+    if (seatSlug) {
+      // Seat selected: mint via the seat endpoint. Role/dataset scoping derive
+      // from the seat server-side, so only the token name is sent.
+      response = await api(`/api/access/seats/${encodeURIComponent(seatSlug)}/tokens`, {
+        method: "POST",
+        body: JSON.stringify({ token_name: name }),
+      });
+    } else {
+      const allowedRaw = String(formData.get("allowedDatasets") || "").trim();
+      const allowedDatasets = allowedRaw
+        ? allowedRaw.split(",").map((value) => value.trim()).filter(Boolean)
+        : null;
+      const defaultDataset = String(formData.get("defaultDataset") || "").trim() || null;
+      const defaultSession = String(formData.get("defaultSession") || "").trim() || null;
+      response = await api("/api/access/tokens", {
+        method: "POST",
+        body: JSON.stringify({
+          name,
+          role: String(formData.get("role") || "reader"),
+          kind: String(formData.get("kind") || "service_account"),
+          team_id: String(formData.get("teamId") || "").trim() || null,
+          default_dataset: defaultDataset,
+          default_session: defaultSession,
+          allowed_datasets: allowedDatasets,
+        }),
+      });
+    }
     newAccessToken.hidden = false;
     newAccessToken.innerHTML = `
       <strong>Token created</strong>
@@ -3349,6 +3444,9 @@ document.getElementById("accessTokenForm").addEventListener("submit", async (eve
       <code>${escapeHtml(response.token)}</code>
     `;
     form.reset();
+    // reset() clears the seat select but doesn't fire change; restore the
+    // dataset inputs so the "No seat" scope fields are visible+enabled again.
+    applyTokenSeatScopeToggle();
     await loadAccess();
   } catch (err) {
     error.textContent = err.message;

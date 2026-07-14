@@ -914,8 +914,15 @@
                     />
                   </div>
                 </div>
+                <div class="field">
+                  <label for="accessSeat">Assign to seat</label>
+                  <select id="accessSeat" name="seat">
+                    <option value="">No seat — service account</option>
+                  </select>
+                  <p id="accessSeatScopeHint" class="hint" hidden>Scope is set by the seat.</p>
+                </div>
                 <div class="field-grid">
-                  <div class="field">
+                  <div class="field" id="accessDefaultDatasetField">
                     <label for="accessDefaultDataset">Default dataset</label>
                     <input
                       id="accessDefaultDataset"
@@ -936,7 +943,7 @@
                     />
                   </div>
                 </div>
-                <div class="field">
+                <div class="field" id="accessAllowedDatasetsField">
                   <label for="accessAllowedDatasets">Allowed datasets</label>
                   <input
                     id="accessAllowedDatasets"
