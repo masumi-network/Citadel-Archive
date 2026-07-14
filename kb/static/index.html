@@ -23,6 +23,9 @@
           <button id="refreshButton" class="secondary-button compact-button" type="button">
             Refresh
           </button>
+          <button id="logoutButton" class="secondary-button compact-button" type="button">
+            Log out
+          </button>
         </div>
       </header>
 
@@ -139,19 +142,19 @@
                   <div class="toolbar-actions">
                     <div class="segmented-control graph-mode" role="group" aria-label="Graph data source">
                       <button
-                        class="segment-button active"
+                        class="segment-button"
                         type="button"
                         data-graph-mode="live"
-                        aria-pressed="true"
+                        aria-pressed="false"
                         title="Vault Activity: what the vault is doing right now — syncs, searches, ingests"
                       >
                         Vault Activity
                       </button>
                       <button
-                        class="segment-button"
+                        class="segment-button active"
                         type="button"
                         data-graph-mode="knowledge"
-                        aria-pressed="false"
+                        aria-pressed="true"
                         title="Knowledge Mesh: what the vault knows — documents, entities, and the seats they come from"
                       >
                         Knowledge Mesh

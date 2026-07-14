@@ -17,7 +17,9 @@ const state = {
   accessSnapshot: null,
   settingsSnapshot: null,
   auditFilter: "all",
-  graphMode: "live",
+  // Knowledge Mesh is the durable view; Vault Activity is restart-transient and
+  // therefore empty on every fresh boot/redeploy — a bad first impression.
+  graphMode: "knowledge",
   graphDepth: 0,
   graphSpokes: true,
   // Knowledge-mode legend filter: node kinds hidden from the canvas. Chunks
@@ -2958,6 +2960,14 @@ document.getElementById("refreshButton").addEventListener("click", () => {
     loadSettings();
   }
 });
+document.getElementById("logoutButton").addEventListener("click", async () => {
+  try {
+    await api("/admin/logout", { method: "POST" });
+  } catch {
+    // Cookie may already be gone/expired — the login page is right either way.
+  }
+  window.location.assign("/login");
+});
 document.getElementById("meshRetryButton").addEventListener("click", () => loadMesh());
 document.getElementById("fitButton").addEventListener("click", () => {
   resetGraphView();
@@ -3579,6 +3589,11 @@ initializeNavigation();
 loadSession().then(() => {
   setPage(initialPage());
   loadMesh();
+  // The canvas opens on the Knowledge Mesh, so its payload must be fetched at
+  // boot — setGraphMode only loads it on a mode switch.
+  if (state.graphMode === "knowledge") {
+    loadKnowledgeGraph();
+  }
   loadGithubSync();
   loadPromotionQueue();
   loadObsidianSources();
