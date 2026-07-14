@@ -6,6 +6,35 @@ All notable changes to `citadel-archive` are documented here. Format follows
 
 ## [Unreleased]
 
+### Changed
+
+- **BREAKING (ADR-0009 mesh read isolation).** `/api/mesh/graph`, the
+  `/api/mesh` + `/events` activity projection, and `/api/documents` drill-down
+  are now caller-scoped for non-admin tokens: content is limited to the caller's
+  datasets (own seat + Central + non-seat datasets) and foreign-seat drill-down
+  returns 404 ("not yours"). Seat presence — the seat roster and per-seat
+  document counts — stays universal. Admin/env tokens are unaffected. The hosted
+  MCP tools `citadel_get_mesh` / `citadel_get_document` inherit the new scoping,
+  so reader/agent tokens that previously received whole-org activity now receive
+  only their scope. New `/api/mesh/graph` payload fields: `visible_nodes`,
+  per-node `dataset`/`datasets`/`internal_name`/`chunk_count`, `presence`, and
+  synthetic `dataset:<name>` hubs (not real graph nodes/edges, not drillable).
+
+### Performance
+
+- Document drill-down reads only the target node + its connections instead of
+  the whole graph; `/api/mesh/graph` shaping runs off the event loop and is
+  concurrency-capped, the raw graph read and dataset-attribution map are
+  TTL-cached with single-flight, and attribution now uses one joined relational
+  query. Attribution failures negative-cache briefly and prefer last-known-good
+  (stale-while-error) instead of blanking scoped vaults.
+
+### Fixed
+
+- Dashboard graph now surfaces a degraded/empty banner on fallback instead of
+  rendering a broken engine as a healthy empty mesh, labels the server node cap,
+  and no longer mis-pins an arbitrary node as the org Central hub.
+
 ## [0.2.3] — 2026-07-07
 
 ### Added
