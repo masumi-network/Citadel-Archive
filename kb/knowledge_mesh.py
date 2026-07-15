@@ -44,15 +44,46 @@ _FRONTMATTER_SCAN_LINES = 30
 # makes a useful label.
 _PUNCT_ONLY_RE = re.compile(r"^[\W_]+$")
 
+# Cognee's summariser opens nearly every TextSummary with boilerplate —
+# "This chunk is about …", "This document describes …", "This input is a …" —
+# so every derived label reads identically. Strip that lead-in so the real
+# subject shows. The subject noun is restricted to a known set so ordinary
+# names ("This is the auth service") are never touched.
+_SUMMARY_LEAD_RE = re.compile(
+    r"^(?:the|this|these|it|here)\s+"
+    r"(?:chunk|input|document|text|section|note|page|passage|content|summary|"
+    r"entry|file|record|snippet|paragraph|excerpt|data|list|log)s?\s+"
+    r"(?:is|are|describes?|discusses|contains?|covers?|provides?|details?|"
+    r"explains?|outlines?|summari[sz]es?|represents?|lists?|shows?|appears?|"
+    r"captures?|documents?|reflects?)\s+"
+    r"(?:to\s+be\s+|that\s+|how\s+|about\s+|a\s+|an\s+|the\s+|of\s+)*",
+    re.IGNORECASE,
+)
 
-def _first_line_label(text: str, max_len: int) -> str:
+
+def _strip_summary_lead(line: str) -> str:
+    """Drop a cognee summariser lead-in; recapitalise the surviving subject.
+
+    Returns ``""`` when only punctuation survives (e.g. "This chunk is about
+    ."), so callers fall through to the next label source.
+    """
+    cleaned = _SUMMARY_LEAD_RE.sub("", line, count=1).strip()
+    if not cleaned or _PUNCT_ONLY_RE.match(cleaned):
+        return ""
+    if cleaned == line:
+        return line
+    return cleaned[0].upper() + cleaned[1:]
+
+
+def _first_line_label(text: str, max_len: int, *, clean=None) -> str:
     """First non-empty line, whitespace-collapsed, ellipsis-truncated when cut.
 
     Text opening with a ``---`` fence skips the whole YAML frontmatter block —
     up to and including the closing ``---``/``...`` fence within the first
     ``_FRONTMATTER_SCAN_LINES`` lines; when no closing fence is found only the
     opening fence line is skipped. Lines that are only dashes/punctuation are
-    never returned as labels.
+    never returned as labels. ``clean`` optionally rewrites the surviving line
+    (applied BEFORE truncation so the subject is not cut off by a lead-in).
     """
     lines = text.splitlines()
     start = 0
@@ -66,6 +97,10 @@ def _first_line_label(text: str, max_len: int) -> str:
         collapsed = " ".join(line.split())
         if not collapsed or _PUNCT_ONLY_RE.match(collapsed):
             continue
+        if clean is not None:
+            collapsed = clean(collapsed)
+            if not collapsed:
+                continue
         if len(collapsed) <= max_len:
             return collapsed
         return collapsed[: max_len - 1] + "…"
@@ -81,15 +116,18 @@ def _node_label(node_id: str, properties: dict[str, Any]) -> str:
         value = properties.get(key)
         if isinstance(value, str) and value.strip():
             if key == "text":
-                # Chunk nodes: raw chunk bodies are paragraphs, not names —
-                # keep the first non-empty line, tightly capped. Bodies with
-                # no labelable line (e.g. only dashes) fall through to the
-                # next key.
-                label = _first_line_label(value, _CHUNK_LABEL_MAX)
+                # Chunk/summary nodes: raw bodies are paragraphs, not names —
+                # keep the first non-empty line, tightly capped, with the
+                # summariser lead-in stripped. Bodies with no labelable line
+                # (e.g. only dashes) fall through to the next key.
+                label = _first_line_label(value, _CHUNK_LABEL_MAX, clean=_strip_summary_lead)
                 if label:
                     return label
                 continue
-            return " ".join(value.split())[:120]
+            # name/label/title may still carry a summariser sentence — strip it
+            # too, but keep the original when nothing boilerplate matched.
+            collapsed = " ".join(value.split())
+            return (_strip_summary_lead(collapsed) or collapsed)[:120]
     return str(node_id)[:120]
 
 
@@ -139,7 +177,7 @@ def _derive_fallback_label(
         for key in ("text", "name", "label"):
             value = properties.get(key)
             if isinstance(value, str) and value.strip():
-                label = _first_line_label(value, _DOC_LABEL_MAX)
+                label = _first_line_label(value, _DOC_LABEL_MAX, clean=_strip_summary_lead)
                 if label:
                     return label
 
@@ -425,7 +463,7 @@ def build_graph_payload(
                     best = (key, text)
             if best is None:
                 continue
-            label = _first_line_label(best[1], _DOC_LABEL_MAX)
+            label = _first_line_label(best[1], _DOC_LABEL_MAX, clean=_strip_summary_lead)
             if not label:
                 continue
             node = internal_nodes[doc_id]

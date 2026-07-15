@@ -872,6 +872,38 @@ def test_orphans_are_not_collapsed_without_opt_in() -> None:
     assert "collapsed" not in set_node
 
 
+def test_summary_boilerplate_lead_in_is_stripped_from_labels() -> None:
+    nodes = [
+        ("sum-1", {"text": "This chunk is about a repository of question-answer pairs", "type": "TextSummary"}),
+        ("sum-2", {"name": "This document describes the release checklist", "type": "TextSummary"}),
+        ("sum-3", {"text": "This input is a list of 40 empty questions", "type": "TextSummary"}),
+    ]
+    payload = build_graph_payload(nodes, [], limit=10)
+    labels = {node["id"]: node["label"] for node in payload["nodes"]}
+    assert labels["sum-1"] == "Repository of question-answer pairs"
+    assert labels["sum-2"] == "Release checklist"
+    assert labels["sum-3"] == "List of 40 empty questions"
+
+
+def test_ordinary_name_is_not_mistaken_for_summary_boilerplate() -> None:
+    # "This is the auth service" has no summary noun after the pronoun, so it
+    # must survive untouched.
+    payload = build_graph_payload(
+        [("n-1", {"name": "This is the auth service", "type": "Entity"})], [], limit=10
+    )
+    assert payload["nodes"][0]["label"] == "This is the auth service"
+
+
+def test_internal_document_summary_fallback_strips_boilerplate() -> None:
+    nodes = [
+        ("doc-1", {"name": INTERNAL_DOC_NAME, "type": "TextDocument"}),
+        ("sum-1", {"text": "This chunk is about the promotion pipeline", "type": "TextSummary"}),
+    ]
+    payload = build_graph_payload(nodes, [("sum-1", "doc-1", "made_from", {})], limit=10)
+    doc = next(node for node in payload["nodes"] if node["id"] == "doc-1")
+    assert doc["label"] == "Promotion pipeline"
+
+
 def test_named_document_is_never_collapsed() -> None:
     nodes = [
         ("doc-1", {"name": "Design Doc", "type": "TextDocument"}),

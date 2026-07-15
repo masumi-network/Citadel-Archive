@@ -388,11 +388,18 @@ function aggregateKnowledgeMesh(nodes, links) {
     const kind = nodeKind(node);
     return kind === "document" || kind === "chunk";
   };
+  // Cognee TextSummary nodes are per-chunk summaries ("This chunk is about …"),
+  // not concepts — drop them from the concept map so labels aren't all boilerplate.
+  const isSummary = (node) => rawType(node).includes("summary");
   const keep = new Set();
   for (const node of nodes) {
     if (node.type === "dataset" || isConcept(node)) {
       keep.add(node.id);
-    } else if (!isDocLike(node) && (degree.get(node.id) || 0) >= AGG_MIN_ENTITY_DEGREE) {
+    } else if (
+      !isDocLike(node) &&
+      !isSummary(node) &&
+      (degree.get(node.id) || 0) >= AGG_MIN_ENTITY_DEGREE
+    ) {
       keep.add(node.id);
     }
   }
