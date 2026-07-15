@@ -6,8 +6,30 @@ All notable changes to `citadel-archive` are documented here. Format follows
 
 ## [Unreleased]
 
+### Added
+
+- **Document drill-down in the Knowledge Mesh.** Clicking a graph node fetches
+  and renders its document text in the inspector; textless `TextDocument` nodes
+  are assembled from their linked `DocumentChunk` neighbors.
+- **Seat presence + graph legibility.** Every seat renders as a presence hub;
+  document nodes are labeled from their first line of text (not `text_<hash>`);
+  a color-coded legend filters node kinds (chunks hidden by default); the
+  inspector shows kind, seat, and clickable neighbors; edges carry relationship
+  tooltips. The canvas opens on the **Knowledge Mesh** (the durable graph)
+  rather than the restart-transient **Vault Activity** projection, and the
+  header has a **Log out** button.
+- **Seat-assignment dropdown on token creation.** The dashboard's "Create access
+  token" form gains an *Assign to seat* picker that mints a seat-scoped token
+  (scope derives from the seat); "No seat" keeps the service-account path.
+- **CI.** GitHub Actions runs `pytest` + `ruff` on every PR and push.
+
 ### Changed
 
+- **Agent skills default to the headless CLI.** `SKILL.md` and the vault /
+  proactive-ingest skills now teach CLI-first access (`citadel search --json`,
+  `citadel ingest`) with the hosted MCP as an optional in-session accelerator —
+  and an explicit "if no `citadel_*` tools registered, fall back to the CLI,
+  don't retry MCP" rule.
 - **BREAKING (ADR-0009 mesh read isolation).** `/api/mesh/graph`, the
   `/api/mesh` + `/events` activity projection, and `/api/documents` drill-down
   are now caller-scoped for non-admin tokens: content is limited to the caller's
@@ -34,6 +56,15 @@ All notable changes to `citadel-archive` are documented here. Format follows
 - Dashboard graph now surfaces a degraded/empty banner on fallback instead of
   rendering a broken engine as a healthy empty mesh, labels the server node cap,
   and no longer mis-pins an arbitrary node as the org Central hub.
+- **Hosted `/mcp` public client targets `$PORT`, not `localhost:8000`.** The
+  no-fallback public path (and the `CitadelHttpClient` default) now resolve to
+  `_self_base_url()`, so public MCP resource reads reach the in-process API on
+  Railway instead of a refused `localhost:8000` connection. (The separate
+  event-loop-starvation cause of `tools/list` timeouts under load — issue #50 —
+  is not addressed here.)
+- Search results no longer advertise `document_drilldown_available` for an id
+  that `/api/documents` would 404 for the caller; the hint now reuses the same
+  visibility gate as the drill-down endpoint, per caller.
 
 ## [0.2.3] — 2026-07-07
 

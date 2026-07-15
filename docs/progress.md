@@ -1,6 +1,54 @@
 # Citadel Progress
 
-Last updated: 2026-06-30.
+Last updated: 2026-07-14.
+
+## 2026-07-14 — Dashboard graph, mesh read isolation, /mcp fix — SHIPPED + DEPLOYED
+
+Started as a dashboard papercut ("clicking a node shows metadata but no text")
+and grew into a read-side privacy release once a `/grill-with-docs` pass found
+the graph surfaces were leaking seat Node content org-wide.
+
+**PR #76 (dashboard + isolation) + PR #77 (/mcp fix)** merged to `main` →
+Railway auto-deployed (deployment `f5bdccca`, clean boot, `/healthz` 200,
+`assert_cognee_dataset_api` self-check passed). 707 tests green.
+
+- **ADR-0009 mesh read isolation.** The whole-graph endpoint plus the
+  `/api/mesh` + `/events` activity projection and the `/api/documents`
+  drill-down served every seat's Node content (documents, chunk text, extracted
+  entities, ingest/search event text) to any reader token — a violation of
+  ADR-0003 that `/search` already enforced. Now caller-scoped (own Node +
+  Central; admin bypass), fail-closed on attribution failure, with a
+  404-equals-missing drill-down (no existence oracle) and layered entity
+  visibility (a shared entity can't resurface a hidden document; an `is_a` edge
+  alone never promotes a non-EntityType). **Seat presence stays universal** —
+  every seat is a hub (slug + counts only, never names/emails). New glossary
+  terms **Seat Presence** and **Vault Activity**; `CONTEXT.md` "Graph views"
+  section rewritten.
+- **Graph legibility + drill-down.** Human labels from first-chunk text, a
+  kind-filter legend (chunks hidden by default), a richer inspector with
+  clickable neighbors and document text, edge tooltips, Knowledge-Mesh default
+  view, and a Log out button. Plus a seat-assignment dropdown on token minting.
+- **Production-readiness pass (measured, 5-dimension audit).** Fixed 3 blockers
+  + 12 majors before merge: `get_document` no longer reads the whole 34k-edge
+  graph per click (targeted node read); `/api/mesh/graph` shaping runs off the
+  event loop with a dedicated concurrency cap; the raw graph read and the
+  dataset-attribution map are TTL-cached with single-flight; attribution is one
+  joined query with stale-while-error. The audit also caught the projection
+  leak above.
+- **/mcp base-URL fix (PR #77).** The public MCP client defaulted to
+  `localhost:8000` while Railway listens on `$PORT`, so public resource reads
+  hit a refused connection. Now `_self_base_url()`. The deeper `tools/list`
+  loop-starvation half (#50) is still open.
+- **Skills → headless-CLI-first**, so agents stop retrying MCP when a session
+  registers no tools.
+
+**Verified in prod:** deploy health + clean boot. **Not verifiable in prod this
+session:** isolation and MCP tool registration end-to-end — the local seat
+token is rejected (seat `sarthi` has 0 active tokens; needs a fresh mint). All
+isolation logic was verified live on a seeded localhost demo across
+admin/seat/reader identities. **Follow-ups still open:** the `/mcp` loop
+starvation (#50), three unverifiable UI papercuts (no browser harness this
+session), and the `0.3.0` version cut.
 
 ## 2026-06-30 — Read-side hardening sprint (issues #25–#53) — SHIPPED
 

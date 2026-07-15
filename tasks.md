@@ -1,5 +1,35 @@
 # Citadel Tasks
 
+## Dashboard graph + mesh read isolation + /mcp fix (2026-07-14) — SHIPPED + DEPLOYED
+
+Merged to `main` (PR #76 dashboard/isolation, PR #77 /mcp) → Railway deploy
+`f5bdccca`, clean boot, 707 tests. Full write-up: [`docs/progress.md`](docs/progress.md) ·
+decision record: [`docs/adr/0009-mesh-read-isolation-presence-vs-content.md`](docs/adr/0009-mesh-read-isolation-presence-vs-content.md).
+
+- [x] Node document drill-down (assemble textless `TextDocument` from chunks)
+- [x] Seat presence hubs + dataset attribution in the Knowledge Mesh
+- [x] Graph legibility: human labels, kind-filter legend (chunks off by default),
+      neighbor inspector, edge tooltips, Knowledge-Mesh default view, Log out
+- [x] Seat-assignment dropdown on token creation (seat-scoped mint)
+- [x] **ADR-0009 read isolation**: `/api/mesh/graph`, `/api/mesh`+`/events`
+      projection, `/api/documents` scoped per caller; fail-closed; no 404 oracle;
+      presence stays universal (slug only). `CONTEXT.md` terms + ADR added.
+- [x] Production-readiness audit (measured): 3 blockers + 12 majors fixed
+      (targeted doc read, off-loop shaping + dedicated cap, TTL/single-flight
+      caches, joined attribution query, projection-leak fix)
+- [x] `/mcp` public-client base URL → `$PORT` (PR #77)
+- [x] Skills default to headless CLI; MCP demoted to optional accelerator
+- [x] CI: pytest + ruff on PR/push
+
+**Todos / carry-over:**
+
+- [ ] `/mcp` loop-starvation half (#50 / in-loop cognify): base-URL fixed, but
+      `tools/list` can still time out under load — needs the systemic fix
+- [ ] Three UI papercuts deferred (no browser harness this session): projection-
+      event click → bogus inspector, spinner-after-fetch-failure, meta rebuild perf
+- [ ] Cut `0.3.0` (CHANGELOG `[Unreleased]` carries the BREAKING notes)
+- [ ] Verify isolation + MCP tools end-to-end against prod once a valid token exists
+
 ## CLI UX sprint (2026-07-02) — SHIPPED as v0.2.2 (PR #72 + tagline follow-up)
 
 Full change list: [`CHANGELOG.md` § 0.2.2](CHANGELOG.md).
@@ -22,8 +52,10 @@ Full change list: [`CHANGELOG.md` § 0.2.2](CHANGELOG.md).
 
 **Todos / carry-over:**
 
-- [ ] sarthi's seat token 403s against prod (predates v0.2.2) — mint fresh
-      (`citadel seat token sarthi` with admin key), then `citadel token set`
+- [ ] sarthi's seat token rejected by prod (still open 2026-07-14) — confirmed
+      cause: seat `sarthi` has **0 active tokens** in the prod access store.
+      Mint fresh: `railway run -- citadel seat token sarthi` then
+      `citadel token set <token>` (admin key stays in Railway env)
 - [ ] Release gates from the read-side sprint: rotate secrets · verify #69 on
       the node · profile #50
 - [ ] Deferred CLI refactors: global `--json`/`--node-url` parent-parser,
