@@ -1,5 +1,100 @@
 # Citadel Tasks
 
+## "Not just a cognee wrapper" — differentiation roadmap (2026-07-15) — GRILLED → ADR-0010
+
+Source: 6-stream research synthesis (Karpathy "LLM Wiki" gist + 4 repos —
+Link, echowiki, llm-wiki, obsidian-wiki-system — + cognee-coupling audit +
+differentiation-modules audit). Grilled 2026-07-15 (`/grill-with-docs`) → decision
+recorded in [`docs/adr/0010-structured-knowledge-durable-source-of-truth.md`](docs/adr/0010-structured-knowledge-durable-source-of-truth.md);
+glossary sharpened in `CONTEXT.md` (Structured Knowledge, Knowledge Conflict,
+Tiered Ingestion + a 2026-07-15 Flagged Ambiguity).
+
+**Premise correction:** Citadel is NOT a thin wrapper today — `import cognee`
+lives only in `kb/cognee_client.py`, behind a `CogneeGateway` protocol. Real
+moat = governance cognee will never have: seat/Node read-isolation (ADR-0009,
+the 4-pass cross-dataset visibility algo), the multi-gate promotion engine, the
+secret-scan gate. **Problem:** that governance is bolted onto a commodity, leaky
+retrieval path (`CHUNKS` default; `auto_improve`/`build_global_context_index`
+default OFF → the graph is used for the mesh viz, barely for reads), inheriting
+cognee's worst failure modes and adding no retrieval quality of its own.
+
+**Thesis (grilled):** own the *representation*, keep the (good) *retrieval*.
+Make **Structured Knowledge** the durable source of truth Citadel owns; cognee
+becomes a rebuildable **Knowledge Index/Mesh** projection over it. **You stop
+being a wrapper when cognee is no longer the *sole owner* of your knowledge —
+not when you delete it.** Cognee is kept, coexists, and earns retrieval duty by
+measurement.
+
+**Grilled decisions (see ADR-0010):** no new "note" term — the artifact IS
+**Structured Knowledge**, finally made durable/first-class. Source of truth on
+live `/data`, synced to the **Vault Backup Mirror**. Synthesized at the full
+(**Central**/promotion) tier only — **Nodes stay light** (Tiered Ingestion
+unchanged). Canonical per-topic, **update-in-place**, **contradiction-gated**
+(a contradicting revision raises a **Knowledge Conflict**, never a silent
+overwrite). Page identity resolved by the **Promotion Agent** plan-then-write
+against Central page briefs; **vault lint** is the safety net for bad
+merges/dups. Dependency shifts: **P1-2 is a prerequisite of P0-1**; **P0-4 is a
+companion of P0-1**.
+
+### P0 — cheap, high-impact, cuts cognee exposure
+- [ ] **P0-1 · Durable, first-class Structured Knowledge** *(the spine — was
+      "canonical notes")* — the **Learning Process** writes **Structured
+      Knowledge** as a durable artifact Citadel owns on live `/data` (synced to
+      the **Vault Backup Mirror**), not only into cognee. Synthesized at
+      **Central**/**Promotion** time (Nodes stay light); canonical per-topic;
+      **update-in-place**; page identity resolved plan-then-write against Central
+      briefs. **Gated by P1-2 (contradiction) + P0-4 (lint).** `kb/promotion.py`,
+      `kb/service.py`, new `kb/structured_knowledge.py`.
+- [ ] **P0-2 · Retrieval eval harness (`citadel bench`)** *(do FIRST — baselines
+      cognee, unlocks the coexistence bake-off)* — 30–50 frozen org Q→expected
+      fixtures + negatives, top-1/top-5 in CI. Fills the biggest gap: no
+      retrieval eval today (feedback counted, never used). `kb/retrieval_eval.py`.
+- [ ] **P0-3 · Harden `CogneeGateway` → `RetrievalBackend` interface + cognee
+      rebuildable from Structured Knowledge** — push the last cognee leaks
+      (`SearchType`, session recall, per-read history writes) behind the protocol
+      so the engine is swappable *in principle* and `citadel reindex` is a safe
+      rebuild. **Cognee stays the default + keeps the Mesh; a 2nd backend
+      (BM25/SQLite over SK) is OPTIONAL — built only if P0-2 shows cognee
+      underperforming.** `kb/cognee_client.py`, `kb/service.py`, new `kb/retrieval/`.
+- [ ] **P0-4 · Vault lint (`citadel lint`)** *(companion of P0-1)* — orphans,
+      dangling refs, near-dup pages (cosine bands), stale claims, "term
+      everywhere but no page" → catches bad LLM identity-resolution from P0-1.
+      Read-only; feeds promotion dedup. `kb/lint.py`. (All 4 repos + Karpathy.)
+
+### P1 — differentiation depth
+- [ ] **P1-1 · Deterministic link/citation grounding ("no orphan claims")** —
+      validate every ref in a synthesized note / MCP answer against real node
+      IDs, strip/downgrade the rest; attach `[confidence]` + match-type. Hard
+      anti-hallucination guarantee; encodes fail-closed/no-oracle. (echowiki, Link, obsidian.)
+- [ ] **P1-2 · Claim-level contradiction ledger** *(PREREQUISITE of P0-1 —
+      update-in-place is unsafe without it)* — finish `kb/conflicts.py` (today
+      title-overlap-only vs 2 JSON files): embedding-candidate + cheap LLM "do
+      these disagree?", record both sides as a **Knowledge Conflict**, never
+      overwrite; gates the in-place revision at promotion.
+- [ ] **P1-3 · Note maturity lifecycle gating promotion** — `status: seed→growing
+      →stable`; promotion to Central requires `stable`. Explainable criterion. (obsidian.)
+- [ ] **P1-4 · Human-readable `log.md` for Central** — append-only source-linked
+      narrative of how Central evolved; cheap layer over audit events. (Karpathy/llm-wiki/Link.)
+- [ ] **P1-5 · Graph-aware retrieval, gated by P0-2** — only after the bench:
+      try `GRAPH_COMPLETION`/`AUTO` + `build_global_context_index`, keep only if it
+      beats the benchmark. `kb/config.py`, `kb/cognee_client.py`. (ADR-0005 §5, still off.)
+
+### P2 — big bets
+- [ ] **P2-1 · Canonical notes become source of truth; cognee fully rebuildable/swappable.**
+- [ ] **P2-2 · Agent-facing memory contracts** — typed "what does the org know
+      about X" (confidence + citations + conflict flags) as an MCP contract distinct from raw search.
+- [ ] **P2-3 · Query-results-as-knowledge loop in evolve** — high-feedback answers
+      synthesize back into canonical notes. `scripts/run_self_improve.py`, `kb/self_improve.py`.
+
+**Do first (grilled order):** P0-2 (bench, baseline cognee) → P1-2 + P0-4 (the
+gates) → P0-1 (durable Structured Knowledge) → P0-3 (interface + rebuild-from-SK;
+optional bake-off if the bench justifies it).
+
+**Open questions:** (1) is org scale even large enough to justify cognee vs
+synthesized-notes + BM25? (2) synthesis must respect ADR-0009 read scope
+(Central notes only from Central + promoted, never cross-Node); (3) LLM cost of
+synthesis-on-ingest + contradiction checks vs. cheap add-a-chunk.
+
 ## Dashboard graph + mesh read isolation + /mcp fix (2026-07-14) — SHIPPED + DEPLOYED
 
 Merged to `main` (PR #76 dashboard/isolation, PR #77 /mcp) → Railway deploy

@@ -21,8 +21,8 @@ A secondary synced copy of vault evidence and history used for recovery, audit, 
 _Avoid_: source of truth, runtime store, live index
 
 **Structured Knowledge**:
-Source-linked company knowledge that has been organized into explicit concepts, relationships, and context.
-_Avoid_: raw data, unprocessed sync, dump
+Source-linked company knowledge that has been organized into explicit concepts, relationships, and context. It is the **durable source of truth** the vault owns and retains directly; the **Knowledge Index** and **Knowledge Mesh** are rebuildable projections of it, and the retrieval engine that produces them is replaceable.
+_Avoid_: raw data, unprocessed sync, dump, retrieval-engine-owned
 
 **Knowledge Index**:
 A searchable organization of **Structured Knowledge** for fast retrieval.
@@ -41,8 +41,8 @@ The governed transformation of **Source Material** into **Structured Knowledge**
 _Avoid_: self-learning, magic sync, auto-truth
 
 **Tiered Ingestion**:
-Org-bound syncs receive full processing (security review, enrichment, and structuring); raw seat-**Node** agent memory receives lighter indexing only.
-_Avoid_: same pipeline for all content, skip processing, full enrichment everywhere
+Org-bound syncs receive full processing (security review, enrichment, and structuring); raw seat-**Node** agent memory receives lighter indexing only. Canonical **Structured Knowledge** synthesis — per-topic pages maintained in place — is part of the full tier: it runs on the governed **Central** path (org source sync and **Promotion**), never on light-tier **Node** captures. A **Node** holds raw captures with light indexing; synthesized knowledge is a **Central** benefit.
+_Avoid_: same pipeline for all content, skip processing, full enrichment everywhere, synthesize on every seat capture
 
 **Vault Member**:
 A human participant who has permission to access an **Organization Vault**.
@@ -157,7 +157,7 @@ A source-linked, redacted report of a potential secret exposure or high-risk iss
 _Avoid_: secret dump, raw match, vague warning
 
 **Knowledge Conflict**:
-A visible disagreement between pieces of **Structured Knowledge** or their supporting **Source Snapshots**.
+A visible disagreement between pieces of **Structured Knowledge** or their supporting **Source Snapshots**. Because **Structured Knowledge** is maintained as canonical per-topic knowledge revised in place, a revision that *contradicts* the existing page raises a **Knowledge Conflict** and keeps both sides visible instead of silently overwriting; a non-contradicting revision just updates the page. Prior versions stay recoverable through the **Vault Backup Mirror**.
 _Avoid_: merge, overwrite, silent correction
 
 ## Relationships
@@ -312,3 +312,4 @@ mesh, including per-item drill-down.
 - "org-ready tag promotes seat MCP writes to Central" (ADR-0003 era); resolved: **Seat Node Write Policy** — seat writes stay on the **Node**; **Central** only via **Promotion Agent**, org sync, or service accounts (ADR-0007).
 - "who gates promotion to Central?" (2026-06-27 grill); resolved: known masumi-org work auto-promotes after secret scan + LLM; **New Org Project** requires **Vault Member** **Promotion Approval** (admin may delegate with audit); admin governs org repos and operator cron, not every member note.
 - "universal org view" (2026-07-13 grill) was being read as every seat's content on one canvas; resolved: universal means every seat's *presence* (hub, activity, counts) is visible to all **Vault Members**, while **Structured Knowledge** content stays scoped to **Central** plus the caller's own **Node** — the **Knowledge Mesh** view and its drill-down enforce the same read isolation as search (ADR-0003).
+- "who owns the source of truth — the retrieval engine or the vault?" (2026-07-15 grill) was inverted in the implementation: the retrieval engine held the only durable copy. Resolved: **Structured Knowledge** is the durable, first-class source of truth the vault owns, held in the runtime vault and **synced to the Vault Backup Mirror** for recovery; the **Knowledge Index** and **Knowledge Mesh** are rebuildable projections produced by a replaceable retrieval engine. This is per-dataset — each **Node** and **Central** own their own **Structured Knowledge**, so read isolation (ADR-0009) holds by construction.
