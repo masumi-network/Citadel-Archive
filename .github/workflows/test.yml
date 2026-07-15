@@ -20,7 +20,10 @@ jobs:
       - name: Set up Python
         run: uv python install 3.12
       - name: Install dependencies
-        run: uv sync --dev
+        # --all-extras pulls in the `server` optional-dependency group
+        # (fastapi, mcp, cognee, …); the test suite imports kb.server and the
+        # MCP module, so a base-only sync fails collection with ModuleNotFound.
+        run: uv sync --all-extras --dev
       - name: Lint
         run: uv run ruff check .
       - name: Run tests
