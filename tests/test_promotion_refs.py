@@ -3,10 +3,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-import pytest
 
 from kb.promotion_refs import (
-    ReferenceAssessment,
     assess_org_reference,
     extract_repo_hints,
     load_tracked_org_repos,
