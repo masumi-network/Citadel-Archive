@@ -101,6 +101,64 @@ def _node_type(properties: dict[str, Any]) -> str:
     return "node"
 
 
+def _raw_props_by_id(raw_nodes: list[Any]) -> dict[str, dict[str, Any]]:
+    """Index ``{node_id: properties}`` for neighbour/own-property label lookups."""
+    index: dict[str, dict[str, Any]] = {}
+    for raw in raw_nodes:
+        try:
+            node_id, properties = str(raw[0]), raw[1]
+        except (TypeError, IndexError, KeyError):
+            continue
+        if isinstance(properties, dict):
+            index[node_id] = properties
+    return index
+
+
+def _basename_label(location: str) -> str:
+    """Source-file basename from a ``raw_data_location`` path (``/`` or ``\\``)."""
+    return location.replace("\\", "/").rstrip("/").rsplit("/", 1)[-1].strip()
+
+
+def _derive_fallback_label(
+    node_id: str,
+    raw_props: dict[str, dict[str, Any]],
+    nodeset_of: dict[str, str],
+    summary_of: dict[str, str],
+) -> str:
+    """Best-available label for an internal node the chunk pass could not name.
+
+    Tried in descending descriptiveness: (1) the first line of a neighbouring
+    TextSummary, (2) the source-file basename from ``raw_data_location`` (skipped
+    when it is itself a cognee-internal ``text_<md5>.txt`` name), (3) the name of
+    the NodeSet the node belongs to (coarse but real). Returns ``""`` when no
+    source yields a usable label, leaving the internal name in place.
+    """
+    summary_id = summary_of.get(node_id)
+    if summary_id:
+        properties = raw_props.get(summary_id, {})
+        for key in ("text", "name", "label"):
+            value = properties.get(key)
+            if isinstance(value, str) and value.strip():
+                label = _first_line_label(value, _DOC_LABEL_MAX)
+                if label:
+                    return label
+
+    location = raw_props.get(node_id, {}).get("raw_data_location")
+    if isinstance(location, str) and location.strip():
+        base = _basename_label(location)
+        stem = base.rsplit(".", 1)[0] if "." in base else base
+        if base and not _is_internal_label(node_id, stem):
+            return base[:_DOC_LABEL_MAX]
+
+    nodeset_id = nodeset_of.get(node_id)
+    if nodeset_id:
+        label = _node_label(nodeset_id, raw_props.get(nodeset_id, {}))
+        if label and not _is_internal_label(nodeset_id, label):
+            return label[:_DOC_LABEL_MAX]
+
+    return ""
+
+
 def _raw_id(raw: Any) -> str | None:
     try:
         return str(raw[0])
@@ -233,6 +291,7 @@ def build_graph_payload(
     limit: int = DEFAULT_MAX_NODES,
     dataset_map: dict[str, list[str]] | None = None,
     presence: list[dict[str, Any]] | None = None,
+    collapse_orphan_documents: bool = False,
 ) -> dict[str, Any]:
     """Shape raw Cognee graph tuples into the ``{nodes, edges}`` contract.
 
@@ -295,6 +354,11 @@ def build_graph_payload(
         node_by_id[node_key] = node
         if len(nodes) >= limit:
             break
+
+    # Captured before collapse can shrink ``nodes`` so ``truncated`` keeps its
+    # meaning ("more raw nodes exist than were shaped"), not "collapse removed
+    # some".
+    kept_count = len(nodes)
 
     # Kept nodes still wearing a cognee-internal label (``text_<md5>`` or the
     # bare node id) get a human label derived from their chunk text below.
@@ -368,6 +432,83 @@ def build_graph_payload(
             node["internal_name"] = node["label"]
             node["label"] = label
 
+    # Internal-labeled nodes the chunk pass still could not name.
+    still_internal: dict[str, dict[str, Any]] = {
+        node_id: node
+        for node_id, node in internal_nodes.items()
+        if _is_internal_label(node_id, node["label"])
+    }
+    raw_props: dict[str, dict[str, Any]] | None = None
+
+    if collapse_orphan_documents and still_internal:
+        # Fold unnamed "orphan" documents — internal-labeled TextDocuments the
+        # chunk pass could not name whose only real membership is a NodeSet
+        # (legacy session-cache imports) — into that NodeSet node, which then
+        # carries a ``collapsed`` count. Keeps the canvas readable: one hub per
+        # set instead of a cloud of ``text_<md5>`` dots. Removed ids leave
+        # ``kept_ids`` so their edges drop in the edge pass below. Opt-in;
+        # default off keeps the exact prior node set. Runs AFTER caller-scoped
+        # visibility filtering (KnowledgeMesh.graph), so it is display-only and
+        # never widens what a scoped caller can see.
+        nodeset_ids = {
+            node["id"]
+            for node in nodes
+            if "nodeset" in str(node.get("type", "")).lower()
+        }
+        collapse_into: dict[str, str] = {}
+        if nodeset_ids:
+            for raw in raw_edges:
+                try:
+                    source, target, relationship = str(raw[0]), str(raw[1]), str(raw[2])
+                except (TypeError, IndexError, KeyError):
+                    continue
+                if relationship != "belongs_to_set":
+                    continue
+                for doc_id, set_id in ((source, target), (target, source)):
+                    if (
+                        doc_id in still_internal
+                        and set_id in nodeset_ids
+                        and "document" in str(node_by_id[doc_id].get("type", "")).lower()
+                    ):
+                        collapse_into.setdefault(doc_id, set_id)
+        for doc_id, set_id in collapse_into.items():
+            hub = node_by_id.get(set_id)
+            if hub is None:
+                continue
+            hub["collapsed"] = int(hub.get("collapsed", 0)) + 1
+            node_by_id.pop(doc_id, None)
+            kept_ids.discard(doc_id)
+            still_internal.pop(doc_id, None)
+        if collapse_into:
+            nodes = [node for node in nodes if node["id"] in kept_ids]
+
+    if still_internal:
+        # Fallback labels for the survivors: neighbouring TextSummary, source
+        # basename, or NodeSet name (see ``_derive_fallback_label``). One edge
+        # sweep resolves each survivor's TextSummary and NodeSet neighbours.
+        if raw_props is None:
+            raw_props = _raw_props_by_id(raw_nodes)
+        nodeset_of: dict[str, str] = {}
+        summary_of: dict[str, str] = {}
+        for raw in raw_edges:
+            try:
+                source, target, relationship = str(raw[0]), str(raw[1]), str(raw[2])
+            except (TypeError, IndexError, KeyError):
+                continue
+            for node_id, other_id in ((source, target), (target, source)):
+                if node_id not in still_internal:
+                    continue
+                other_type = _node_type(raw_props.get(other_id, {})).lower()
+                if relationship == "belongs_to_set" and "nodeset" in other_type:
+                    nodeset_of.setdefault(node_id, other_id)
+                elif "summary" in other_type:
+                    summary_of.setdefault(node_id, other_id)
+        for node_id, node in still_internal.items():
+            label = _derive_fallback_label(node_id, raw_props, nodeset_of, summary_of)
+            if label:
+                node["internal_name"] = node["label"]
+                node["label"] = label
+
     edges: list[dict[str, Any]] = []
     for raw in raw_edges:
         try:
@@ -384,8 +525,9 @@ def build_graph_payload(
             }
         )
 
-    # Raw-count semantics captured before synthetic hubs are appended.
-    truncated = len(raw_nodes) > len(nodes)
+    # Raw-count semantics captured before synthetic hubs are appended;
+    # ``kept_count`` is the pre-collapse shaped count.
+    truncated = len(raw_nodes) > kept_count
 
     if dataset_map or presence:
         # Synthesize one hub node per dataset attached to at least one KEPT
@@ -497,6 +639,7 @@ class KnowledgeMesh:
         limit: int = DEFAULT_MAX_NODES,
         dataset_visible: Callable[[str], bool] | None = None,
         presence: list[dict[str, Any]] | None = None,
+        collapse_orphans: bool = False,
     ) -> dict[str, Any]:
         """Shaped graph payload; ``dataset_visible`` scopes CONTENT per caller.
 
@@ -596,6 +739,7 @@ class KnowledgeMesh:
                 limit=limit,
                 dataset_map=dataset_map,
                 presence=presence,
+                collapse_orphan_documents=collapse_orphans,
             )
         )
         if dataset_visible is not None:

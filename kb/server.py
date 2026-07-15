@@ -2415,6 +2415,7 @@ async def mesh_graph(request: Request, limit: int | None = None) -> Any:
                 else lambda name: dataset_visible_to(identity, name)
             ),
             presence=mesh_presence_hubs(),
+            collapse_orphans=True,
         )
     return jsonable_encoder({**graph, "limit": effective_limit})
 

@@ -740,3 +740,147 @@ def test_dashes_only_chunk_text_leaves_internal_document_label_unchanged() -> No
     doc = next(node for node in payload["nodes"] if node["id"] == "doc-1")
     assert doc["label"] == INTERNAL_DOC_NAME
     assert "internal_name" not in doc
+
+
+# --- fallback labels when no is_part_of chunk names an internal node ----------
+
+SECOND_INTERNAL_DOC_NAME = "text_" + "b" * 32
+
+
+def test_internal_document_labeled_by_summary_neighbor() -> None:
+    nodes = [
+        ("doc-1", {"name": INTERNAL_DOC_NAME, "type": "TextDocument"}),
+        ("sum-1", {"text": "Weekly release notes\nrest", "type": "TextSummary"}),
+    ]
+    payload = build_graph_payload(nodes, [("sum-1", "doc-1", "made_from", {})], limit=10)
+
+    doc = next(node for node in payload["nodes"] if node["id"] == "doc-1")
+    assert doc["label"] == "Weekly release notes"
+    assert doc["internal_name"] == INTERNAL_DOC_NAME
+
+
+def test_internal_document_labeled_by_raw_data_location_basename() -> None:
+    payload = build_graph_payload(
+        [
+            (
+                "doc-1",
+                {
+                    "name": INTERNAL_DOC_NAME,
+                    "type": "TextDocument",
+                    "raw_data_location": "/data/store/README.md",
+                },
+            )
+        ],
+        [],
+        limit=10,
+    )
+
+    doc = payload["nodes"][0]
+    assert doc["label"] == "README.md"
+    assert doc["internal_name"] == INTERNAL_DOC_NAME
+
+
+def test_internal_raw_data_location_name_is_not_used_as_label() -> None:
+    # A cognee-generated text_<md5>.txt path is no better than the internal name.
+    payload = build_graph_payload(
+        [
+            (
+                "doc-1",
+                {
+                    "name": INTERNAL_DOC_NAME,
+                    "type": "TextDocument",
+                    "raw_data_location": f"/data/store/{INTERNAL_DOC_NAME}.txt",
+                },
+            )
+        ],
+        [],
+        limit=10,
+    )
+
+    doc = payload["nodes"][0]
+    assert doc["label"] == INTERNAL_DOC_NAME
+    assert "internal_name" not in doc
+
+
+def test_internal_document_labeled_by_nodeset_membership() -> None:
+    nodes = [
+        ("doc-1", {"name": INTERNAL_DOC_NAME, "type": "TextDocument"}),
+        ("set-1", {"name": "user_sessions_from_cache", "type": "NodeSet"}),
+    ]
+    payload = build_graph_payload(
+        nodes, [("doc-1", "set-1", "belongs_to_set", {})], limit=10
+    )
+
+    doc = next(node for node in payload["nodes"] if node["id"] == "doc-1")
+    assert doc["label"] == "user_sessions_from_cache"
+    assert doc["internal_name"] == INTERNAL_DOC_NAME
+
+
+def test_summary_fallback_wins_over_nodeset_fallback() -> None:
+    nodes = [
+        ("doc-1", {"name": INTERNAL_DOC_NAME, "type": "TextDocument"}),
+        ("sum-1", {"text": "Concrete summary line", "type": "TextSummary"}),
+        ("set-1", {"name": "user_sessions_from_cache", "type": "NodeSet"}),
+    ]
+    edges = [
+        ("sum-1", "doc-1", "made_from", {}),
+        ("doc-1", "set-1", "belongs_to_set", {}),
+    ]
+    payload = build_graph_payload(nodes, edges, limit=10)
+
+    doc = next(node for node in payload["nodes"] if node["id"] == "doc-1")
+    assert doc["label"] == "Concrete summary line"
+
+
+# --- collapse orphan documents into their NodeSet hub (opt-in) ----------------
+
+
+def test_collapse_orphans_folds_internal_documents_into_nodeset() -> None:
+    nodes = [
+        ("doc-1", {"name": INTERNAL_DOC_NAME, "type": "TextDocument"}),
+        ("doc-2", {"name": SECOND_INTERNAL_DOC_NAME, "type": "TextDocument"}),
+        ("set-1", {"name": "user_sessions_from_cache", "type": "NodeSet"}),
+    ]
+    edges = [
+        ("doc-1", "set-1", "belongs_to_set", {}),
+        ("doc-2", "set-1", "belongs_to_set", {}),
+    ]
+    payload = build_graph_payload(
+        nodes, edges, limit=10, collapse_orphan_documents=True
+    )
+
+    ids = {node["id"] for node in payload["nodes"]}
+    assert ids == {"set-1"}
+    hub = payload["nodes"][0]
+    assert hub["collapsed"] == 2
+    # Collapsed documents take their edges with them.
+    assert payload["edges"] == []
+
+
+def test_orphans_are_not_collapsed_without_opt_in() -> None:
+    nodes = [
+        ("doc-1", {"name": INTERNAL_DOC_NAME, "type": "TextDocument"}),
+        ("set-1", {"name": "user_sessions_from_cache", "type": "NodeSet"}),
+    ]
+    payload = build_graph_payload(
+        nodes, [("doc-1", "set-1", "belongs_to_set", {})], limit=10
+    )
+
+    ids = {node["id"] for node in payload["nodes"]}
+    assert ids == {"doc-1", "set-1"}
+    set_node = next(node for node in payload["nodes"] if node["id"] == "set-1")
+    assert "collapsed" not in set_node
+
+
+def test_named_document_is_never_collapsed() -> None:
+    nodes = [
+        ("doc-1", {"name": "Design Doc", "type": "TextDocument"}),
+        ("set-1", {"name": "user_sessions_from_cache", "type": "NodeSet"}),
+    ]
+    payload = build_graph_payload(
+        nodes, [("doc-1", "set-1", "belongs_to_set", {})], limit=10,
+        collapse_orphan_documents=True,
+    )
+
+    ids = {node["id"] for node in payload["nodes"]}
+    assert ids == {"doc-1", "set-1"}
