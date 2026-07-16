@@ -29,6 +29,13 @@ citadel seat token jane
 `https://citadel-archive-production.up.railway.app/skills/connect` — does the
 same thing if you'd rather click.)
 
+> ⚠️ **Always bind the token to a seat.** On the Access page choose the seat under
+> *Assign to seat*; do **not** leave it on *No seat — service account*. A seat-less
+> token has no default dataset, so the teammate authenticates fine but every
+> search fails with `DatasetNotFoundError` and writes route to the shared org
+> dataset. Confirm before handing it over: the token should show `seat_slug` and
+> `default_dataset: seat:<slug>` in `citadel status --json`.
+
 Hand the token to the teammate over a private channel. It is a secret — treat
 it like a password.
 

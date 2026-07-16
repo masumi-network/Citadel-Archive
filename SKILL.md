@@ -41,6 +41,61 @@ Vault content and `ctdl_` tokens never belong in the public repo. See
 | Roles | `reader`, `writer`, `admin` |
 | Local stdio MCP (dev only) | `uv run python -m kb.mcp_server` |
 
+## Agent Fast Start
+
+Handed a `ctdl_...` token and told to use Citadel? Four commands, headless, no prompts:
+
+```bash
+citadel --version                             # already installed & >= 0.3.0? skip the install
+pipx install citadel-archive                  # install if missing (or `citadel update` if older)
+export CITADEL_MCP_ACCESS_TOKEN=ctdl_...       # your token, intact — no quotes, no whitespace
+citadel status --json                          # VERIFY — prints identity + role, or the exact failure reason
+citadel search "your question" --json          # use it
+```
+
+**Verify-first is not optional.** `citadel status --json` tells you immediately
+whether the token works — parse `checks[]` where `name == "auth"`:
+
+- `auth.ok == true` → you're in; `auth.data` has your `seat_slug`, `role`, `capabilities`.
+- `auth.ok == false` **while** `node.ok == true` → **token problem, not an install or
+  network problem.** Reinstalling won't help — fix the token or its Node. (Only when
+  your *shell* token is stale vs your rc does a `hint` field — and a top-level `hint`
+  — appear with the exact `source ...` fix; a plain missing/rejected token has no
+  `hint`, just the `auth.detail`.)
+- Every read command exits `1` on 401/no-token and `0` on success — safe to branch on.
+
+**Never run bare `citadel onboard` in an agent/CI session** — it's the interactive
+wizard. To wire hooks / `.mcp.json` / capture non-interactively:
+
+```bash
+citadel onboard --non-interactive --token ctdl_...
+```
+
+## How Citadel Works (30-second model)
+
+- **Datasets are the unit of storage.** Your seat has a private dataset
+  `seat:<slug>` (your **Node**); the org shares `masumi-network` (**Central**). A
+  token reads its **allowed datasets** and writes to its **default dataset**. A
+  token with **no seat has no default dataset** → search returns
+  `DatasetNotFoundError` (this is the #1 onboarding failure — mint seat-bound).
+- **Search** (`citadel search` / `citadel_search`) runs semantic + graph retrieval
+  over the datasets your token can see and returns ranked hits. Consume each hit's
+  `text`, `document_name`, and the `_citadel` provenance envelope (`rank`,
+  `dataset`, `content_sha256`, `retrieval.document_drilldown_available`); the rest
+  are Cognee internals. Content is **caller-scoped** (ADR-0009): you see your seat +
+  Central, never another seat's content.
+- **Writing is two-stage.** `citadel ingest` / `citadel_ingest` *stages* a note
+  (`status: session_stored`) — **not searchable yet**. A separate **cognify** pass
+  builds the embeddings + graph edges that make it findable. The CLI `citadel
+  ingest` cognifies inline by default; MCP ingest stages only, so expect 0 hits for
+  a fresh MCP note until the next admin/cron cognify.
+- **Activity vs Mesh.** `citadel activity` = recent events (captures, syncs,
+  searches — a transient projection). The **Knowledge Mesh** = the durable graph.
+  `citadel activity --global` = team **Seat Presence** (contribution counts only,
+  never another seat's content).
+- **Roles.** `reader` (search/read) · `writer` (+ ingest) · `admin` (+ sync,
+  cognify, token management, audit). A seat-bound token inherits its seat's role.
+
 ## Team Onboarding
 
 For Codex-compatible agents, install the public Citadel skill first:
@@ -54,6 +109,21 @@ hosted connector, vault usage, and data-boundary skills. Then provide a
 per-agent `ctdl_...` token. Do not share one token across multiple users or
 agents, and rotate any token that was pasted into chat or logs.
 
+> **Admins — mint a SEAT-BOUND token for a teammate, never a bare one.** A token
+> minted without a seat is a *service account*: it has **no default dataset**, so
+> the teammate's searches fail with `DatasetNotFoundError` and their writes route
+> to the shared org dataset. This looks like "invalid/mis-provisioned token" but
+> the token authenticates fine — it's just seat-less. Always bind to the seat:
+>
+> ```bash
+> citadel seat list                        # is the seat provisioned?
+> citadel seat create <slug> --role writer # new seat + its bound writer token (printed once)
+> citadel seat token <slug>                # OR: re-mint a token for an existing seat
+> ```
+>
+> A correctly seat-bound token reports `seat_slug: <slug>`,
+> `default_dataset: seat:<slug>`, and the seat's role in `citadel status --json`.
+
 The hosted skill index includes content hashes. Agents that load skills from
 URLs can verify `/skills/*` markdown with the `X-Citadel-Skill-SHA256` or
 `X-Citadel-Skill-Integrity` response headers.
@@ -66,39 +136,44 @@ requirements, tool policy metadata, and public/private boundary rules.
 ### Option A — Headless CLI (Recommended for agents)
 
 The `citadel` CLI is the most dependable agent integration: plain HTTPS against
-the Node from any terminal, CI job, hook, or headless runner — no MCP wiring,
-no tool registration to depend on. Install the standalone client (zero-dep base):
+the Node from any terminal, CI job, hook, or headless runner — no MCP wiring, no
+tool registration to depend on. See **Agent Fast Start** above for the 4-command
+setup. Install the standalone client (zero-dep base):
 
 ```bash
 pipx install citadel-archive
-# upgrade: citadel update   (pipx-aware self-update; skips the stale wheel cache)
+citadel --version   # confirm >= 0.3.0  (older? run `citadel update` — pipx-aware self-update)
 # bootstrap installer: curl -fsSL https://raw.githubusercontent.com/masumi-network/Citadel-Archive/main/install.sh | sh
 ```
 
-Auth: export `CITADEL_MCP_ACCESS_TOKEN` (or run `citadel onboard` once — it
-writes the export to your shell rc). Add `--json` to reads for machine output.
+Common commands (add `--json` to any read for machine output; every read exits
+`1` on auth failure, `0` on success):
 
 ```bash
-citadel search "What did I learn about Railway?" --json --top-k 5
-citadel ingest "A useful note" --tag personal --tag research   # writes to your Node
-citadel status --json          # connection · identity · local setup
-citadel activity --json        # recent Node activity — captures, syncs, promotions, searches
+citadel status --json          # connection · identity · role · latency (add --no-search to skip the smoke search)
+citadel search "..." --json --top-k 5    # search the vault
+citadel activity --json        # recent Vault Activity — captures · syncs · promotions · searches
+citadel activity --local       # offline capture receipts (~/.citadel/activity.log) — no server needed
+citadel activity --global      # team Seat Presence board (contribution counts only, never another seat's content)
+citadel activity --watch       # live-tail new activity
+citadel ingest "note" --tag x  # WRITE — two-stage; NOT searchable until an admin cognify (see "Writing to Citadel")
 citadel promotion list --json  # your pending Promotion Approval queue
-citadel onboard            # token (keep-or-replace, verified up front) + hooks +
-                           # .mcp.json + capture roots + checkbox tool selection
-citadel token set          # rotate this machine's seat token (verify-first)
-citadel update             # self-update the CLI (alias: upgrade)
-citadel doctor --fix       # diagnose / repair local setup
-citadel mcp add claude     # add the Citadel MCP server to a client (`citadel mcp list`)
-citadel seat create        # admin: mint a seat token (needs CITADEL_ADMIN_KEY)
-citadel seat token <slug>  # admin: mint a fresh token for an existing seat
+citadel onboard --non-interactive --token ctdl_...   # wire hooks/.mcp.json/capture, no prompts (the agent path)
+citadel doctor --fix           # diagnose / repair local setup
+citadel mcp add claude         # add the Citadel MCP server to a client (`citadel mcp list`)
+citadel seat create            # admin: mint a seat token (needs CITADEL_ADMIN_KEY)
+citadel seat token <slug>      # admin: re-mint a token for an existing seat
 ```
 
 `citadel search` and `citadel ingest` are HTTP-backed against the Node by
-default (no `[server]` extra); `--local` runs the in-process server stack
-instead. **Agents should shell out to these commands rather than depending on
-MCP tool registration** — the CLI works even when a client's MCP session
-carries no tools.
+default (no `[server]` extra); `--local` runs the in-process server stack instead.
+
+**`search --json` payload:** consume each hit's `text`, `document_name`, and the
+`_citadel` envelope (`rank`, `dataset`, `content_sha256`,
+`retrieval.document_drilldown_available`); the remaining fields are Cognee
+internals — ignore them. **Agents should shell out to these commands rather than
+depending on MCP tool registration** — the CLI works even when a client's MCP
+session carries no tools.
 
 ### Option B — MCP Server (in-session tools)
 
@@ -314,8 +389,13 @@ Load the connector skill and follow it end-to-end:
 
 Summary:
 
-1. **Get a token.** Ask the user for their Citadel service-account token (starts with `ctdl_`). Never ask for seed phrases, private keys, or admin keys.
-2. **Choose the role.** Reader for search-only; writer if the agent should also ingest.
+1. **Get a token.** Ask the user for their Citadel token (starts with `ctdl_`). For a
+   person/teammate this must be a **seat-bound** token (admin mints it with
+   `citadel seat token <slug>`, or the dashboard's *Assign to seat* picker) — a
+   seat-less *service-account* token has **no default dataset** and every search
+   fails with `DatasetNotFoundError`. Never ask for seed phrases, private keys, or admin keys.
+2. **Choose the role.** Reader for search-only; writer if the agent should also ingest
+   (a seat-bound token inherits the seat's role — mint the seat as `writer` if it ingests).
 3. **Write the config.** See `docs/mcp/README.md` or `.mcp.json.example` for Claude Code, Codex, and Cursor templates.
 4. **Set `CITADEL_MCP_MAX_INGEST_BYTES`** to limit ingest payload size (default 200KB).
 5. **Gate write/admin tools.** Configure the client to require approval for `citadel_ingest`, `citadel_contribute`, `citadel_record_feedback`, `citadel_run_learning_agent`, `citadel_run_backup_mirror`, and `citadel_improve`.

@@ -1,6 +1,49 @@
 # Citadel Progress
 
-Last updated: 2026-07-14.
+Last updated: 2026-07-16.
+
+## 2026-07-16 — Agent-onboarding hardening: seat-bound tokens, headless skill, `--json` error parity
+
+Triggered by a real teammate incident: an admin minted a **seat-less
+(service-account) token**, handed it to a teammate's Codex agent, and every
+search failed with `DatasetNotFoundError` — misread by the agent as an "invalid
+token." Root cause was provisioning, not auth: a token with no seat has no
+default dataset. Two cold-agent usability passes (fresh subagent driving the
+headless CLI + auditing the skill) drove the fixes below.
+
+**Diagnosis confirmed against code:** tokens default to `kind="service_account"`
+with no `seat_slug` / `default_dataset`; a seat-less token has no dataset to
+search → `DatasetNotFoundError`, and its writes route to the shared org dataset.
+Fix is to mint **seat-bound** (`citadel seat token <slug>` / dashboard *Assign to
+seat*), which inherits the seat's role + `seat:<slug>` default dataset.
+
+- **`SKILL.md` reworked for cold-agent onboarding (fresh-agent audit: "production
+  ready").** New **Agent Fast Start** runbook (`install → set token →
+  status --json verify → search`) and a **How Citadel Works** 30-second model
+  (datasets/Node/Central, caller-scoped search, two-stage ingest/cognify,
+  activity-vs-mesh, roles). Explicit "never run bare `citadel onboard` in an
+  agent/CI session" warning; the auth-failure contract (`auth.ok==false` while
+  `node.ok==true` ⇒ token problem, not install; exit codes); `activity
+  --local/--global/--watch`; and the `search --json` payload shape.
+- **Seat-bound token mandate.** New admin warning in Team Onboarding + fixed
+  "Connecting a New Agent" step 1, which had told admins to hand over a
+  *service-account* token (the exact footgun). Both name the
+  `DatasetNotFoundError` symptom and the correct mint.
+- **CLI `--json` error parity.** `onboard` (no-token + hook-install), `search`,
+  `ingest`, and `capture` printed a plain-text line on the no-token failure path
+  under `--json`, choking agents that pipe the output. All now emit
+  `{"ok": false, "error": ...}`, matching `status`/`promotion`.
+- **`status --json` surfaces the stale-token drift hint** (`checks[].data.hint` +
+  top-level `hint`) so agents parsing `--json` get the `source <rc>` fix the human
+  path already printed.
+- **No-token message no longer nudges bare `onboard`** — now suggests
+  `citadel onboard --non-interactive --token ctdl_...`.
+- **`citadel activity` added to the bare-`citadel` home menu** (under Knowledge).
+
+Verified: ruff clean; 731 tests pass (3 pre-existing `cognee`-extra failures,
+unrelated). `[Unreleased]` CHANGELOG updated. **Follow-up (ops, not code):** the
+teammate still needs an admin to mint her a seat-bound token and revoke the
+tokens leaked in chat.
 
 ## 2026-07-14 — Dashboard graph, mesh read isolation, /mcp fix — SHIPPED + DEPLOYED
 
