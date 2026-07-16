@@ -210,6 +210,28 @@ def _print_auth_hint(command: str, status_code: int) -> None:
         print(f"citadel {command}: hint: {hint}", file=sys.stderr)
 
 
+# Agent-safe wording: lead with the env var, and when we name onboard use the
+# NON-interactive form — a bare `citadel onboard` in an agent/CI session hangs on
+# prompts, so never nudge toward it from a machine-facing error path.
+_NO_TOKEN_MSG = (
+    "no token — set CITADEL_MCP_ACCESS_TOKEN, "
+    "or run `citadel onboard --non-interactive --token ctdl_...`."
+)
+
+
+def _emit_no_token(command: str, *, as_json: bool) -> int:
+    """Uniform no-token error: a JSON object under ``--json``, else plain text.
+
+    Keeps `--json` machine-readable on the failure path (matches `status` /
+    `onboard`) so an agent piping the output never chokes on a plain-text line.
+    """
+    if as_json:
+        _print_json({"ok": False, "error": _NO_TOKEN_MSG})
+    else:
+        print(f"citadel {command}: {_NO_TOKEN_MSG}", file=sys.stderr)
+    return 1
+
+
 def _result_exit(value: Any) -> int:
     """Exit 1 when a result payload carries ``ok: False``; else 0.
 
@@ -230,11 +252,7 @@ async def _ingest(args: argparse.Namespace) -> int:
     base_url = node_base_url(getattr(args, "node_url", None))
     token = capture_token()
     if not token:
-        print(
-            "citadel ingest: no token — set CITADEL_MCP_ACCESS_TOKEN or run `citadel onboard`.",
-            file=sys.stderr,
-        )
-        return 1
+        return _emit_no_token("ingest", as_json=getattr(args, "json", False))
     from kb.status import ingest_node
 
     # Cognify inline (server-side) by default so the note is immediately
@@ -342,11 +360,7 @@ async def _search(args: argparse.Namespace) -> int:
     base_url = node_base_url(getattr(args, "node_url", None))
     token = capture_token()
     if not token:
-        print(
-            "citadel search: no token — set CITADEL_MCP_ACCESS_TOKEN or run `citadel onboard`.",
-            file=sys.stderr,
-        )
-        return 1
+        return _emit_no_token("search", as_json=getattr(args, "json", False))
     from kb.status import search_node
 
     try:
@@ -610,11 +624,7 @@ async def _capture(args: argparse.Namespace) -> int:
 
     token = capture_token()
     if not token:
-        print(
-            "citadel capture: no token — set CITADEL_MCP_ACCESS_TOKEN or run `citadel onboard`.",
-            file=sys.stderr,
-        )
-        return 1
+        return _emit_no_token("capture", as_json=getattr(args, "json", False))
 
     as_json = getattr(args, "json", False)
     results: list[dict[str, Any]] = []
@@ -1191,6 +1201,16 @@ async def _status(args: argparse.Namespace) -> int:
         )
         payload = report.to_dict()
         payload["mesh"] = mesh
+        # Mirror the human path's drift hint onto the JSON surface — agents parse
+        # `--json` and would otherwise miss the most actionable 401 diagnostic.
+        auth_c = next((c for c in payload["checks"] if c.get("name") == "auth"), None)
+        if auth_c is not None and not auth_c.get("ok"):
+            detail = str(auth_c.get("detail", ""))
+            code = 401 if "401" in detail else 403 if "403" in detail else 0
+            hint = _stale_env_hint(code) if code else None
+            if hint:
+                auth_c.setdefault("data", {})["hint"] = hint
+                payload["hint"] = hint
         _print_json(payload)
     else:
         # The search check can take ~15s cold — spin so it doesn't look hung.
@@ -1691,10 +1711,11 @@ async def _onboard(args: argparse.Namespace) -> int:
         args, rc_path, node_url, interactive=interactive, color=color
     )
     if not token:
-        print(
-            "citadel onboard: no token — pass --token or set CITADEL_MCP_ACCESS_TOKEN.",
-            file=sys.stderr,
-        )
+        msg = "no token — pass --token or set CITADEL_MCP_ACCESS_TOKEN."
+        if as_json:
+            _print_json({"ok": False, "error": msg, "token_rejected": token_rejected})
+        else:
+            print(f"citadel onboard: {msg}", file=sys.stderr)
         return 1
 
     steps: list[tuple[str, str]] = []
@@ -1707,7 +1728,10 @@ async def _onboard(args: argparse.Namespace) -> int:
         if not args.no_mcp:
             steps.append(("MCP server (.mcp.json)", merge_mcp_config(repo / ".mcp.json", node_url)))
     except ValueError as exc:
-        print(f"citadel onboard: {exc}", file=sys.stderr)
+        if as_json:
+            _print_json({"ok": False, "error": str(exc)})
+        else:
+            print(f"citadel onboard: {exc}", file=sys.stderr)
         return 1
 
     # A custom --node-url is persisted to the capture config so MCP and capture
@@ -1907,6 +1931,7 @@ _HOME_MENU = (
     ("Knowledge", (
         ("search", "search the Organization Vault"),
         ("ingest", "add a durable note to your Node"),
+        ("activity", "recent vault activity — captures · syncs · searches (--global for the team)"),
     )),
     ("Connect & admin", (
         ("mcp", "add Citadel MCP to Claude · Cursor · Codex · …"),
