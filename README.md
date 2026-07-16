@@ -57,6 +57,7 @@ pipx install citadel-archive          # the `citadel` command (zero-dep client)
 
 citadel onboard                       # token + hooks + MCP + capture roots (idempotent)
 citadel status                        # connection · identity · local setup  (--json for agents)
+citadel activity                      # what your Node is doing — captures, syncs, promotions
 ```
 
 > **No Python yet?** The bootstrap installer checks for Python 3.10+, **asks
@@ -115,6 +116,7 @@ decisions live in [`docs/adr/`](docs/adr/).
 citadel onboard                       # one-command setup
 citadel doctor [--fix]                # diagnose (and repair) your local setup
 citadel status [--json]               # health + identity + local setup + knowledge mesh
+citadel activity [--watch] [--global] # your Node's vault activity (--watch live-tails); --global = team presence board (counts only); --local = offline capture receipts
 citadel capture [--dry-run] [--json]  # push summaries of Approved Capture Roots
 citadel search "what did we decide about the vault?"   # HTTP-backed via your seat (--json)
 citadel ingest "A durable note" --tag decision         # → your seat Node, cognified inline
