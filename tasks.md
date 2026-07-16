@@ -60,6 +60,10 @@ companion of P0-1**.
       dangling refs, near-dup pages (cosine bands), stale claims, "term
       everywhere but no page" → catches bad LLM identity-resolution from P0-1.
       Read-only; feeds promotion dedup. `kb/lint.py`. (All 4 repos + Karpathy.)
+- [ ] **P0-5 · Profile + fix search latency (#50)** *(added 2026-07-16 — the plan
+      does NOT otherwise fix the 6–9s search directly)* — instrument the read path
+      (Q&A cache, remote-embedding round-trips, per-dataset recall), fix the worst
+      offender. Independent of the SK work; measured against P0-2. `kb/cognee_client.py:435-483`.
 
 ### P1 — differentiation depth
 - [ ] **P1-1 · Deterministic link/citation grounding ("no orphan claims")** —
@@ -101,9 +105,34 @@ companion of P0-1**.
       independent of the upstream connector. Fulfils the **Promotion Approval**
       "target: full Source Snapshot back-link". Not a prerequisite of P0-1.
 
+### P1 addition — retrieval mechanics
+- [ ] **P1-6 · Chunking lever** *(added 2026-07-16 — the SK plan does not touch
+      chunking, which stays cognee's job)* — tune the chunker (size / overlap /
+      semantic boundaries) and measure each change against P0-2. Only matters while
+      cognee-CHUNKS is the retrieval path; less relevant if BM25-over-SK wins the
+      P0-3 bake-off. `kb/llm_enrichment.py` (semantic chunking) + cognee config.
+
+### DevEx track (seed — added 2026-07-16, needs its own grill)
+Developer + agent experience. Several items fall out of the P0/P1 work for free;
+this is a seed list, not a scoped plan — grill to prioritize.
+- [ ] **DX-1 · First-class dev commands** — ship `citadel bench` (P0-2),
+      `citadel lint` (P0-4), `citadel reindex` (P0-3) with `--json`, clear output,
+      and CI wiring. These are the tools that make the rest inspectable.
+- [ ] **DX-2 · Local dev harness (`citadel dev`)** — formalize the static+API-proxy
+      trick used to verify the graph this session (serve `kb/static` + a
+      fixture/mock retrieval backend) so frontend + retrieval changes are testable
+      locally without prod. Kills the "cache old app.js / must hit prod" friction.
+- [ ] **DX-3 · Retrieval explain/observability (`citadel explain <query>`)** — show
+      why a result ranked (scores, backend, match-type, source pointer), turning the
+      6–9s black-box search into an inspectable path. Reuses P1-1 confidence/match labels.
+- [ ] **DX-4 · Agent DevEx** — typed memory contracts (P2-2) + confidence/citation
+      labels (P1-1) + clearer MCP tool docstrings/errors, so agent integration is
+      predictable instead of "cognee behind HTTP."
+
 **Do first (grilled order):** P0-2 (bench, baseline cognee) → P1-2 + P0-4 (the
 gates) → P0-1 (durable Structured Knowledge) → P0-3 (interface + rebuild-from-SK;
-optional bake-off if the bench justifies it).
+optional bake-off if the bench justifies it). Latency (P0-5) is independent and
+can run in parallel. DevEx (DX-*) needs its own grill before building.
 
 **Open questions:** (1) is org scale even large enough to justify cognee vs
 synthesized-notes + BM25? (2) synthesis must respect ADR-0009 read scope
