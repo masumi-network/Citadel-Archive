@@ -82,6 +82,14 @@ offers Approved Capture Roots. Get a `ctdl_…` seat token from a vault admin (t
 Access page or `POST /api/access/tokens`). One token per person or agent; rotate
 anything that lands in chat or logs.
 
+> **Admins: mint a seat-bound token, not a bare service account.** On the Access
+> page pick a seat under *Assign to seat* (or run `citadel seat token <slug>`) so
+> the token inherits a `seat:<slug>` default dataset. A seat-less
+> (service-account) token has **no default dataset** — the teammate authenticates
+> fine but every search fails with `DatasetNotFoundError` and writes route to the
+> shared org dataset. A correct token shows `seat_slug` + `default_dataset:
+> seat:<slug>` in `citadel status --json`.
+
 ### Self-host the server
 
 ```bash

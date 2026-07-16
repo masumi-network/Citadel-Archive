@@ -6,6 +6,46 @@ All notable changes to `citadel-archive` are documented here. Format follows
 
 ## [Unreleased]
 
+### Added
+
+- **`citadel activity` now appears on the home-screen menu** (bare `citadel`),
+  under Knowledge alongside `search` and `ingest`.
+
+### Changed
+
+- **`SKILL.md` reworked for cold-agent onboarding (validated by a fresh-agent
+  audit).** Adds an **Agent Fast Start** runbook (`install → set token →
+  status --json verify → search`) and a **How Citadel Works** 30-second model
+  (datasets = `seat:<slug>` Node vs `masumi-network` Central, caller-scoped
+  search, two-stage write/cognify, activity-vs-mesh, roles). Explicit "never run
+  bare `citadel onboard` in an agent/CI session" warning (use
+  `--non-interactive --token`); the auth-failure contract agents rely on
+  (`auth.ok==false` while `node.ok==true` ⇒ token problem, not install; exit
+  codes); the `activity --local/--global/--watch` flags; and the `search --json`
+  payload shape. All documented commands verified against the shipped CLI.
+- **`SKILL.md` now mandates SEAT-BOUND tokens for teammates.** New admin warning
+  (Team Onboarding) plus a fix to "Connecting a New Agent" step 1, which
+  previously told admins to hand over a *service-account* token — a seat-less
+  token has no default dataset, so the teammate's searches fail with
+  `DatasetNotFoundError` and writes route to the shared org dataset. Documents
+  the mint (`citadel seat token <slug>` / dashboard *Assign to seat*) and the
+  `status --json` signature of a correctly-provisioned token.
+
+### Fixed
+
+- **`--json` error paths are now valid JSON across the read/write CLI.**
+  `citadel onboard` (no-token + hook-install), `citadel search`, `citadel ingest`,
+  and `citadel capture` previously printed a plain-text line on the no-token
+  failure path under `--json`, so an agent piping the output choked. They now
+  emit `{"ok": false, "error": ...}`, matching `status`/`promotion`.
+- **No-token error no longer nudges toward the interactive wizard.** The message
+  led with `run \`citadel onboard\`` (bare = interactive, hangs a headless agent);
+  it now reads `citadel onboard --non-interactive --token ctdl_...`.
+- **`citadel status --json` surfaces the stale-token drift hint** (env vs shell
+  rc) on the JSON surface — as `checks[].data.hint` on the `auth` check and a
+  top-level `hint` — so agents (which parse `--json`) get the same actionable
+  401 diagnostic the human path already printed.
+
 ## [0.3.0] — 2026-07-16
 
 ### Added
