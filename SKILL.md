@@ -82,6 +82,7 @@ writes the export to your shell rc). Add `--json` to reads for machine output.
 citadel search "What did I learn about Railway?" --json --top-k 5
 citadel ingest "A useful note" --tag personal --tag research   # writes to your Node
 citadel status --json          # connection · identity · local setup
+citadel activity --json        # recent Node activity — captures, syncs, promotions, searches
 citadel promotion list --json  # your pending Promotion Approval queue
 citadel onboard            # token (keep-or-replace, verified up front) + hooks +
                            # .mcp.json + capture roots + checkbox tool selection
