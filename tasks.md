@@ -112,22 +112,41 @@ companion of P0-1**.
       cognee-CHUNKS is the retrieval path; less relevant if BM25-over-SK wins the
       P0-3 bake-off. `kb/llm_enrichment.py` (semantic chunking) + cognee config.
 
-### DevEx track (seed — added 2026-07-16, needs its own grill)
-Developer + agent experience. Several items fall out of the P0/P1 work for free;
-this is a seed list, not a scoped plan — grill to prioritize.
-- [ ] **DX-1 · First-class dev commands** — ship `citadel bench` (P0-2),
-      `citadel lint` (P0-4), `citadel reindex` (P0-3) with `--json`, clear output,
-      and CI wiring. These are the tools that make the rest inspectable.
+### DevEx track (grilled 2026-07-16 — transparency cluster resolved)
+Problem: after `citadel onboard` it's a black box — the dev can't see what
+captured, synced, promoted, or what the agent read. The server already produces
+**Vault Activity** (+ SSE `/api/mesh/events`), audit events, the promotion queue,
+and Node content; the CLI just never surfaces them. So this is "pipe existing
+Vault Activity to the dev side + make the silent hooks legible," not new telemetry.
+
+**Transparency (show what's under the hood):**
+- [ ] **DX-5 · Capture receipts** — the fail-silent git-push/session hooks
+      additionally write a one-line receipt to a local rolling log and print to
+      stderr under an opt-in verbose flag (`citadel: captured 3 files → your Node`).
+      MUST keep the hook contract: non-blocking, always exit 0, never surface the
+      token. `kb/hooks/sync_push.py`, `kb/hooks/sync_session.py`.
+- [ ] **DX-6 · `citadel activity [--watch]`** — surface **Vault Activity** in the
+      terminal, recent + live-tailed via the existing SSE `/api/mesh/events`:
+      captures, syncs, promotions (queued/approved/rejected for the caller's seat),
+      searches. Own **Node** shows content. `citadel status` also gains a
+      recent-activity block (already fetches `with_recent`).
+- [ ] **DX-7 · `citadel activity --global` — live team presence broadcast** —
+      org-wide ticker of **Seat Presence** ONLY (counts, timing, seat slug), content
+      stripped. Own Node = content; other seats = presence. **Hard isolation line
+      (ADR-0009): may say "seat:alice captured 3 items," never the file/title/text.**
+      Sources the org **Vault Activity** stream + `mesh_presence_hubs`.
+
+**Tooling + agent DX:**
+- [ ] **DX-1 · First-class dev commands** — `citadel bench` (P0-2), `citadel lint`
+      (P0-4), `citadel reindex` (P0-3) with `--json`, clear output, CI wiring.
 - [ ] **DX-2 · Local dev harness (`citadel dev`)** — formalize the static+API-proxy
       trick used to verify the graph this session (serve `kb/static` + a
       fixture/mock retrieval backend) so frontend + retrieval changes are testable
       locally without prod. Kills the "cache old app.js / must hit prod" friction.
-- [ ] **DX-3 · Retrieval explain/observability (`citadel explain <query>`)** — show
-      why a result ranked (scores, backend, match-type, source pointer), turning the
-      6–9s black-box search into an inspectable path. Reuses P1-1 confidence/match labels.
+- [ ] **DX-3 · Retrieval explain (`citadel explain <query>`)** — why a result
+      ranked (scores, backend, match-type, source pointer); reuses P1-1 labels.
 - [ ] **DX-4 · Agent DevEx** — typed memory contracts (P2-2) + confidence/citation
-      labels (P1-1) + clearer MCP tool docstrings/errors, so agent integration is
-      predictable instead of "cognee behind HTTP."
+      labels (P1-1) + clearer MCP tool docstrings/errors.
 
 **Do first (grilled order):** P0-2 (bench, baseline cognee) → P1-2 + P0-4 (the
 gates) → P0-1 (durable Structured Knowledge) → P0-3 (interface + rebuild-from-SK;
