@@ -283,3 +283,98 @@ def test_status_command_unhealthy_exits_one(tmp_path: Path, monkeypatch, capsys)
     rc = asyncio.run(_status(args))
     assert rc == 1
     assert "Not connected" in capsys.readouterr().out
+
+
+# --- Vault Activity feed (citadel activity / DX-6) ---------------------------
+
+
+def test_fetch_events_empty_without_token() -> None:
+    assert status_mod.fetch_events("https://node.example", None) == {}
+
+
+def test_fetch_events_builds_scoped_url_and_parses(monkeypatch) -> None:
+    captured: dict[str, str] = {}
+
+    def fake_open(request: Any, timeout: float | None = None) -> _FakeResp:
+        captured["url"] = request.full_url
+        return _FakeResp(
+            {"events": [{"id": 7, "type": "ingest", "message": "Memory indexed"}], "latest_event_id": 7}
+        )
+
+    monkeypatch.setattr(status_mod._OPENER, "open", fake_open)
+    data = status_mod.fetch_events(
+        "https://node.example", "ctdl_tok", after_id=3, limit=5, event_type="ingest"
+    )
+    assert "/api/knowledge/events?" in captured["url"]
+    assert "limit=5" in captured["url"]
+    assert "after_id=3" in captured["url"]
+    assert "type=ingest" in captured["url"]
+    assert data["latest_event_id"] == 7
+
+
+def test_fetch_events_swallows_errors(monkeypatch) -> None:
+    def boom(request: Any, timeout: float | None = None) -> _FakeResp:
+        raise RuntimeError("network down")
+
+    monkeypatch.setattr(status_mod._OPENER, "open", boom)
+    assert status_mod.fetch_events("https://node.example", "ctdl_tok") == {}
+
+
+def test_render_event_line() -> None:
+    from kb.cli import _render_event
+
+    event = {
+        "id": 5,
+        "type": "ingest",
+        "message": "Memory indexed",
+        "details": {"dataset": "seat:sarthi"},
+        "created_at": "2026-07-16T12:13:16Z",
+    }
+    line = _render_event(event, color=False)
+    assert "12:13" in line
+    assert "ingest" in line
+    assert "Memory indexed" in line
+    assert "seat:sarthi" in line
+
+
+# --- Seat Presence broadcast (citadel activity --global / DX-7) --------------
+
+
+def test_fetch_presence_extracts_only_seat_hubs_no_content(monkeypatch) -> None:
+    # A content node MUST be ignored — fetch_presence may only surface Seat
+    # Presence (slug + count), never another seat's Node content (ADR-0009).
+    graph = {
+        "nodes": [
+            {"id": "doc-1", "label": "Alice private doc", "type": "TextDocument"},
+            {"id": "dataset:seat:alice", "label": "seat:alice", "type": "dataset",
+             "presence": {"documents": 5}},
+            {"id": "dataset:masumi-network", "label": "masumi-network", "type": "dataset",
+             "presence": {"documents": 100}},
+        ]
+    }
+    monkeypatch.setattr(status_mod._OPENER, "open", _route({"/api/mesh/graph": graph}))
+    board = status_mod.fetch_presence("https://node.example", "ctdl_tok")
+
+    labels = {s["seat"] for s in board["seats"]}
+    assert labels == {"seat:alice", "masumi-network"}
+    assert not any("private doc" in str(s).lower() for s in board["seats"])
+    alice = next(s for s in board["seats"] if s["seat"] == "seat:alice")
+    assert alice["documents"] == 5
+
+
+def test_fetch_presence_empty_without_token() -> None:
+    assert status_mod.fetch_presence("https://node.example", None) == {}
+
+
+def test_render_presence_board_sorts_by_count() -> None:
+    from kb.cli import _render_presence
+
+    board = {"seats": [
+        {"seat": "seat:sarthi", "documents": 23},
+        {"seat": "masumi-network", "documents": 1022},
+    ]}
+    out = _render_presence(board, color=False)
+    assert "Team presence" in out
+    assert "seat:sarthi" in out
+    assert "23 docs" in out
+    assert out.index("masumi-network") < out.index("seat:sarthi")

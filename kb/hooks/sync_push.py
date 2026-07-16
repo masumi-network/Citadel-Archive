@@ -374,6 +374,11 @@ def _sync_one(
         if tag not in tags:
             tags.append(tag)
     post_ingest(_base_url(), token, note, tags)
+    # DX-5 receipt: make the silent capture visible. write_receipt never raises,
+    # and any import/call failure is caught by run()'s fail-silent except.
+    from kb.hooks.receipt import write_receipt
+
+    write_receipt("push", f"captured commit {sha[:7]} on {branch} → your Node")
 
 
 def run(stdin: Any, remote_name: str = "") -> int:
