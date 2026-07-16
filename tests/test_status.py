@@ -335,3 +335,46 @@ def test_render_event_line() -> None:
     assert "ingest" in line
     assert "Memory indexed" in line
     assert "seat:sarthi" in line
+
+
+# --- Seat Presence broadcast (citadel activity --global / DX-7) --------------
+
+
+def test_fetch_presence_extracts_only_seat_hubs_no_content(monkeypatch) -> None:
+    # A content node MUST be ignored — fetch_presence may only surface Seat
+    # Presence (slug + count), never another seat's Node content (ADR-0009).
+    graph = {
+        "nodes": [
+            {"id": "doc-1", "label": "Alice private doc", "type": "TextDocument"},
+            {"id": "dataset:seat:alice", "label": "seat:alice", "type": "dataset",
+             "presence": {"documents": 5}},
+            {"id": "dataset:masumi-network", "label": "masumi-network", "type": "dataset",
+             "presence": {"documents": 100}},
+        ]
+    }
+    monkeypatch.setattr(status_mod._OPENER, "open", _route({"/api/mesh/graph": graph}))
+    board = status_mod.fetch_presence("https://node.example", "ctdl_tok")
+
+    labels = {s["seat"] for s in board["seats"]}
+    assert labels == {"seat:alice", "masumi-network"}
+    assert not any("private doc" in str(s).lower() for s in board["seats"])
+    alice = next(s for s in board["seats"] if s["seat"] == "seat:alice")
+    assert alice["documents"] == 5
+
+
+def test_fetch_presence_empty_without_token() -> None:
+    assert status_mod.fetch_presence("https://node.example", None) == {}
+
+
+def test_render_presence_board_sorts_by_count() -> None:
+    from kb.cli import _render_presence
+
+    board = {"seats": [
+        {"seat": "seat:sarthi", "documents": 23},
+        {"seat": "masumi-network", "documents": 1022},
+    ]}
+    out = _render_presence(board, color=False)
+    assert "Team presence" in out
+    assert "seat:sarthi" in out
+    assert "23 docs" in out
+    assert out.index("masumi-network") < out.index("seat:sarthi")

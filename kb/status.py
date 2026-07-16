@@ -309,6 +309,39 @@ def fetch_events(
     return data if isinstance(data, dict) else {}
 
 
+def fetch_presence(base_url: str, token: str | None, *, timeout: float = _TIMEOUT) -> dict[str, Any]:
+    """Best-effort org **Seat Presence** board (ADR-0009): every seat's slug and
+    contribution count, org-visible by design.
+
+    Reads ONLY the ``dataset``-type presence hubs from ``/api/mesh/graph`` — seat
+    slug + ``presence.documents`` — and ignores every content node, so this can
+    never surface another seat's **Node** content. ``limit=1`` keeps content
+    shaping minimal; presence hubs are appended regardless of the cap. ``{}`` on
+    any error / missing token.
+    """
+    if not token:
+        return {}
+    try:
+        data = _request(
+            "GET", f"{base_url.rstrip('/')}/api/mesh/graph?limit=1", token=token, timeout=timeout
+        )
+    except Exception:
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    seats: list[dict[str, Any]] = []
+    for node in data.get("nodes") or []:
+        if not isinstance(node, dict) or node.get("type") != "dataset":
+            continue
+        label = str(node.get("label") or node.get("dataset") or "").strip()
+        if not label:
+            continue
+        presence = node.get("presence") if isinstance(node.get("presence"), dict) else {}
+        docs = presence.get("documents")
+        seats.append({"seat": label, "documents": docs if isinstance(docs, int) else None})
+    return {"seats": seats}
+
+
 def check_local_setup(repo: Path, config_path: Path | None = None) -> list[Check]:
     checks: list[Check] = []
     checks.append(

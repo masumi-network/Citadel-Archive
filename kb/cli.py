@@ -77,7 +77,14 @@ from kb.promotion_client import (
     reject_pending,
     run_promotion,
 )
-from kb.status import fetch_events, fetch_mesh, gather_status, render_text, render_verdict
+from kb.status import (
+    fetch_events,
+    fetch_mesh,
+    fetch_presence,
+    gather_status,
+    render_text,
+    render_verdict,
+)
 
 
 def _print_json(value: Any) -> None:
@@ -1279,11 +1286,48 @@ def _activity_local(limit: int) -> int:
     return 0
 
 
+def _render_presence(board: dict[str, Any], color: bool) -> str:
+    """The team-presence board: one row per seat, `seat:<slug>  <n> docs`.
+
+    Renders only Seat Presence (slug + contribution count) — no Node content.
+    """
+    seats = [s for s in (board.get("seats") or []) if isinstance(s, dict)]
+    if not seats:
+        return paint("No seats visible.", "dim", enable=color)
+    # Central and higher-contribution seats first; slug is the only identity.
+    seats.sort(key=lambda s: (-(s.get("documents") or 0), str(s.get("seat") or "")))
+    width = max((len(str(s.get("seat") or "")) for s in seats), default=0)
+    rows = [paint("Team presence", "bold", enable=color)]
+    for seat in seats:
+        slug = str(seat.get("seat") or "")
+        docs = seat.get("documents")
+        count = f"{docs} docs" if isinstance(docs, int) else "—"
+        rows.append(f"  {slug.ljust(width)}  {paint(count, 'dim', enable=color)}")
+    return "\n".join(rows)
+
+
+async def _activity_global(node_url: str, token: str | None, color: bool, watch: bool) -> int:
+    """Live team-presence broadcast — Seat Presence only (ADR-0009), no content."""
+    board = await asyncio.to_thread(fetch_presence, node_url, token)
+    print(_render_presence(board, color))
+    if not token and not (board.get("seats")):
+        print(paint("  (no token configured — run `citadel onboard`)", "yellow", enable=color))
+    if not watch:
+        return 0
+    print(paint("— watching team presence (Ctrl-C to stop) —", "dim", enable=color))
+    while True:
+        await asyncio.sleep(10)  # gentle: /api/mesh/graph is TTL-cached + latency-watched
+        board = await asyncio.to_thread(fetch_presence, node_url, token)
+        print()
+        print(_render_presence(board, color))
+
+
 async def _activity(args: argparse.Namespace) -> int:
     """Show the caller's own Node Vault Activity — recent, or live-tailed (--watch).
 
     Own-Node events carry content; the server scopes the feed per caller
-    (ADR-0009), so this never shows another seat's Node content.
+    (ADR-0009), so this never shows another seat's Node content. ``--global``
+    switches to the org Seat Presence board (counts only, no content).
     """
     limit = max(1, min(int(args.limit or 20), 160))
     if args.local:
@@ -1296,6 +1340,9 @@ async def _activity(args: argparse.Namespace) -> int:
         node_url = args.node_url or DEFAULT_NODE_URL
     token = capture_token() or None
     use_color = supports_color()
+
+    if getattr(args, "global_broadcast", False):
+        return await _activity_global(node_url, token, use_color, args.watch)
 
     data = await asyncio.to_thread(fetch_events, node_url, token, limit=limit, event_type=args.type)
     if args.json and not args.watch:
@@ -2044,6 +2091,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="Show your Node's vault activity — captures, syncs, promotions, searches",
     )
     activity.add_argument("--watch", action="store_true", help="Live-tail new activity (Ctrl-C to stop)")
+    activity.add_argument(
+        "--global",
+        dest="global_broadcast",
+        action="store_true",
+        help="Live team presence — every seat's contribution count (Seat Presence only, no content)",
+    )
     activity.add_argument(
         "--local",
         action="store_true",
