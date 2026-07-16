@@ -13,7 +13,7 @@ Raw company material that may be used to produce structured knowledge.
 _Avoid_: knowledge, truth, memory
 
 **Source Snapshot**:
-The retained evidence or source pointer used to reproduce what the **Organization Vault** learned from **Source Material**.
+The retained evidence or source pointer used to reproduce what the **Organization Vault** learned from **Source Material**. **Structured Knowledge** source links resolve to a **Source Snapshot**. Two forms: the **v1 minimal form** is a stable source pointer (connector id + URL + checked-at, e.g. a GitHub digest id, a **Node** capture id, a Linear issue) that already exists on the ingest paths; the **target full form** additionally retains the source evidence for reprocessing (a later plan). A page's *cross-references* to other **Structured Knowledge** resolve against the page set, not against a **Source Snapshot**.
 _Avoid_: permanent dump, backup, index record
 
 **Vault Backup Mirror**:
@@ -159,6 +159,10 @@ _Avoid_: secret dump, raw match, vague warning
 **Knowledge Conflict**:
 A visible disagreement between pieces of **Structured Knowledge** or their supporting **Source Snapshots**. Because **Structured Knowledge** is maintained as canonical per-topic knowledge revised in place, a revision that *contradicts* the existing page raises a **Knowledge Conflict** and keeps both sides visible instead of silently overwriting; a non-contradicting revision just updates the page. Prior versions stay recoverable through the **Vault Backup Mirror**.
 _Avoid_: merge, overwrite, silent correction
+
+**Knowledge Maturity**:
+How settled a piece of **Structured Knowledge** is, surfaced to readers as a trust signal — `seed` (a single source, or an open **Knowledge Conflict**), `growing` (a few corroborating sources), `stable` (multiple corroborating sources, no open conflict). It reflects corroboration and contradiction state; it is **not** a **Promotion** gate — **Promotion** keeps its own gates (secret scan, org reference, relevance), and **Knowledge Maturity** simply tells a reader how corroborated a **Central** answer is.
+_Avoid_: approval status, promotion gate, workflow stage, review state
 
 ## Relationships
 
@@ -313,3 +317,4 @@ mesh, including per-item drill-down.
 - "who gates promotion to Central?" (2026-06-27 grill); resolved: known masumi-org work auto-promotes after secret scan + LLM; **New Org Project** requires **Vault Member** **Promotion Approval** (admin may delegate with audit); admin governs org repos and operator cron, not every member note.
 - "universal org view" (2026-07-13 grill) was being read as every seat's content on one canvas; resolved: universal means every seat's *presence* (hub, activity, counts) is visible to all **Vault Members**, while **Structured Knowledge** content stays scoped to **Central** plus the caller's own **Node** — the **Knowledge Mesh** view and its drill-down enforce the same read isolation as search (ADR-0003).
 - "who owns the source of truth — the retrieval engine or the vault?" (2026-07-15 grill) was inverted in the implementation: the retrieval engine held the only durable copy. Resolved: **Structured Knowledge** is the durable, first-class source of truth the vault owns, held in the runtime vault and **synced to the Vault Backup Mirror** for recovery; the **Knowledge Index** and **Knowledge Mesh** are rebuildable projections produced by a replaceable retrieval engine. This is per-dataset — each **Node** and **Central** own their own **Structured Knowledge**, so read isolation (ADR-0009) holds by construction.
+- "what do a Structured Knowledge page's source links point to?" (2026-07-15 grill); resolved: they resolve to a **Source Snapshot**, whose **v1 form is the stable connector pointer** that already exists on ingest (GitHub digest id, **Node** capture id, Linear issue) — no new evidence store is a prerequisite of durable **Structured Knowledge**. Retained-evidence **Source Snapshot** (the full form) is deferred to the future plan. A page's cross-references to other pages resolve against the page set, not a **Source Snapshot**.

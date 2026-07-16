@@ -63,18 +63,28 @@ companion of P0-1**.
 
 ### P1 — differentiation depth
 - [ ] **P1-1 · Deterministic link/citation grounding ("no orphan claims")** —
-      validate every ref in a synthesized note / MCP answer against real node
-      IDs, strip/downgrade the rest; attach `[confidence]` + match-type. Hard
-      anti-hallucination guarantee; encodes fail-closed/no-oracle. (echowiki, Link, obsidian.)
+      two link kinds per **Structured Knowledge** page: *cross-references* to other
+      pages (grounded against the page set) and *source links* (grounded against a
+      **Source Snapshot** pointer). Strip/downgrade anything unresolvable; attach
+      `[confidence]` + match-type. Hard anti-hallucination guarantee; encodes
+      fail-closed/no-oracle. (echowiki, Link, obsidian.)
 - [ ] **P1-2 · Claim-level contradiction ledger** *(PREREQUISITE of P0-1 —
       update-in-place is unsafe without it)* — finish `kb/conflicts.py` (today
       title-overlap-only vs 2 JSON files): embedding-candidate + cheap LLM "do
       these disagree?", record both sides as a **Knowledge Conflict**, never
       overwrite; gates the in-place revision at promotion.
-- [ ] **P1-3 · Note maturity lifecycle gating promotion** — `status: seed→growing
-      →stable`; promotion to Central requires `stable`. Explainable criterion. (obsidian.)
-- [ ] **P1-4 · Human-readable `log.md` for Central** — append-only source-linked
-      narrative of how Central evolved; cheap layer over audit events. (Karpathy/llm-wiki/Link.)
+- [ ] **P1-3 · Knowledge Maturity signal** *(reframed 2026-07-15 — NOT a promotion
+      gate)* — `seed→growing→stable` as a corroboration/trust attribute on **Central**
+      **Structured Knowledge** pages (seed = 1 source or open conflict; stable =
+      multiple corroborating sources, no open conflict). Composed with P1-1
+      (confidence labels) + P1-2 (open conflict pins below `stable`); Promotion keeps
+      its own gates. (obsidian, reframed.)
+- [ ] **P1-4 · Legible history of the Structured Knowledge store** *(reframed
+      2026-07-15 — no separate `log.md`)* — since SK is git-backed via the **Vault
+      Backup Mirror** sync, its version history IS the append-only evolution log.
+      Just make it legible: structured, source-linked change notes per synthesis
+      (`synthesize <page> from <source>`, `conflict raised on <page>`) so `git log`
+      over the SK store reads as the narrative. (Karpathy/llm-wiki/Link, reframed.)
 - [ ] **P1-5 · Graph-aware retrieval, gated by P0-2** — only after the bench:
       try `GRAPH_COMPLETION`/`AUTO` + `build_global_context_index`, keep only if it
       beats the benchmark. `kb/config.py`, `kb/cognee_client.py`. (ADR-0005 §5, still off.)
@@ -85,6 +95,11 @@ companion of P0-1**.
       about X" (confidence + citations + conflict flags) as an MCP contract distinct from raw search.
 - [ ] **P2-3 · Query-results-as-knowledge loop in evolve** — high-feedback answers
       synthesize back into canonical notes. `scripts/run_self_improve.py`, `kb/self_improve.py`.
+- [ ] **P2-4 · Full-form Source Snapshot (retained evidence)** *(future plan —
+      grilled 2026-07-15)* — beyond the v1 stable-pointer form, retain the source
+      evidence itself so **Structured Knowledge** can be reproduced/reprocessed
+      independent of the upstream connector. Fulfils the **Promotion Approval**
+      "target: full Source Snapshot back-link". Not a prerequisite of P0-1.
 
 **Do first (grilled order):** P0-2 (bench, baseline cognee) → P1-2 + P0-4 (the
 gates) → P0-1 (durable Structured Knowledge) → P0-3 (interface + rebuild-from-SK;
