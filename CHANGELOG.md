@@ -6,8 +6,25 @@ All notable changes to `citadel-archive` are documented here. Format follows
 
 ## [Unreleased]
 
+## [0.3.0] — 2026-07-16
+
 ### Added
 
+- **Overview Knowledge Mesh reads as a concept map.** The default overview
+  aggregates the raw document/chunk cloud into per-hub counts and renders the
+  concept skeleton (dataset/seat hubs + entity types + well-connected entities);
+  the force layout fits on settle and spreads legibly instead of collapsing into
+  a hairball. Cognee-internal `text_<md5>` document nodes gain a fallback label
+  (nearest summary → source basename → NodeSet name), unnamed orphan
+  session-cache documents collapse into their NodeSet hub with a count, and the
+  summariser's "This chunk is about …" boilerplate is stripped from labels.
+- **`citadel activity` — dev-side visibility into the vault.** A new CLI command
+  shows your Node's **Vault Activity** (captures, syncs, promotions, searches):
+  `--watch` live-tails, `--local` shows offline capture receipts, `--global`
+  shows a team **Seat Presence** board (every seat's contribution count —
+  presence only, never another seat's Node content), `--json` for agents. The
+  fail-silent git-push / SessionEnd hooks now leave a one-line capture receipt in
+  `~/.citadel/activity.log` (and stderr when `CITADEL_HOOK_VERBOSE` is set).
 - **Document drill-down in the Knowledge Mesh.** Clicking a graph node fetches
   and renders its document text in the inspector; textless `TextDocument` nodes
   are assembled from their linked `DocumentChunk` neighbors.
