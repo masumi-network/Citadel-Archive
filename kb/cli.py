@@ -77,7 +77,7 @@ from kb.promotion_client import (
     reject_pending,
     run_promotion,
 )
-from kb.status import fetch_mesh, gather_status, render_text, render_verdict
+from kb.status import fetch_events, fetch_mesh, gather_status, render_text, render_verdict
 
 
 def _print_json(value: Any) -> None:
@@ -1240,6 +1240,97 @@ def _render_mesh(mesh: dict[str, Any], color: bool) -> str:
     )
 
 
+def _render_event(event: dict[str, Any], color: bool) -> str:
+    """One Vault Activity line: `HH:MM  <type>  <message>  (dataset)`."""
+    created = str(event.get("created_at") or "")
+    stamp = created[11:16] if len(created) >= 16 else created[:5]
+    etype = str(event.get("type") or "event")
+    message = str(event.get("message") or "").strip()
+    details = event.get("details") if isinstance(event.get("details"), dict) else {}
+    timeline = event.get("timeline") if isinstance(event.get("timeline"), dict) else {}
+    dataset = details.get("dataset") or timeline.get("dataset") or ""
+    line = (
+        paint(f"{stamp:>5}", "dim", enable=color)
+        + "  "
+        + paint(f"{etype:<12}", "bold", enable=color)
+        + " "
+        + message
+    )
+    if dataset:
+        line += paint(f"  ({dataset})", "dim", enable=color)
+    return line
+
+
+def _activity_local(limit: int) -> int:
+    """Print the tail of the local capture-receipt log (offline, no server)."""
+    from kb.hooks.receipt import activity_log_path
+
+    path = activity_log_path()
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        print("No local capture receipts yet — capture something (git push / session close) first.")
+        return 0
+    lines = [line for line in text.splitlines() if line.strip()]
+    for line in lines[-limit:]:
+        print(line)
+    if not lines:
+        print("No local capture receipts yet.")
+    return 0
+
+
+async def _activity(args: argparse.Namespace) -> int:
+    """Show the caller's own Node Vault Activity — recent, or live-tailed (--watch).
+
+    Own-Node events carry content; the server scopes the feed per caller
+    (ADR-0009), so this never shows another seat's Node content.
+    """
+    limit = max(1, min(int(args.limit or 20), 160))
+    if args.local:
+        return _activity_local(limit)
+
+    config_path = Path(args.config).expanduser() if args.config else capture_config_path()
+    try:
+        node_url = args.node_url or load_capture_config(config_path).node_url
+    except ValueError:
+        node_url = args.node_url or DEFAULT_NODE_URL
+    token = capture_token() or None
+    use_color = supports_color()
+
+    data = await asyncio.to_thread(fetch_events, node_url, token, limit=limit, event_type=args.type)
+    if args.json and not args.watch:
+        _print_json(data)
+        return 0
+
+    events = list(reversed(data.get("events") or []))  # oldest -> newest reads like a growing feed
+    for event in events:
+        print(_render_event(event, use_color))
+    last_id = data.get("latest_event_id")
+    if last_id is None:
+        last_id = events[-1]["id"] if events else 0
+
+    if not args.watch:
+        if not events:
+            print(paint("No recent activity.", "dim", enable=use_color))
+            if not token:
+                print(paint("  (no token configured — run `citadel onboard`)", "yellow", enable=use_color))
+        return 0
+
+    print(paint("— watching your Node (Ctrl-C to stop) —", "dim", enable=use_color))
+    while True:
+        await asyncio.sleep(3)
+        data = await asyncio.to_thread(
+            fetch_events, node_url, token, after_id=last_id, limit=160, event_type=args.type
+        )
+        fresh = list(reversed(data.get("events") or []))
+        for event in fresh:
+            print(_render_event(event, use_color))
+        if fresh:
+            last_id = fresh[-1]["id"]
+        elif data.get("latest_event_id") is not None:
+            last_id = max(last_id, data["latest_event_id"])
+
+
 def _mcp_node_url(path: Path) -> str | None:
     """The Node base URL wired into .mcp.json (citadel server), sans /mcp/ suffix."""
     try:
@@ -1947,6 +2038,23 @@ def build_parser() -> argparse.ArgumentParser:
     status.add_argument("--no-search", action="store_true", help="Skip the search smoke check")
     status.add_argument("--no-recent", action="store_true", help="Skip recent-activity fetch")
     status.set_defaults(handler=_status)
+
+    activity = subcommands.add_parser(
+        "activity",
+        help="Show your Node's vault activity — captures, syncs, promotions, searches",
+    )
+    activity.add_argument("--watch", action="store_true", help="Live-tail new activity (Ctrl-C to stop)")
+    activity.add_argument(
+        "--local",
+        action="store_true",
+        help="Show local capture receipts from ~/.citadel/activity.log (offline, no server)",
+    )
+    activity.add_argument("--limit", type=int, default=20, help="How many recent events to show (default 20)")
+    activity.add_argument("--type", help="Filter by event type (ingest, search, promotion, github_sync, …)")
+    activity.add_argument("--json", action="store_true", help="Machine-readable output")
+    activity.add_argument("--node-url", help="Override Node URL (default: from config)")
+    activity.add_argument("--config", help="Override capture config path")
+    activity.set_defaults(handler=_activity)
 
     doctor = subcommands.add_parser(
         "doctor",

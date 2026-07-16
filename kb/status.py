@@ -17,6 +17,7 @@ import os
 import shutil
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass, field
@@ -275,6 +276,34 @@ def fetch_mesh(base_url: str, token: str | None, *, timeout: float = _TIMEOUT) -
         return {}
     try:
         data = _request("GET", f"{base_url.rstrip('/')}/api/mesh", token=token, timeout=timeout)
+    except Exception:
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def fetch_events(
+    base_url: str,
+    token: str | None,
+    *,
+    after_id: int | None = None,
+    limit: int = 20,
+    event_type: str | None = None,
+    timeout: float = _TIMEOUT,
+) -> dict[str, Any]:
+    """Best-effort GET /api/knowledge/events (the caller-scoped Vault Activity
+    timeline). Returns ``{}`` on any error / missing token. ``after_id`` resumes
+    after the last seen event id (for --watch polling)."""
+    if not token:
+        return {}
+    query = f"limit={max(1, min(int(limit), 160))}"
+    if after_id is not None:
+        query += f"&after_id={int(after_id)}"
+    if event_type:
+        query += f"&type={urllib.parse.quote(event_type)}"
+    try:
+        data = _request(
+            "GET", f"{base_url.rstrip('/')}/api/knowledge/events?{query}", token=token, timeout=timeout
+        )
     except Exception:
         return {}
     return data if isinstance(data, dict) else {}

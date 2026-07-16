@@ -283,3 +283,55 @@ def test_status_command_unhealthy_exits_one(tmp_path: Path, monkeypatch, capsys)
     rc = asyncio.run(_status(args))
     assert rc == 1
     assert "Not connected" in capsys.readouterr().out
+
+
+# --- Vault Activity feed (citadel activity / DX-6) ---------------------------
+
+
+def test_fetch_events_empty_without_token() -> None:
+    assert status_mod.fetch_events("https://node.example", None) == {}
+
+
+def test_fetch_events_builds_scoped_url_and_parses(monkeypatch) -> None:
+    captured: dict[str, str] = {}
+
+    def fake_open(request: Any, timeout: float | None = None) -> _FakeResp:
+        captured["url"] = request.full_url
+        return _FakeResp(
+            {"events": [{"id": 7, "type": "ingest", "message": "Memory indexed"}], "latest_event_id": 7}
+        )
+
+    monkeypatch.setattr(status_mod._OPENER, "open", fake_open)
+    data = status_mod.fetch_events(
+        "https://node.example", "ctdl_tok", after_id=3, limit=5, event_type="ingest"
+    )
+    assert "/api/knowledge/events?" in captured["url"]
+    assert "limit=5" in captured["url"]
+    assert "after_id=3" in captured["url"]
+    assert "type=ingest" in captured["url"]
+    assert data["latest_event_id"] == 7
+
+
+def test_fetch_events_swallows_errors(monkeypatch) -> None:
+    def boom(request: Any, timeout: float | None = None) -> _FakeResp:
+        raise RuntimeError("network down")
+
+    monkeypatch.setattr(status_mod._OPENER, "open", boom)
+    assert status_mod.fetch_events("https://node.example", "ctdl_tok") == {}
+
+
+def test_render_event_line() -> None:
+    from kb.cli import _render_event
+
+    event = {
+        "id": 5,
+        "type": "ingest",
+        "message": "Memory indexed",
+        "details": {"dataset": "seat:sarthi"},
+        "created_at": "2026-07-16T12:13:16Z",
+    }
+    line = _render_event(event, color=False)
+    assert "12:13" in line
+    assert "ingest" in line
+    assert "Memory indexed" in line
+    assert "seat:sarthi" in line

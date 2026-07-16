@@ -351,6 +351,11 @@ def run(stream_in: Any) -> int:
         tags = build_tags(cwd if isinstance(cwd, str) else "")
 
         post_ingest(_base_url(), token, note, tags)
+        # DX-5 receipt: make the silent session capture visible (never raises,
+        # never surfaces the token; any failure is caught below).
+        from kb.hooks.receipt import write_receipt
+
+        write_receipt("session", "session captured → your Node")
     except Exception:
         # Fail-silent: never block session close, never surface the token.
         return 0
