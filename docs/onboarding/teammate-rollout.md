@@ -168,6 +168,23 @@ citadel status        # connection + identity + local setup + knowledge mesh (ex
 health, your seat + role, and whether your hooks/MCP/capture roots are wired up.
 Agents run `citadel status --json` to check connectivity programmatically.
 
+### See what Citadel is doing
+
+Capture is silent by default, so once you're onboarded, `citadel activity` shows
+what your Node is actually doing:
+
+```bash
+citadel activity              # recent captures, syncs, promotions, searches on your Node
+citadel activity --watch      # live-tail as it happens
+citadel activity --global     # team presence board — every seat's contribution count
+citadel activity --local      # offline capture receipts (works with no server)
+```
+
+Every `git push` / session close now leaves a one-line receipt in
+`~/.citadel/activity.log` (set `CITADEL_HOOK_VERBOSE=1` to also echo it to your
+terminal). `--global` shows **Seat Presence only** — counts and slugs, never
+another seat's Node content.
+
 You should get a short note back sourced from your node / Central. If you get an
 auth error, your token isn't in the environment of the client that's running
 (restart the client so it picks up the new env var).
