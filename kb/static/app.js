@@ -366,6 +366,69 @@ function rebuildNeighborLinks(nodes, links) {
   return byId;
 }
 
+// Overview default for Knowledge Mesh: fold the raw document/chunk cloud into
+// per-hub counts so the graph reads as a concept map — dataset/seat hubs, the
+// entity TYPES (EntityType/NodeSet), and the well-connected entities that tie
+// them together — instead of a 200-node hairball. Documents attributed to a
+// dataset become a "· N docs" count on that hub; sparsely-linked entities and
+// the document/chunk nodes themselves drop out. Degree is measured on the full
+// link set before anything is removed.
+const AGG_MIN_ENTITY_DEGREE = 6;
+
+function aggregateKnowledgeMesh(nodes, links) {
+  const degree = new Map();
+  for (const link of links) {
+    degree.set(link.source, (degree.get(link.source) || 0) + 1);
+    degree.set(link.target, (degree.get(link.target) || 0) + 1);
+  }
+  const rawType = (node) => String(node.type || "").toLowerCase();
+  const isConcept = (node) =>
+    rawType(node).includes("entitytype") || rawType(node).includes("nodeset");
+  const isDocLike = (node) => {
+    const kind = nodeKind(node);
+    return kind === "document" || kind === "chunk";
+  };
+  // Cognee TextSummary nodes are per-chunk summaries ("This chunk is about …"),
+  // not concepts — drop them from the concept map so labels aren't all boilerplate.
+  const isSummary = (node) => rawType(node).includes("summary");
+  const keep = new Set();
+  for (const node of nodes) {
+    if (node.type === "dataset" || isConcept(node)) {
+      keep.add(node.id);
+    } else if (
+      !isDocLike(node) &&
+      !isSummary(node) &&
+      (degree.get(node.id) || 0) >= AGG_MIN_ENTITY_DEGREE
+    ) {
+      keep.add(node.id);
+    }
+  }
+  // Fold each dropped, document-like node into its dataset hub's count.
+  const byId = new Map(nodes.map((node) => [node.id, node]));
+  const folded = new Map();
+  for (const link of links) {
+    if ((link.relationship || link.label) !== "belongs_to") continue;
+    const a = byId.get(link.source);
+    const b = byId.get(link.target);
+    const hub = a && a.type === "dataset" ? a : b && b.type === "dataset" ? b : null;
+    const other = hub === a ? b : a;
+    if (hub && other && !keep.has(other.id) && isDocLike(other)) {
+      folded.set(hub.id, (folded.get(hub.id) || 0) + 1);
+    }
+  }
+  const keptNodes = nodes
+    .filter((node) => keep.has(node.id))
+    .map((node) => {
+      const count = folded.get(node.id);
+      if (!count) return node;
+      return { ...node, docCount: count, label: `${node.label} · ${count} docs` };
+    });
+  const keptLinks = links.filter(
+    (link) => keep.has(link.source) && keep.has(link.target),
+  );
+  return { nodes: keptNodes, links: keptLinks };
+}
+
 // Map the active {nodes,edges} into force-graph graphData and precompute
 // node.neighbors + node.links once for fast hover highlighting.
 function buildForceGraphData() {
@@ -397,6 +460,11 @@ function buildForceGraphData() {
       label: edge.label || edge.relationship,
       relationship: edge.relationship || edge.label,
     });
+  }
+  // Knowledge Mesh overview aggregates to a readable concept map by default;
+  // the raw graph (state.realGraph) stays untouched for inspection/search.
+  if (state.graphMode === "knowledge" && state.graphAggregate !== false) {
+    ({ nodes, links } = aggregateKnowledgeMesh(nodes, links));
   }
   // resolveCentralId's highest-degree fallback reads node.neighbors, which is
   // only populated by rebuildNeighborLinks — so resolve AFTER the first pass,
@@ -1410,12 +1478,25 @@ function initializeGraph() {
     .cooldownTicks(120)
     .onNodeHover(handleNodeHover)
     .onNodeClick(handleNodeClick)
-    .onBackgroundClick(() => selectNode(null));
+    .onBackgroundClick(() => selectNode(null))
+    // Re-frame once the simulation settles, not on a fixed timer: the layout is
+    // still collapsing at 400ms, so an early one-shot zoomToFit left the graph a
+    // tiny blob in an empty canvas. needsFit is re-armed on every data load.
+    .onEngineStop(() => {
+      if (graph.instance && graph.needsFit) {
+        graph.needsFit = false;
+        graph.instance.zoomToFit(500, 60);
+      }
+    });
 
-  // Stronger centre pull keeps the pinned Central hub framed and the cloud tight.
+  // Spread the cloud so structure is legible instead of a dense ball: stronger
+  // charge repulsion plus a real link distance (defaults clump ~200 nodes onto
+  // the pinned Central hub).
   if (typeof graph.instance.d3Force === "function") {
     const charge = graph.instance.d3Force("charge");
-    if (charge && typeof charge.strength === "function") charge.strength(-120);
+    if (charge && typeof charge.strength === "function") charge.strength(-300);
+    const link = graph.instance.d3Force("link");
+    if (link && typeof link.distance === "function") link.distance(58);
   }
 }
 
@@ -1449,8 +1530,18 @@ function linkWidth(link) {
 // nodes appear only past the zoom threshold so the default view stays clean.
 function drawNodeLabel(node, ctx, globalScale) {
   const isCentral = node.id === graph.centralId;
-  if (!isCentral && globalScale < LABEL_ZOOM_THRESHOLD) return;
-  if (graph.highlightNodes.size && !graph.highlightNodes.has(node.id) && !isCentral) return;
+  // Hubs and entity-type concepts carry the map, so they stay labelled at any
+  // zoom; individual entities only appear once the user zooms past the
+  // threshold, keeping the default framing readable.
+  const rawType = String(node.type || "").toLowerCase();
+  const isKeyNode =
+    isCentral ||
+    nodeKind(node) === "dataset" ||
+    nodeKind(node) === "seat" ||
+    rawType.includes("entitytype") ||
+    rawType.includes("nodeset");
+  if (!isKeyNode && globalScale < LABEL_ZOOM_THRESHOLD) return;
+  if (graph.highlightNodes.size && !graph.highlightNodes.has(node.id) && !isKeyNode) return;
   const label = truncate(String(node.label || node.id), isCentral ? 28 : 22);
   const fontSize = (isCentral ? 13 : 11) / globalScale;
   ctx.font = `600 ${fontSize}px Inter, system-ui, sans-serif`;
@@ -1491,9 +1582,12 @@ function renderGraph() {
 
   graph.instance.graphData({ nodes: data.nodes, links: data.links });
   graph.instance.centerAt(0, 0);
+  // Arm a settle-fit for this data set (handled by onEngineStop); keep a single
+  // coarse early fit on first paint as a fallback if the engine never stops.
+  graph.needsFit = true;
   if (!graph.viewInitialized) {
     graph.viewInitialized = true;
-    window.setTimeout(() => graph.instance && graph.instance.zoomToFit(600, 40), 400);
+    window.setTimeout(() => graph.instance && graph.instance.zoomToFit(600, 60), 400);
   }
 }
 
@@ -1966,7 +2060,10 @@ function meshGraphRetryDelay(index) {
 async function fetchMeshGraphWithBackoff() {
   for (let attempt = 0; ; attempt += 1) {
     try {
-      return await api("/api/mesh/graph");
+      // Pull the fuller graph (server caps at 1000): the overview aggregates it
+      // down to a concept map, and the raw 200-node slice leaves too few entity
+      // types/hubs once documents are folded away.
+      return await api("/api/mesh/graph?limit=1000");
     } catch (error) {
       const retriable =
         error && error.status === 429 && attempt < MESH_GRAPH_RETRY_BASES_MS.length;
