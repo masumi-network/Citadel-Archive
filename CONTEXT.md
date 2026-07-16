@@ -13,7 +13,7 @@ Raw company material that may be used to produce structured knowledge.
 _Avoid_: knowledge, truth, memory
 
 **Source Snapshot**:
-The retained evidence or source pointer used to reproduce what the **Organization Vault** learned from **Source Material**.
+The retained evidence or source pointer used to reproduce what the **Organization Vault** learned from **Source Material**. **Structured Knowledge** source links resolve to a **Source Snapshot**. Two forms: the **v1 minimal form** is a stable source pointer (connector id + URL + checked-at, e.g. a GitHub digest id, a **Node** capture id, a Linear issue) that already exists on the ingest paths; the **target full form** additionally retains the source evidence for reprocessing (a later plan). A page's *cross-references* to other **Structured Knowledge** resolve against the page set, not against a **Source Snapshot**.
 _Avoid_: permanent dump, backup, index record
 
 **Vault Backup Mirror**:
@@ -21,8 +21,8 @@ A secondary synced copy of vault evidence and history used for recovery, audit, 
 _Avoid_: source of truth, runtime store, live index
 
 **Structured Knowledge**:
-Source-linked company knowledge that has been organized into explicit concepts, relationships, and context.
-_Avoid_: raw data, unprocessed sync, dump
+Source-linked company knowledge that has been organized into explicit concepts, relationships, and context. It is the **durable source of truth** the vault owns and retains directly; the **Knowledge Index** and **Knowledge Mesh** are rebuildable projections of it, and the retrieval engine that produces them is replaceable.
+_Avoid_: raw data, unprocessed sync, dump, retrieval-engine-owned
 
 **Knowledge Index**:
 A searchable organization of **Structured Knowledge** for fast retrieval.
@@ -33,16 +33,16 @@ A relationship map that connects **Structured Knowledge** by source, concept, an
 _Avoid_: decorative graph, chat history, raw sync map, activity view
 
 **Vault Activity**:
-A live, ephemeral projection of vault operations — source syncs, searches, ingests, index updates — shown on the **Operations Dashboard**. Operational signal only; it is not **Structured Knowledge** and not the **Knowledge Mesh**, and it resets with the service.
-_Avoid_: knowledge mesh, audit log, chat history
+A live, ephemeral projection of vault operations — source syncs, searches, ingests, index updates — surfaced live on the **Operations Dashboard** and the dev CLI (`citadel activity`, `--watch`). Operational signal only; it is not **Structured Knowledge** and not the **Knowledge Mesh**, and it resets with the service. Read scope follows isolation: a **Vault Member** sees their own **Node**'s activity with content (what they captured), while the **global/org broadcast** of other seats carries **Seat Presence** only — counts, timing, and seat slug, never **Node** content.
+_Avoid_: knowledge mesh, audit log, chat history, cross-seat content feed
 
 **Learning Process**:
 The governed transformation of **Source Material** into **Structured Knowledge**.
 _Avoid_: self-learning, magic sync, auto-truth
 
 **Tiered Ingestion**:
-Org-bound syncs receive full processing (security review, enrichment, and structuring); raw seat-**Node** agent memory receives lighter indexing only.
-_Avoid_: same pipeline for all content, skip processing, full enrichment everywhere
+Org-bound syncs receive full processing (security review, enrichment, and structuring); raw seat-**Node** agent memory receives lighter indexing only. Canonical **Structured Knowledge** synthesis — per-topic pages maintained in place — is part of the full tier: it runs on the governed **Central** path (org source sync and **Promotion**), never on light-tier **Node** captures. A **Node** holds raw captures with light indexing; synthesized knowledge is a **Central** benefit.
+_Avoid_: same pipeline for all content, skip processing, full enrichment everywhere, synthesize on every seat capture
 
 **Vault Member**:
 A human participant who has permission to access an **Organization Vault**.
@@ -157,8 +157,12 @@ A source-linked, redacted report of a potential secret exposure or high-risk iss
 _Avoid_: secret dump, raw match, vague warning
 
 **Knowledge Conflict**:
-A visible disagreement between pieces of **Structured Knowledge** or their supporting **Source Snapshots**.
+A visible disagreement between pieces of **Structured Knowledge** or their supporting **Source Snapshots**. Because **Structured Knowledge** is maintained as canonical per-topic knowledge revised in place, a revision that *contradicts* the existing page raises a **Knowledge Conflict** and keeps both sides visible instead of silently overwriting; a non-contradicting revision just updates the page. Prior versions stay recoverable through the **Vault Backup Mirror**.
 _Avoid_: merge, overwrite, silent correction
+
+**Knowledge Maturity**:
+How settled a piece of **Structured Knowledge** is, surfaced to readers as a trust signal — `seed` (a single source, or an open **Knowledge Conflict**), `growing` (a few corroborating sources), `stable` (multiple corroborating sources, no open conflict). It reflects corroboration and contradiction state; it is **not** a **Promotion** gate — **Promotion** keeps its own gates (secret scan, org reference, relevance), and **Knowledge Maturity** simply tells a reader how corroborated a **Central** answer is.
+_Avoid_: approval status, promotion gate, workflow stage, review state
 
 ## Relationships
 
@@ -312,3 +316,6 @@ mesh, including per-item drill-down.
 - "org-ready tag promotes seat MCP writes to Central" (ADR-0003 era); resolved: **Seat Node Write Policy** — seat writes stay on the **Node**; **Central** only via **Promotion Agent**, org sync, or service accounts (ADR-0007).
 - "who gates promotion to Central?" (2026-06-27 grill); resolved: known masumi-org work auto-promotes after secret scan + LLM; **New Org Project** requires **Vault Member** **Promotion Approval** (admin may delegate with audit); admin governs org repos and operator cron, not every member note.
 - "universal org view" (2026-07-13 grill) was being read as every seat's content on one canvas; resolved: universal means every seat's *presence* (hub, activity, counts) is visible to all **Vault Members**, while **Structured Knowledge** content stays scoped to **Central** plus the caller's own **Node** — the **Knowledge Mesh** view and its drill-down enforce the same read isolation as search (ADR-0003).
+- "who owns the source of truth — the retrieval engine or the vault?" (2026-07-15 grill) was inverted in the implementation: the retrieval engine held the only durable copy. Resolved: **Structured Knowledge** is the durable, first-class source of truth the vault owns, held in the runtime vault and **synced to the Vault Backup Mirror** for recovery; the **Knowledge Index** and **Knowledge Mesh** are rebuildable projections produced by a replaceable retrieval engine. This is per-dataset — each **Node** and **Central** own their own **Structured Knowledge**, so read isolation (ADR-0009) holds by construction.
+- "what do a Structured Knowledge page's source links point to?" (2026-07-15 grill); resolved: they resolve to a **Source Snapshot**, whose **v1 form is the stable connector pointer** that already exists on ingest (GitHub digest id, **Node** capture id, Linear issue) — no new evidence store is a prerequisite of durable **Structured Knowledge**. Retained-evidence **Source Snapshot** (the full form) is deferred to the future plan. A page's cross-references to other pages resolve against the page set, not a **Source Snapshot**.
+- "dev-side visibility / global activity broadcast" (2026-07-16 grill) risked leaking cross-seat content; resolved: **Vault Activity** is surfaced on the dev CLI (`citadel activity`), and the **global/org broadcast carries Seat Presence only** — counts, timing, seat slug, content stripped. A **Vault Member** sees their own **Node**'s activity with content; other seats appear as **Seat Presence** (ADR-0009). The fail-silent capture hooks may leave a legible one-line receipt but never block, never surface the **Token**, and never show another seat's **Node** content.
