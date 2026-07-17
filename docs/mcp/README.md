@@ -45,7 +45,9 @@ boundary rules.
 
 - [Prerequisites](#prerequisites)
 - [Claude Code](#claude-code)
+- [Claude Desktop](#claude-desktop)
 - [Codex (OpenAI)](#codex-openai)
+- [Connector-Style Apps (ChatGPT / Codex desktop, etc.)](#connector-style-apps-chatgpt--codex-desktop-etc)
 - [Cursor](#cursor)
 - [Pi (Coding Agent Harness)](#pi-coding-agent-harness)
 - [Any MCP Client (Generic)](#any-mcp-client-generic)
@@ -141,6 +143,73 @@ for environment variable substitution.
 
 ---
 
+## Claude Desktop
+
+Claude Desktop (the macOS/Windows app) is a separate client from Claude Code.
+It reaches the same hosted endpoint, but Citadel authenticates with a static
+`Bearer ctdl_` header, so the **config-file `mcp-remote` bridge is the reliable
+route**. The in-app "custom connector" UI is built around OAuth and may not let
+you set a raw `Authorization` header — use it only if your plan exposes header
+auth (see the alternative below).
+
+> **Skills note:** Claude Desktop connects to the Citadel **vault tools** only.
+> The `citadel-*` agent skills (`npx skills add …`, hosted `/skills/*`) are for
+> coding agents (Claude Code, Codex, Cursor) — Desktop does not load them. You
+> get search/mesh/ingest tools, just not the skill-guidance layer.
+
+### Step 1 — Edit the Desktop config
+
+Open **Settings → Developer → Edit Config** (or edit the file directly):
+
+- macOS: `~/Library/Application Support/Claude/claude_desktop_config.json`
+- Windows: `%APPDATA%\Claude\claude_desktop_config.json`
+
+Add the `mcp-remote` bridge (Desktop launches stdio servers, so it needs the
+bridge rather than a direct `type: "http"` entry). Requires Node.js on PATH:
+
+```json
+{
+  "mcpServers": {
+    "citadel": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "mcp-remote",
+        "https://citadel-archive-production.up.railway.app/mcp/",
+        "--header",
+        "Authorization: Bearer ${CITADEL_MCP_ACCESS_TOKEN}"
+      ],
+      "env": {
+        "CITADEL_MCP_ACCESS_TOKEN": "ctdl_..."
+      }
+    }
+  }
+}
+```
+
+The token is paste-once into your local config; never commit this file.
+
+### Step 2 — Verify
+
+Fully quit and reopen Claude Desktop. The **citadel** server should appear under
+the tools (hammer) menu. Ask it to call `citadel_discovery`, then
+`citadel_session`. If discovery returns the manifest and session returns your
+role, you're connected.
+
+### Alternative — custom connector UI
+
+If your Claude plan (Pro/Max/Team/Enterprise) exposes **Settings → Connectors →
+Add custom connector**, paste the endpoint
+`https://citadel-archive-production.up.railway.app/mcp/`. This path is best when
+the app can send a bearer header for you; if it only offers OAuth, stay on the
+config-file route above until Citadel exposes an OAuth flow.
+
+> Not yet browser-verified against a specific Desktop build — the `mcp-remote`
+> bridge is the same one the Codex and generic sections use, so it is the
+> dependable path if the connector UI misbehaves.
+
+---
+
 ## Codex (OpenAI)
 
 ### Step 1 — Add to `~/.codex/config.toml`
@@ -186,6 +255,36 @@ Restart Codex. Ask it to call `citadel_discovery`, then `citadel_session`.
 ### Template file
 
 A ready-to-copy template is at `docs/mcp/codex-hosted.config.toml`.
+
+---
+
+## Connector-Style Apps (ChatGPT / Codex desktop, etc.)
+
+Some GUI apps — the ChatGPT desktop / Codex app, and similar clients — add MCP
+servers through a **"custom connector"** panel that takes a remote URL instead
+of a config file. For those:
+
+1. Open the app's connector / MCP settings (often behind a **Developer mode**
+   toggle).
+2. Add a remote MCP server with:
+   - **URL**: `https://citadel-archive-production.up.railway.app/mcp/`
+   - **Auth**: `Authorization: Bearer ctdl_<your-token>` if the app lets you set
+     a custom header.
+3. Restart the app and ask it to call `citadel_discovery`, then
+   `citadel_session`.
+
+Caveats:
+
+- These connector UIs often assume **OAuth**; Citadel authenticates with a
+  static `ctdl_` bearer token. If the app cannot send a raw `Authorization`
+  header, fall back to the `mcp-remote` bridge (see
+  [Claude Desktop](#claude-desktop) or [Any MCP Client](#any-mcp-client-generic))
+  in whatever config file the app reads.
+- Exact menu paths differ per app and change often — treat the steps above as a
+  shape, not a verified click-path. The stable contract is always: hosted
+  `/mcp/` URL + `Bearer ctdl_` token.
+- The **Codex CLI** is configured via `~/.codex/config.toml` — see the
+  [Codex (OpenAI)](#codex-openai) section, not this one.
 
 ---
 
