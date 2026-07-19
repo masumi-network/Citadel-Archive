@@ -1268,7 +1268,11 @@ def _render_mesh(mesh: dict[str, Any], color: bool) -> str:
 
 
 def _render_event(event: dict[str, Any], color: bool) -> str:
-    """One Vault Activity line: `HH:MM  <type>  <message>  (dataset)`."""
+    """One Vault Activity line: `HH:MM  <type>  <message>  (dataset)`.
+
+    Error events also carry which operation failed and its (already redacted)
+    reason — without them every failure renders as a bare "Operation failed".
+    """
     created = str(event.get("created_at") or "")
     stamp = created[11:16] if len(created) >= 16 else created[:5]
     etype = str(event.get("type") or "event")
@@ -1276,6 +1280,13 @@ def _render_event(event: dict[str, Any], color: bool) -> str:
     details = event.get("details") if isinstance(event.get("details"), dict) else {}
     timeline = event.get("timeline") if isinstance(event.get("timeline"), dict) else {}
     dataset = details.get("dataset") or timeline.get("dataset") or ""
+    if etype == "error":
+        operation = str(details.get("operation") or "").strip()
+        reason = " ".join(str(details.get("error") or "").split())[:120]
+        if operation:
+            message = f"{message}: {operation}" if message else operation
+        if reason:
+            message = f"{message} — {reason}" if message else reason
     line = (
         paint(f"{stamp:>5}", "dim", enable=color)
         + "  "
@@ -1364,7 +1375,23 @@ async def _activity(args: argparse.Namespace) -> int:
     if getattr(args, "global_broadcast", False):
         return await _activity_global(node_url, token, use_color, args.watch)
 
+    if not token:
+        # Without a token the feed is always empty; say so as an error (JSON
+        # object under --json) instead of printing a bare `{}` and exiting 0.
+        return _emit_no_token("activity", as_json=bool(args.json))
+
     data = await asyncio.to_thread(fetch_events, node_url, token, limit=limit, event_type=args.type)
+    if not data:
+        # fetch_events swallows every transport/HTTP error into {}. Reporting
+        # that as "No recent activity." (exit 0) hides a node outage as an
+        # empty vault, so an unreachable node has to read as a failure.
+        msg = f"could not reach {node_url} — node unreachable or rejected the token"
+        if args.json:
+            _print_json({"ok": False, "error": msg})
+        else:
+            print(f"citadel activity: {msg}", file=sys.stderr)
+        return 1
+
     if args.json and not args.watch:
         _print_json(data)
         return 0
@@ -1379,8 +1406,6 @@ async def _activity(args: argparse.Namespace) -> int:
     if not args.watch:
         if not events:
             print(paint("No recent activity.", "dim", enable=use_color))
-            if not token:
-                print(paint("  (no token configured — run `citadel onboard`)", "yellow", enable=use_color))
         return 0
 
     print(paint("— watching your Node (Ctrl-C to stop) —", "dim", enable=use_color))

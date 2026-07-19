@@ -337,6 +337,60 @@ def test_render_event_line() -> None:
     assert "seat:sarthi" in line
 
 
+def test_render_event_error_shows_operation_and_reason() -> None:
+    # `record_error` stores the operation + redacted reason in details; a bare
+    # "Operation failed" line is unactionable, so both must reach the feed.
+    from kb.cli import _render_event
+
+    event = {
+        "id": 6,
+        "type": "error",
+        "message": "Operation failed",
+        "details": {"operation": "search", "error": "DatasetNotFoundError:\n  no default dataset"},
+        "created_at": "2026-07-16T15:38:02Z",
+    }
+    line = _render_event(event, color=False)
+    assert "search" in line
+    # Newlines are collapsed so one event stays one line.
+    assert "DatasetNotFoundError: no default dataset" in line
+    assert "\n" not in line
+
+
+def test_activity_without_token_errors_as_json(monkeypatch, capsys) -> None:
+    # --json must stay machine-readable on the failure path: a bare `{}` with
+    # exit 0 reads as "no activity" when the real cause is a missing token.
+    from kb import cli as cli_mod
+
+    monkeypatch.setattr(cli_mod, "capture_token", lambda: "")
+    args = argparse.Namespace(
+        limit=20, local=False, config=None, node_url="https://node.example",
+        json=True, watch=False, type=None, global_broadcast=False,
+    )
+    code = asyncio.run(cli_mod._activity(args))
+    payload = json.loads(capsys.readouterr().out)
+    assert code == 1
+    assert payload["ok"] is False
+    assert "token" in payload["error"].lower()
+
+
+def test_activity_reports_unreachable_node_instead_of_empty_feed(monkeypatch, capsys) -> None:
+    # fetch_events collapses transport errors to {}; an outage must not render
+    # as an empty-but-healthy vault (exit 0).
+    from kb import cli as cli_mod
+
+    monkeypatch.setattr(cli_mod, "capture_token", lambda: "ctdl_tok")
+    monkeypatch.setattr(cli_mod, "fetch_events", lambda *a, **k: {})
+    args = argparse.Namespace(
+        limit=20, local=False, config=None, node_url="https://node.example",
+        json=True, watch=False, type=None, global_broadcast=False,
+    )
+    code = asyncio.run(cli_mod._activity(args))
+    payload = json.loads(capsys.readouterr().out)
+    assert code == 1
+    assert payload["ok"] is False
+    assert "node.example" in payload["error"]
+
+
 # --- Seat Presence broadcast (citadel activity --global / DX-7) --------------
 
 

@@ -45,6 +45,18 @@ All notable changes to `citadel-archive` are documented here. Format follows
   rc) on the JSON surface — as `checks[].data.hint` on the `auth` check and a
   top-level `hint` — so agents (which parse `--json`) get the same actionable
   401 diagnostic the human path already printed.
+- **`citadel activity` shows which operation failed.** `record_error` has always
+  stored the operation and a redacted reason in the event details, but the feed
+  rendered only the label, so every failure read as a bare `Operation failed`.
+  Error lines now append both (e.g. `Operation failed: search —
+  DatasetNotFoundError: No datasets found. (Status code: 404)`, the seat-less
+  token signature), newlines collapsed and the reason capped at 120 chars.
+- **`citadel activity` no longer reports an outage as an empty vault.**
+  `fetch_events` collapses every transport/HTTP error to `{}`, which the feed
+  printed as `No recent activity.` (exit 0) and `--json` printed as a bare `{}`.
+  A missing token now takes the shared no-token error path, and an unreachable
+  node emits `{"ok": false, "error": ...}` (plain text on stderr otherwise) with
+  exit 1.
 
 ## [0.3.0] — 2026-07-16
 
