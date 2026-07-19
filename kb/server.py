@@ -2806,9 +2806,29 @@ async def register_obsidian_vault(body: ObsidianVaultBody, request: Request) -> 
     return {"ok": True, "vault": jsonable_encoder(vault)}
 
 
+def assert_obsidian_vault_owned(identity: AccessIdentity, vault_id: str) -> None:
+    """Fail closed unless the caller owns the vault (ADR-0009).
+
+    A vault's ``owner_actor_id`` is recorded at registration but was never read,
+    so any token holding the obsidian sync scopes could address another seat's
+    vault by id — and ids are disclosed by /api/sources. Mirrors the cognee
+    drill-down rule at /api/documents: 404, never 403, so a scoped caller cannot
+    use the status code as an existence oracle. Admin/env callers bypass.
+    """
+    if can_bypass_dataset_allowlist(identity):
+        return
+    try:
+        owner = get_obsidian_sync().vault_owner(vault_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Vault not found.") from exc
+    if owner != identity.actor_id:
+        raise HTTPException(status_code=404, detail="Vault not found.")
+
+
 @app.get("/api/obsidian/manifest")
 async def obsidian_manifest(request: Request, vault_id: str, cursor: int | None = None) -> Any:
-    require_access(request, "reader", "obsidian:sync:pull")
+    identity = require_access(request, "reader", "obsidian:sync:pull")
+    assert_obsidian_vault_owned(identity, vault_id)
     try:
         manifest = get_obsidian_sync().manifest(vault_id=vault_id, cursor=cursor)
     except KeyError as exc:
@@ -2819,6 +2839,10 @@ async def obsidian_manifest(request: Request, vault_id: str, cursor: int | None 
 @app.post("/api/obsidian/sync/push")
 async def push_obsidian_sync(body: ObsidianPushBody, request: Request) -> Any:
     actor = require_access(request, "writer", "obsidian:sync:push")
+    # The dataset was already resolved; the vault was not — actor was recorded on
+    # the record but never compared to owner_actor_id, so a writer could push
+    # revisions into another seat's vault.
+    assert_obsidian_vault_owned(actor, body.vault_id)
     citadel = get_citadel()
     mesh_state = get_mesh()
     push_dataset = resolve_write_dataset(actor, body.dataset, citadel.config)
@@ -2968,7 +2992,8 @@ async def push_obsidian_sync(body: ObsidianPushBody, request: Request) -> Any:
 
 @app.get("/api/obsidian/sync/pull")
 async def pull_obsidian_sync(request: Request, vault_id: str, cursor: int | None = None) -> Any:
-    require_access(request, "reader", "obsidian:sync:pull")
+    identity = require_access(request, "reader", "obsidian:sync:pull")
+    assert_obsidian_vault_owned(identity, vault_id)
     try:
         result = get_obsidian_sync().pull(vault_id=vault_id, cursor=cursor)
     except KeyError as exc:
@@ -2983,8 +3008,16 @@ async def resolve_obsidian_conflict(
     request: Request,
 ) -> Any:
     actor = require_access(request, "writer", "obsidian:sync:push")
+    obsidian = get_obsidian_sync()
     try:
-        result = get_obsidian_sync().resolve_conflict(
+        conflict_vault = obsidian.conflict_vault_id(conflict_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Conflict not found.") from exc
+    # actor was passed through for attribution only; resolving a conflict writes
+    # a document body, so it needs the same vault ownership gate as push.
+    assert_obsidian_vault_owned(actor, conflict_vault or "")
+    try:
+        result = obsidian.resolve_conflict(
             conflict_id=conflict_id,
             actor=actor,
             resolution=body.resolution,
@@ -3093,7 +3126,12 @@ async def source_document(document_id: str, request: Request) -> Any:
             raise HTTPException(status_code=404, detail="Document not found.")
         return {"ok": True, "document": jsonable_encoder(github_document)}
     try:
-        document = get_obsidian_sync().document(document_id)
+        obsidian = get_obsidian_sync()
+        document = obsidian.document(document_id)
+        # document() is a flat global lookup returning the full body and every
+        # revision, so it needs the same ownership gate as manifest/pull. The
+        # cognee branch below already 404s foreign documents; this one didn't.
+        assert_obsidian_vault_owned(identity, obsidian.document_vault_id(document_id) or "")
     except KeyError:
         # Not a github/obsidian doc — fall back to resolving a native cognee
         # search-hit id against the graph store (#28).

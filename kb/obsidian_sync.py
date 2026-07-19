@@ -459,6 +459,30 @@ class ObsidianSyncStore:
             raise KeyError(vault_id)
         return vault
 
+    def vault_owner(self, vault_id: str) -> str | None:
+        """Return the vault's ``owner_actor_id``; raise KeyError if unknown.
+
+        Callers enforce ownership at the HTTP boundary — this only exposes the
+        field, which was recorded at registration and previously read nowhere.
+        """
+        return self._vault(self._load(), vault_id).get("owner_actor_id")
+
+    def document_vault_id(self, document_id: str) -> str | None:
+        """Return the id of the vault a document belongs to (its ``source_id``)."""
+        data = self._load()
+        document = data.get("documents", {}).get(document_id)
+        if not document:
+            raise KeyError(document_id)
+        return document.get("source_id")
+
+    def conflict_vault_id(self, conflict_id: str) -> str | None:
+        """Return the id of the vault a conflict belongs to (its ``source_id``)."""
+        data = self._load()
+        conflict = data.get("conflicts", {}).get(conflict_id)
+        if not conflict:
+            raise KeyError(conflict_id)
+        return conflict.get("source_id")
+
     def _next_sequence(self, data: dict[str, Any]) -> int:
         data["sequence"] = int(data.get("sequence", 0)) + 1
         return data["sequence"]

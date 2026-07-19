@@ -33,6 +33,17 @@ All notable changes to `citadel-archive` are documented here. Format follows
 
 ### Security
 
+- **Obsidian vaults now enforce ownership (ADR-0009).** `owner_actor_id` was
+  recorded at vault registration and read nowhere, so `/api/obsidian/manifest`,
+  `/api/obsidian/sync/pull`, `/api/obsidian/sync/push`,
+  `/api/obsidian/conflicts/{id}/resolve`, and the Obsidian branch of
+  `/api/documents/{id}` were gated only by scope — and both
+  `obsidian:sync:pull` and `kb:read` are in the default reader set. Any token
+  could therefore read another seat's full note bodies and revision history, or
+  push revisions into their vault, given a vault id that `/api/sources`
+  discloses. All five now fail closed with **404, never 403**, matching the
+  cognee drill-down rule so a scoped caller cannot use the status code as an
+  existence oracle. Admin/env callers are unaffected.
 - **`GET /api/knowledge/events` is now caller-scoped (ADR-0009).** The handler
   called `require_access` and discarded the identity, returning every seat's
   events — message, dataset, and error operation/reason — to any reader token,

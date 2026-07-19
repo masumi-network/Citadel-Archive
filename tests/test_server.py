@@ -1280,6 +1280,69 @@ def test_backup_mirror_push_errors_are_audited(tmp_path: Any) -> None:
     assert events[-1]["detail"]["reason"] == "publish_failed"
 
 
+def test_obsidian_vault_is_not_readable_or_writable_by_another_actor(tmp_path: Any) -> None:
+    # owner_actor_id was recorded at registration and read nowhere, so any token
+    # holding the obsidian scopes could address another seat's vault by id — and
+    # ids are disclosed via /api/sources. Reads returned full note bodies and
+    # revision history. 404 (not 403) everywhere: no existence oracle.
+    app.state.access_store = AccessStore(tmp_path / "access.json")
+    app.state.obsidian_sync = ObsidianSyncStore(tmp_path / "obsidian.json")
+    admin = authed_client()
+
+    owner_token = admin.post(
+        "/api/access/tokens",
+        json={"name": "vault-owner", "role": "writer", "kind": "service_account"},
+    ).json()["token"]
+    intruder_token = admin.post(
+        "/api/access/tokens",
+        json={"name": "vault-intruder", "role": "writer", "kind": "service_account"},
+    ).json()["token"]
+
+    api = TestClient(app, base_url="https://testserver")
+    owner_headers = {"Authorization": f"Bearer {owner_token}"}
+    intruder_headers = {"Authorization": f"Bearer {intruder_token}"}
+
+    vault_id = api.post(
+        "/api/obsidian/vaults", json={"vault_name": "Private Vault"}, headers=owner_headers
+    ).json()["vault"]["id"]
+    api.post(
+        "/api/obsidian/sync/push",
+        json={
+            "vault_id": vault_id,
+            "documents": [{"path": "Secrets.md", "content": "private body", "base_rev": None}],
+        },
+        headers=owner_headers,
+    )
+
+    owner_manifest = api.get(f"/api/obsidian/manifest?vault_id={vault_id}", headers=owner_headers)
+    document_id = owner_manifest.json()["documents"][0]["id"]
+
+    intruder_manifest = api.get(
+        f"/api/obsidian/manifest?vault_id={vault_id}", headers=intruder_headers
+    )
+    intruder_pull = api.get(
+        f"/api/obsidian/sync/pull?vault_id={vault_id}&cursor=0", headers=intruder_headers
+    )
+    intruder_document = api.get(f"/api/documents/{document_id}", headers=intruder_headers)
+    intruder_push = api.post(
+        "/api/obsidian/sync/push",
+        json={
+            "vault_id": vault_id,
+            "documents": [{"path": "Secrets.md", "content": "overwritten", "base_rev": None}],
+        },
+        headers=intruder_headers,
+    )
+
+    assert owner_manifest.status_code == 200
+    assert intruder_manifest.status_code == 404
+    assert intruder_pull.status_code == 404
+    assert intruder_document.status_code == 404
+    assert intruder_push.status_code == 404
+    # The owner still has full access, and an admin/bypass token is unaffected.
+    assert api.get(f"/api/documents/{document_id}", headers=owner_headers).status_code == 200
+    assert admin.get(f"/api/obsidian/manifest?vault_id={vault_id}").status_code == 200
+
+
 def test_obsidian_vault_sync_registers_pushes_pulls_and_lists_sources(tmp_path: Any) -> None:
     app.state.access_store = AccessStore(tmp_path / "access.json")
     app.state.obsidian_sync = ObsidianSyncStore(tmp_path / "obsidian.json")
