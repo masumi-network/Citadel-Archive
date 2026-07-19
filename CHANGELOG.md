@@ -33,6 +33,15 @@ All notable changes to `citadel-archive` are documented here. Format follows
 
 ### Security
 
+- **`GET /api/knowledge/events` is now caller-scoped (ADR-0009).** The handler
+  called `require_access` and discarded the identity, returning every seat's
+  events — message, dataset, and error operation/reason — to any reader token,
+  while its two sibling projections (`/api/mesh`, `/events`) both scoped. This
+  was visible in plain `citadel activity` output, which printed other seats'
+  ingests under the caller's own token. `Mesh.timeline()` gains an optional
+  `visible` predicate, applied before the limit slice so a caller still gets a
+  full page of their own events; `latest_event_id` stays global so `--watch`
+  resumption cannot loop. Admin/env tokens are unaffected.
 - **`POST /feedback` now resolves the caller-supplied dataset and session.**
   The handler passed `body.dataset` and `body.session_id` straight through to
   the durable write, skipping `resolve_write_dataset` / `resolve_session_id` —

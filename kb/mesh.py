@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from collections import deque
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from hashlib import sha1
@@ -241,8 +242,16 @@ class MeshState:
         limit: int = 50,
         event_type: str | None = None,
         kind: str | None = None,
+        visible: Callable[[Any], bool] | None = None,
     ) -> dict[str, Any]:
-        """Return a bounded, newest-first event timeline for resume/backfill reads."""
+        """Return a bounded, newest-first event timeline for resume/backfill reads.
+
+        ``visible`` scopes events to the caller by ``details.dataset`` (ADR-0009).
+        It runs BEFORE the limit slice so a caller still receives a full page of
+        their own events rather than whatever survives filtering one page of
+        everyone's. ``latest_event_id`` stays global on purpose: --watch resumes
+        from it, and rewinding it to the last visible id would re-poll forever.
+        """
         async with self._lock:
             events = list(self.events)
             if after_id is not None:
@@ -254,6 +263,12 @@ class MeshState:
                     event
                     for event in events
                     if event.get("timeline", {}).get("kind") == kind
+                ]
+            if visible is not None:
+                events = [
+                    event
+                    for event in events
+                    if visible((event.get("details") or {}).get("dataset"))
                 ]
             return {
                 "generated_at": utc_now(),

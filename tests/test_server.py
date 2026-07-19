@@ -499,6 +499,49 @@ def test_knowledge_events_api_returns_resumable_timeline() -> None:
     assert unauthenticated.status_code == 401
 
 
+def test_knowledge_events_scopes_timeline_to_the_caller(tmp_path: Any) -> None:
+    # ADR-0009: the timeline carries Node content (event messages, dataset names,
+    # error operations). It previously discarded the identity and returned every
+    # seat's events to any reader token — visible in plain `citadel activity`
+    # output, which printed other seats' ingests under the caller's own token.
+    app.state.access_store = AccessStore(tmp_path / "access.json")
+    admin = authed_client()
+    created = admin.post(
+        "/api/access/tokens",
+        json={
+            "name": "scoped-reader",
+            "role": "writer",
+            "kind": "service_account",
+            "default_dataset": "personal",
+            "allowed_datasets": ["personal"],
+        },
+    )
+    token = created.json()["token"]
+    api_client = TestClient(app, base_url="https://testserver")
+    headers = {"Authorization": f"Bearer {token}"}
+
+    # An event on a dataset the scoped token cannot see, and one it can.
+    admin.post("/ingest", json={"data": "Another seat's note", "dataset": "masumi-network"})
+    api_client.post("/ingest", json={"data": "My own note"}, headers=headers)
+
+    scoped = api_client.get("/api/knowledge/events?limit=50", headers=headers)
+    unscoped = admin.get("/api/knowledge/events?limit=50")
+
+    assert scoped.status_code == 200
+    scoped_datasets = {
+        (event.get("details") or {}).get("dataset") for event in scoped.json()["events"]
+    }
+    assert "masumi-network" not in scoped_datasets
+    assert "personal" in scoped_datasets
+    # latest_event_id stays global so --watch resumption cannot loop forever.
+    assert scoped.json()["latest_event_id"] == unscoped.json()["latest_event_id"]
+    # An admin/bypass caller still sees everything.
+    unscoped_datasets = {
+        (event.get("details") or {}).get("dataset") for event in unscoped.json()["events"]
+    }
+    assert {"masumi-network", "personal"} <= unscoped_datasets
+
+
 def test_reader_access_can_view_and_search_but_not_mutate() -> None:
     client = authed_client("test-reader")
 

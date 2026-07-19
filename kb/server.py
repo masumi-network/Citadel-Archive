@@ -2335,16 +2335,28 @@ async def knowledge_events(
     event_type: str | None = Query(default=None, alias="type"),
     kind: str | None = None,
 ) -> Any:
-    require_access(request, "reader", "kb:read")
+    identity = require_access(request, "reader", "kb:read")
     if after_id is not None and after_id < 0:
         raise HTTPException(status_code=422, detail="after_id must be zero or greater.")
     if not 1 <= limit <= 160:
         raise HTTPException(status_code=422, detail="Timeline limit must be between 1 and 160.")
+    # ADR-0009: the timeline carries Node content (event messages, dataset names,
+    # and error operations/reasons), so scope it to the caller exactly as the two
+    # sibling projections do — /api/mesh via scope_mesh_snapshot and /events via
+    # _mesh_dataset_visible. This endpoint previously discarded the identity and
+    # returned every seat's events to any reader token.
+    visible_cache: dict[str, bool] = {}
+    visible = (
+        None
+        if can_bypass_dataset_allowlist(identity)
+        else (lambda dataset: _mesh_dataset_visible(identity, dataset, visible_cache))
+    )
     timeline = await get_mesh().timeline(
         after_id=after_id,
         limit=limit,
         event_type=event_type,
         kind=kind,
+        visible=visible,
     )
     return jsonable_encoder({"ok": True, **timeline})
 
