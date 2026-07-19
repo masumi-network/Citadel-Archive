@@ -31,6 +31,17 @@ All notable changes to `citadel-archive` are documented here. Format follows
   the mint (`citadel seat token <slug>` / dashboard *Assign to seat*) and the
   `status --json` signature of a correctly-provisioned token.
 
+### Security
+
+- **`POST /feedback` now resolves the caller-supplied dataset and session.**
+  The handler passed `body.dataset` and `body.session_id` straight through to
+  the durable write, skipping `resolve_write_dataset` / `resolve_session_id` —
+  the only write-scoped route that did (`/ingest` and `/api/contribute` both
+  gate them). A writer token could therefore write feedback into, and emit mesh
+  events attributed to, a dataset outside its allowlist, including another
+  seat's node. Feedback text is now also byte-capped like `/ingest`
+  (`FeedbackBody.text` carries no `max_length` of its own).
+
 ### Fixed
 
 - **`--json` error paths are now valid JSON across the read/write CLI.**

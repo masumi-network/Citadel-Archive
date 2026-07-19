@@ -780,6 +780,63 @@ def test_token_allowed_datasets_rejects_other_dataset(tmp_path: Any) -> None:
     assert denied.json()["detail"] == "Dataset not allowed: masumi-network."
 
 
+def test_feedback_rejects_dataset_outside_token_allowlist(tmp_path: Any) -> None:
+    # /feedback is a durable write on a cache miss. Before this was resolved, a
+    # writer token could name any dataset — including another seat's node, which
+    # enforce_dataset_allowlist is default-deny for — and have the write and its
+    # mesh event attributed there.
+    app.state.access_store = AccessStore(tmp_path / "access.json")
+    client = authed_client()
+    created = client.post(
+        "/api/access/tokens",
+        json={
+            "name": "scoped-feedback-writer",
+            "role": "writer",
+            "kind": "service_account",
+            "default_dataset": "personal",
+            "allowed_datasets": ["personal"],
+        },
+    )
+    token = created.json()["token"]
+    api_client = TestClient(app, base_url="https://testserver")
+
+    denied = api_client.post(
+        "/feedback",
+        json={"qa_id": "qa-1", "score": 1, "text": "useful", "dataset": "seat:someone-else"},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    allowed = api_client.post(
+        "/feedback",
+        json={"qa_id": "qa-1", "score": 1, "text": "useful"},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert denied.status_code == 403
+    assert denied.json()["detail"] == "Dataset not allowed: seat:someone-else."
+    assert allowed.status_code == 200
+
+
+def test_feedback_rejects_oversized_text(tmp_path: Any) -> None:
+    # FeedbackBody.text carries no max_length; the durable-write path needs the
+    # same byte cap as /ingest.
+    app.state.access_store = AccessStore(tmp_path / "access.json")
+    client = authed_client()
+    created = client.post(
+        "/api/access/tokens",
+        json={"name": "feedback-writer", "role": "writer", "kind": "service_account"},
+    )
+    token = created.json()["token"]
+    api_client = TestClient(app, base_url="https://testserver")
+
+    oversized = api_client.post(
+        "/feedback",
+        json={"qa_id": "qa-1", "score": 1, "text": "x" * (200 * 1024 + 1)},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert oversized.status_code == 413
+
+
 def test_tokens_without_memory_fields_use_config_defaults(tmp_path: Any) -> None:
     app.state.access_store = AccessStore(tmp_path / "access.json")
     client = authed_client()

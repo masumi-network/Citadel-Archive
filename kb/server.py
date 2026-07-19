@@ -4111,17 +4111,27 @@ async def search(body: SearchBody, request: Request, response: Response) -> Any:
 @app.post("/feedback")
 async def feedback(body: FeedbackBody, request: Request) -> Any:
     actor = require_access(request, "writer", "kb:feedback")
+    # Feedback text lands in durable storage on a cache miss, so it needs the same
+    # byte cap as /ingest — FeedbackBody.text carries no max_length of its own.
+    if body.text:
+        enforce_ingest_size(body.text)
     citadel = get_citadel()
     mesh_state = get_mesh()
-    dataset = body.dataset or citadel.config.default_dataset
+    # Feedback is a durable write on a cache miss, so the caller-supplied dataset
+    # and session MUST go through the same resolvers as /ingest and /api/contribute.
+    # Passing body.dataset through unresolved let any writer token write into (and
+    # emit mesh events attributed to) another seat's node, which
+    # enforce_dataset_allowlist is default-deny for.
+    dataset = resolve_write_dataset(actor, body.dataset, citadel.config)
+    session_id = resolve_session_id(actor, body.session_id)
     try:
         result = await citadel.feedback(
             FeedbackRequest(
                 qa_id=body.qa_id,
                 score=body.score,
                 text=body.text,
-                session_id=body.session_id,
-                dataset=body.dataset,
+                session_id=session_id,
+                dataset=dataset,
             )
         )
     except Exception as exc:  # pragma: no cover - depends on runtime Cognee configuration.
