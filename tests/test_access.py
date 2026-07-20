@@ -366,3 +366,22 @@ def test_capture_policy_round_trip(tmp_path: Path) -> None:
 
     loaded = access_store.get_capture_policy("alice")
     assert loaded.deny_globs == ("private/*",)
+
+
+def test_approved_capture_roots_round_trip(tmp_path: Path) -> None:
+    access_store = store(tmp_path)
+    access_store.create_seat(name="Alice", slug="alice")
+
+    empty = access_store.get_approved_capture_roots("alice")
+    assert empty.paths == ()
+
+    updated = access_store.set_approved_capture_roots(
+        "alice",
+        paths=["/Users/alice/work", "/Users/alice/work"],
+        actor_id="admin_1",
+    )
+    assert updated.paths == ("/Users/alice/work",)
+    assert updated.updated_by == "admin_1"
+
+    loaded = access_store.get_approved_capture_roots("alice")
+    assert loaded.paths == ("/Users/alice/work",)
