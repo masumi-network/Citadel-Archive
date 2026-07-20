@@ -21,8 +21,10 @@ from pathlib import Path
 from typing import Any
 
 from kb.capture_config import DEFAULT_NODE_URL
+from kb.hooks.sync_start import AGENT_POLICY_REMINDER
 
 TOKEN_ENV = "CITADEL_MCP_ACCESS_TOKEN"
+CURSOR_POLICY_RULE_FILENAME = "citadel-agent-policy.mdc"
 MCP_SERVER_NAME = "citadel"
 PUSH_MODULE = "kb.hooks.sync_push"
 SESSION_MODULE = "kb.hooks.sync_session"
@@ -275,6 +277,35 @@ def merge_claude_settings(path: Path, python: str | None = None) -> str:
         return "unchanged"
     _write_json(path, data)
     return "added"
+
+
+def cursor_agent_policy_rule_text() -> str:
+    """Cursor rule mirroring the SessionStart hook's static agent policy."""
+    return (
+        "---\n"
+        "description: Citadel agent policy — search before coding, traces are reference-only\n"
+        "alwaysApply: true\n"
+        "---\n\n"
+        f"{AGENT_POLICY_REMINDER}\n"
+    )
+
+
+def install_cursor_agent_policy_rule(repo: Path) -> str:
+    """Install the Citadel agent policy into ``.cursor/rules/`` (idempotent)."""
+    dst = repo / ".cursor" / "rules" / CURSOR_POLICY_RULE_FILENAME
+    payload = cursor_agent_policy_rule_text()
+    if dst.exists():
+        try:
+            if dst.read_text() == payload:
+                return "unchanged"
+        except OSError:
+            pass
+        status = "updated"
+    else:
+        status = "added"
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    dst.write_text(payload)
+    return status
 
 
 def install_pre_push_hook(repo: Path, python: str | None = None) -> str:

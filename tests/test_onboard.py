@@ -11,8 +11,10 @@ from kb.cli import _onboard
 from kb.onboard import (
     TOKEN_ENV,
     claude_user_settings_path,
+    cursor_agent_policy_rule_text,
     detect_shell_rc,
     ensure_token_in_rc,
+    install_cursor_agent_policy_rule,
     install_pre_push_hook,
     mask_token,
     mcp_server_block,
@@ -163,6 +165,23 @@ def test_install_pre_push_hook(tmp_path: Path) -> None:
 
 def test_install_pre_push_hook_not_git(tmp_path: Path) -> None:
     assert install_pre_push_hook(tmp_path) == "skipped:not-git"
+
+
+def test_cursor_agent_policy_rule_matches_session_start() -> None:
+    text = cursor_agent_policy_rule_text()
+    assert "alwaysApply: true" in text
+    assert "citadel_search" in text
+    assert "reference-only" in text
+    assert "citadel_share_session" in text
+
+
+def test_install_cursor_agent_policy_rule_idempotent(tmp_path: Path) -> None:
+    assert install_cursor_agent_policy_rule(tmp_path) == "added"
+    rule = tmp_path / ".cursor" / "rules" / "citadel-agent-policy.mdc"
+    assert rule.exists()
+    first = rule.read_text()
+    assert install_cursor_agent_policy_rule(tmp_path) == "unchanged"
+    assert rule.read_text() == first
 
 
 def test_bundled_hooks_are_importable_modules() -> None:
