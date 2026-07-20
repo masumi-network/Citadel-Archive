@@ -1,6 +1,6 @@
 # ADR 0011 — Shared Session Traces as a third storage layer
 
-- **Status:** Accepted (2026-07-20 grill)
+- **Status:** Accepted (2026-07-20 grill); **v1 implemented** on branch `design/shared-session-index`
 - **Amends:** ADR-0007 (seat capture, promotion, and write policy), ADR-0003
   (seat/node/Central private memory)
 - **Relates:** ADR-0009 (mesh read isolation — presence vs content),
@@ -168,8 +168,10 @@ only**, never on `session-traces`.
 | Central boundary | Never auto-update Central or improve loop from traces |
 | Retrieval v1 | Extended `citadel_search`; `citadel_prior_work` → v1.1 |
 
-## Open (implementation)
+## Open (v1.1 / tuning)
 
-- Exact cognify coalescing window from measured seat volume
+- Exact cognify coalescing window from measured seat volume (v1 uses per-share defer + coalesce over dual-write targets, Linear-sync pattern)
+- `citadel unshare`, TTL enforcement, and `CaptureRoot.share_traces` standing consent
+- `citadel_prior_work` overlap-ranked retrieval
 - Hard delete maturity in Cognee vs AccessStore retraction overlay
 - Injection hardening beyond structured fields (M2 promotion-gate audit item)

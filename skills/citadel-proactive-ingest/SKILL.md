@@ -1,14 +1,20 @@
 ---
 name: citadel-proactive-ingest
-description: Use to capture durable engineering knowledge into Citadel automatically and proactively while working in an org repo. Covers (1) mid-session citadel_ingest for durable facts (personal-by-default; all seat writes land on the Node — Central via Promotion Agent only), (2) git pre-push commit snapshots (universal baseline — Cursor, Codex, Claude), (3) optional Claude Code SessionEnd distill, and (4) server-side Railway cron for GitHub org sync, Linear sync, and the learning pipeline. Triggers include "auto sync my sessions", "remember this in citadel", "proactive ingest", "set up citadel autosync", "personal kb sync", "install autosync", and https://citadel-archive-production.up.railway.app/skills/proactive-ingest.
+description: Use to capture durable engineering knowledge into Citadel automatically and proactively while working in an org repo. Covers (0) proactive citadel_search at task start plus optional citadel_share_session for dead-end routes (user-approved), (1) mid-session citadel_ingest for durable facts (personal-by-default; all seat writes land on the Node — Central via Promotion Agent only), (2) git pre-push commit snapshots (universal baseline — Cursor, Codex, Claude), (3) optional Claude Code SessionEnd distill, and (4) server-side Railway cron for GitHub org sync, Linear sync, and the learning pipeline. Triggers include "auto sync my sessions", "remember this in citadel", "proactive ingest", "set up citadel autosync", "personal kb sync", "install autosync", and https://citadel-archive-production.up.railway.app/skills/proactive-ingest.
 ---
 
 # Citadel Proactive Ingest
 
 Capture durable engineering knowledge into Citadel **as it happens**, with no
-per-session ceremony. Four autonomous layers — dev-side hooks plus server-side
-cron — all **fail-silent** and **personal-by-default** unless explicitly promoted.
+per-session ceremony. Five layers — proactive agent reads, dev-side hooks, plus
+server-side cron — all **fail-silent** and **personal-by-default** unless
+explicitly promoted or volunteered.
 
+0. **Task start, agent-driven (proactive read).** Before coding on a project
+   question, run `citadel_search` (Central + your Node + Shared Session Traces).
+   Treat trace hits as **reference-only** prior work — verify before acting;
+   **Central** stays org-authoritative. After a hard dead end the user wants
+   teammates to skip, ask for approval then call `citadel_share_session`.
 1. **Mid-session, agent-driven.** While working, the agent proactively calls
    `citadel_ingest` for durable facts and decisions. Personal-by-default.
 2. **Git push, hook-driven (universal baseline).** On every `git push` (all
@@ -47,6 +53,33 @@ via tags — ADR-0007 **Seat Node Write Policy**.
 **Central** updates for your notes happen when the **Promotion Agent** rules
 pass (known masumi-org work) or when you **approve** a **New Org Project**
 proposal in the **Operations Dashboard**, MCP, or `citadel promotion` CLI.
+
+## Layer 0 — proactive search and shared session traces
+
+**Search before coding.** At the start of a task — architecture, debugging,
+"how do we do X here" — run `citadel_search` without waiting to be asked. Default
+scope includes your **Node**, **Central**, and **`session-traces`** (Shared
+Session Traces volunteered by teammates).
+
+**Trust demotion on trace hits.** Results are split (`central`, `session_traces`,
+`node`). Every trace hit carries `_citadel.trust: reference-only`, plus
+`author_seat` and age. Traces are consultable prior work — **not Structured
+Knowledge**. Never treat them as org truth; verify against code, Central, or the
+author before acting.
+
+**Share dead-end routes (explicit consent only).** When the session surfaced a
+costly wrong turn another teammate would likely repeat, ask the user:
+
+> "Want to share this session's route so teammates can find it via search?"
+
+Only after **yes**, call `citadel_share_session` (from an Approved Capture Root).
+It uploads **Compact Session Context** — distilled recap + dead ends, never raw
+transcript. SessionEnd hooks still write **private Node** traces only; sharing is
+never automatic in v1.
+
+**Cron is not for agents.** Railway cron syncs GitHub/Linear org sources and runs
+the learning pipeline — it does **not** replace agent `citadel_search` or
+per-agent share decisions. Do not schedule cron jobs for per-seat agent behavior.
 
 ## Layer 1 — proactive mid-session ingest (agent behavior)
 
@@ -221,7 +254,10 @@ Manual admin triggers (only when the user explicitly asks):
 
 | Situation | Agent action |
 |---|---|
-| User asks a project/architecture question | `citadel_search` (Central + own **Node**) |
+| Starting work on a project/architecture/debug task | **`citadel_search` first** (Central + own **Node** + `session-traces`) |
+| Trace hit in search | Read as **reference-only**; verify before acting; cite `author_seat` |
+| User asks a project/architecture question mid-task | `citadel_search` (Central + own **Node** + traces) |
+| Costly dead end the user wants teammates to skip | Ask approval → `citadel_share_session` (inside Approved Capture Root) |
 | User asks "what do I need to do?" / task list | `citadel_linear_my_issues` (**Seat-Scoped Mirror** in own **Node**) |
 | Org-wide Linear context | `citadel_linear_search` (Central) |
 | Durable fact crystallizes mid-session | `citadel_ingest` (personal-by-default; promote with tag only when user asks) |

@@ -1,7 +1,7 @@
 # Shared Session Traces — cross-agent route reuse
 
 **Date:** 2026-07-20
-**Status:** Design accepted (2026-07-20 grill); pending implementation
+**Status:** v1 implemented (2026-07-20); v1.1 items tracked below
 **ADR:** [ADR-0011](../../adr/0011-shared-session-traces.md) — amends ADR-0007, relates ADR-0003 / ADR-0009
 **Glossary:** `CONTEXT.md` — **Session Trace**, **Shared Session Trace**, **Compact Session Context**, amended **Seat Presence**, amended **Tiered Ingestion**
 
@@ -27,8 +27,9 @@ records it in a place teammates can find.
 | Component | File | State |
 |---|---|---|
 | SessionEnd distiller | `kb/hooks/sync_session.py` | Ships. Deterministic distill into task / outcome / files / decision-marker snippets. Writes to the seat **Node** only. |
-| SessionStart injector | `kb/hooks/sync_start.py` | Ships, but thin. Fetches `/api/contributions/recent?mine=true` — the caller's *own* contribution titles and dates. No teammate content, no bodies. |
-| Search | `citadel_search`, `POST /search` | Generic top-k over seat **Node** + **Central**. No `session-traces` scope, no trust demotion. |
+| SessionStart injector | `kb/hooks/sync_start.py` | Ships. Proactive search guidance + optional share prompt; no teammate trace push (search-only discovery). |
+| Share + distill | `kb/session_trace_distill.py`, `kb/session_trace.py`, `POST /api/share-session`, `citadel_share_session` | **Shipped (v1).** Client distill + redact; server LLM dead-end refinement when tool errors exist; dual-write to Node + `session-traces`. |
+| Search | `citadel_search`, `POST /search` | **Shipped (v1).** Default scope: seat **Node** + **Central** + `session-traces`; split sections; reference-only trust on trace hits. |
 
 Confirmed gaps:
 
