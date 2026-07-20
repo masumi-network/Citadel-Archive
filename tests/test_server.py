@@ -499,6 +499,49 @@ def test_knowledge_events_api_returns_resumable_timeline() -> None:
     assert unauthenticated.status_code == 401
 
 
+def test_knowledge_events_scopes_timeline_to_the_caller(tmp_path: Any) -> None:
+    # ADR-0009: the timeline carries Node content (event messages, dataset names,
+    # error operations). It previously discarded the identity and returned every
+    # seat's events to any reader token — visible in plain `citadel activity`
+    # output, which printed other seats' ingests under the caller's own token.
+    app.state.access_store = AccessStore(tmp_path / "access.json")
+    admin = authed_client()
+    created = admin.post(
+        "/api/access/tokens",
+        json={
+            "name": "scoped-reader",
+            "role": "writer",
+            "kind": "service_account",
+            "default_dataset": "personal",
+            "allowed_datasets": ["personal"],
+        },
+    )
+    token = created.json()["token"]
+    api_client = TestClient(app, base_url="https://testserver")
+    headers = {"Authorization": f"Bearer {token}"}
+
+    # An event on a dataset the scoped token cannot see, and one it can.
+    admin.post("/ingest", json={"data": "Another seat's note", "dataset": "masumi-network"})
+    api_client.post("/ingest", json={"data": "My own note"}, headers=headers)
+
+    scoped = api_client.get("/api/knowledge/events?limit=50", headers=headers)
+    unscoped = admin.get("/api/knowledge/events?limit=50")
+
+    assert scoped.status_code == 200
+    scoped_datasets = {
+        (event.get("details") or {}).get("dataset") for event in scoped.json()["events"]
+    }
+    assert "masumi-network" not in scoped_datasets
+    assert "personal" in scoped_datasets
+    # latest_event_id stays global so --watch resumption cannot loop forever.
+    assert scoped.json()["latest_event_id"] == unscoped.json()["latest_event_id"]
+    # An admin/bypass caller still sees everything.
+    unscoped_datasets = {
+        (event.get("details") or {}).get("dataset") for event in unscoped.json()["events"]
+    }
+    assert {"masumi-network", "personal"} <= unscoped_datasets
+
+
 def test_reader_access_can_view_and_search_but_not_mutate() -> None:
     client = authed_client("test-reader")
 
@@ -778,6 +821,63 @@ def test_token_allowed_datasets_rejects_other_dataset(tmp_path: Any) -> None:
     assert allowed.json()["dataset"] == "personal"
     assert denied.status_code == 403
     assert denied.json()["detail"] == "Dataset not allowed: masumi-network."
+
+
+def test_feedback_rejects_dataset_outside_token_allowlist(tmp_path: Any) -> None:
+    # /feedback is a durable write on a cache miss. Before this was resolved, a
+    # writer token could name any dataset — including another seat's node, which
+    # enforce_dataset_allowlist is default-deny for — and have the write and its
+    # mesh event attributed there.
+    app.state.access_store = AccessStore(tmp_path / "access.json")
+    client = authed_client()
+    created = client.post(
+        "/api/access/tokens",
+        json={
+            "name": "scoped-feedback-writer",
+            "role": "writer",
+            "kind": "service_account",
+            "default_dataset": "personal",
+            "allowed_datasets": ["personal"],
+        },
+    )
+    token = created.json()["token"]
+    api_client = TestClient(app, base_url="https://testserver")
+
+    denied = api_client.post(
+        "/feedback",
+        json={"qa_id": "qa-1", "score": 1, "text": "useful", "dataset": "seat:someone-else"},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    allowed = api_client.post(
+        "/feedback",
+        json={"qa_id": "qa-1", "score": 1, "text": "useful"},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert denied.status_code == 403
+    assert denied.json()["detail"] == "Dataset not allowed: seat:someone-else."
+    assert allowed.status_code == 200
+
+
+def test_feedback_rejects_oversized_text(tmp_path: Any) -> None:
+    # FeedbackBody.text carries no max_length; the durable-write path needs the
+    # same byte cap as /ingest.
+    app.state.access_store = AccessStore(tmp_path / "access.json")
+    client = authed_client()
+    created = client.post(
+        "/api/access/tokens",
+        json={"name": "feedback-writer", "role": "writer", "kind": "service_account"},
+    )
+    token = created.json()["token"]
+    api_client = TestClient(app, base_url="https://testserver")
+
+    oversized = api_client.post(
+        "/feedback",
+        json={"qa_id": "qa-1", "score": 1, "text": "x" * (200 * 1024 + 1)},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert oversized.status_code == 413
 
 
 def test_tokens_without_memory_fields_use_config_defaults(tmp_path: Any) -> None:
@@ -1178,6 +1278,69 @@ def test_backup_mirror_push_errors_are_audited(tmp_path: Any) -> None:
     assert events[-1]["action"] == "backup_mirror.run"
     assert events[-1]["success"] is False
     assert events[-1]["detail"]["reason"] == "publish_failed"
+
+
+def test_obsidian_vault_is_not_readable_or_writable_by_another_actor(tmp_path: Any) -> None:
+    # owner_actor_id was recorded at registration and read nowhere, so any token
+    # holding the obsidian scopes could address another seat's vault by id — and
+    # ids are disclosed via /api/sources. Reads returned full note bodies and
+    # revision history. 404 (not 403) everywhere: no existence oracle.
+    app.state.access_store = AccessStore(tmp_path / "access.json")
+    app.state.obsidian_sync = ObsidianSyncStore(tmp_path / "obsidian.json")
+    admin = authed_client()
+
+    owner_token = admin.post(
+        "/api/access/tokens",
+        json={"name": "vault-owner", "role": "writer", "kind": "service_account"},
+    ).json()["token"]
+    intruder_token = admin.post(
+        "/api/access/tokens",
+        json={"name": "vault-intruder", "role": "writer", "kind": "service_account"},
+    ).json()["token"]
+
+    api = TestClient(app, base_url="https://testserver")
+    owner_headers = {"Authorization": f"Bearer {owner_token}"}
+    intruder_headers = {"Authorization": f"Bearer {intruder_token}"}
+
+    vault_id = api.post(
+        "/api/obsidian/vaults", json={"vault_name": "Private Vault"}, headers=owner_headers
+    ).json()["vault"]["id"]
+    api.post(
+        "/api/obsidian/sync/push",
+        json={
+            "vault_id": vault_id,
+            "documents": [{"path": "Secrets.md", "content": "private body", "base_rev": None}],
+        },
+        headers=owner_headers,
+    )
+
+    owner_manifest = api.get(f"/api/obsidian/manifest?vault_id={vault_id}", headers=owner_headers)
+    document_id = owner_manifest.json()["documents"][0]["id"]
+
+    intruder_manifest = api.get(
+        f"/api/obsidian/manifest?vault_id={vault_id}", headers=intruder_headers
+    )
+    intruder_pull = api.get(
+        f"/api/obsidian/sync/pull?vault_id={vault_id}&cursor=0", headers=intruder_headers
+    )
+    intruder_document = api.get(f"/api/documents/{document_id}", headers=intruder_headers)
+    intruder_push = api.post(
+        "/api/obsidian/sync/push",
+        json={
+            "vault_id": vault_id,
+            "documents": [{"path": "Secrets.md", "content": "overwritten", "base_rev": None}],
+        },
+        headers=intruder_headers,
+    )
+
+    assert owner_manifest.status_code == 200
+    assert intruder_manifest.status_code == 404
+    assert intruder_pull.status_code == 404
+    assert intruder_document.status_code == 404
+    assert intruder_push.status_code == 404
+    # The owner still has full access, and an admin/bypass token is unaffected.
+    assert api.get(f"/api/documents/{document_id}", headers=owner_headers).status_code == 200
+    assert admin.get(f"/api/obsidian/manifest?vault_id={vault_id}").status_code == 200
 
 
 def test_obsidian_vault_sync_registers_pushes_pulls_and_lists_sources(tmp_path: Any) -> None:

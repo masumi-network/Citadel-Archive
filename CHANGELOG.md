@@ -31,6 +31,37 @@ All notable changes to `citadel-archive` are documented here. Format follows
   the mint (`citadel seat token <slug>` / dashboard *Assign to seat*) and the
   `status --json` signature of a correctly-provisioned token.
 
+### Security
+
+- **Obsidian vaults now enforce ownership (ADR-0009).** `owner_actor_id` was
+  recorded at vault registration and read nowhere, so `/api/obsidian/manifest`,
+  `/api/obsidian/sync/pull`, `/api/obsidian/sync/push`,
+  `/api/obsidian/conflicts/{id}/resolve`, and the Obsidian branch of
+  `/api/documents/{id}` were gated only by scope — and both
+  `obsidian:sync:pull` and `kb:read` are in the default reader set. Any token
+  could therefore read another seat's full note bodies and revision history, or
+  push revisions into their vault, given a vault id that `/api/sources`
+  discloses. All five now fail closed with **404, never 403**, matching the
+  cognee drill-down rule so a scoped caller cannot use the status code as an
+  existence oracle. Admin/env callers are unaffected.
+- **`GET /api/knowledge/events` is now caller-scoped (ADR-0009).** The handler
+  called `require_access` and discarded the identity, returning every seat's
+  events — message, dataset, and error operation/reason — to any reader token,
+  while its two sibling projections (`/api/mesh`, `/events`) both scoped. This
+  was visible in plain `citadel activity` output, which printed other seats'
+  ingests under the caller's own token. `Mesh.timeline()` gains an optional
+  `visible` predicate, applied before the limit slice so a caller still gets a
+  full page of their own events; `latest_event_id` stays global so `--watch`
+  resumption cannot loop. Admin/env tokens are unaffected.
+- **`POST /feedback` now resolves the caller-supplied dataset and session.**
+  The handler passed `body.dataset` and `body.session_id` straight through to
+  the durable write, skipping `resolve_write_dataset` / `resolve_session_id` —
+  the only write-scoped route that did (`/ingest` and `/api/contribute` both
+  gate them). A writer token could therefore write feedback into, and emit mesh
+  events attributed to, a dataset outside its allowlist, including another
+  seat's node. Feedback text is now also byte-capped like `/ingest`
+  (`FeedbackBody.text` carries no `max_length` of its own).
+
 ### Fixed
 
 - **`--json` error paths are now valid JSON across the read/write CLI.**

@@ -2558,16 +2558,28 @@ async def knowledge_events(
     event_type: str | None = Query(default=None, alias="type"),
     kind: str | None = None,
 ) -> Any:
-    require_access(request, "reader", "kb:read")
+    identity = require_access(request, "reader", "kb:read")
     if after_id is not None and after_id < 0:
         raise HTTPException(status_code=422, detail="after_id must be zero or greater.")
     if not 1 <= limit <= 160:
         raise HTTPException(status_code=422, detail="Timeline limit must be between 1 and 160.")
+    # ADR-0009: the timeline carries Node content (event messages, dataset names,
+    # and error operations/reasons), so scope it to the caller exactly as the two
+    # sibling projections do — /api/mesh via scope_mesh_snapshot and /events via
+    # _mesh_dataset_visible. This endpoint previously discarded the identity and
+    # returned every seat's events to any reader token.
+    visible_cache: dict[str, bool] = {}
+    visible = (
+        None
+        if can_bypass_dataset_allowlist(identity)
+        else (lambda dataset: _mesh_dataset_visible(identity, dataset, visible_cache))
+    )
     timeline = await get_mesh().timeline(
         after_id=after_id,
         limit=limit,
         event_type=event_type,
         kind=kind,
+        visible=visible,
     )
     return jsonable_encoder({"ok": True, **timeline})
 
@@ -3017,9 +3029,29 @@ async def register_obsidian_vault(body: ObsidianVaultBody, request: Request) -> 
     return {"ok": True, "vault": jsonable_encoder(vault)}
 
 
+def assert_obsidian_vault_owned(identity: AccessIdentity, vault_id: str) -> None:
+    """Fail closed unless the caller owns the vault (ADR-0009).
+
+    A vault's ``owner_actor_id`` is recorded at registration but was never read,
+    so any token holding the obsidian sync scopes could address another seat's
+    vault by id — and ids are disclosed by /api/sources. Mirrors the cognee
+    drill-down rule at /api/documents: 404, never 403, so a scoped caller cannot
+    use the status code as an existence oracle. Admin/env callers bypass.
+    """
+    if can_bypass_dataset_allowlist(identity):
+        return
+    try:
+        owner = get_obsidian_sync().vault_owner(vault_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Vault not found.") from exc
+    if owner != identity.actor_id:
+        raise HTTPException(status_code=404, detail="Vault not found.")
+
+
 @app.get("/api/obsidian/manifest")
 async def obsidian_manifest(request: Request, vault_id: str, cursor: int | None = None) -> Any:
-    require_access(request, "reader", "obsidian:sync:pull")
+    identity = require_access(request, "reader", "obsidian:sync:pull")
+    assert_obsidian_vault_owned(identity, vault_id)
     try:
         manifest = get_obsidian_sync().manifest(vault_id=vault_id, cursor=cursor)
     except KeyError as exc:
@@ -3030,6 +3062,10 @@ async def obsidian_manifest(request: Request, vault_id: str, cursor: int | None 
 @app.post("/api/obsidian/sync/push")
 async def push_obsidian_sync(body: ObsidianPushBody, request: Request) -> Any:
     actor = require_access(request, "writer", "obsidian:sync:push")
+    # The dataset was already resolved; the vault was not — actor was recorded on
+    # the record but never compared to owner_actor_id, so a writer could push
+    # revisions into another seat's vault.
+    assert_obsidian_vault_owned(actor, body.vault_id)
     citadel = get_citadel()
     mesh_state = get_mesh()
     push_dataset = resolve_write_dataset(actor, body.dataset, citadel.config)
@@ -3179,7 +3215,8 @@ async def push_obsidian_sync(body: ObsidianPushBody, request: Request) -> Any:
 
 @app.get("/api/obsidian/sync/pull")
 async def pull_obsidian_sync(request: Request, vault_id: str, cursor: int | None = None) -> Any:
-    require_access(request, "reader", "obsidian:sync:pull")
+    identity = require_access(request, "reader", "obsidian:sync:pull")
+    assert_obsidian_vault_owned(identity, vault_id)
     try:
         result = get_obsidian_sync().pull(vault_id=vault_id, cursor=cursor)
     except KeyError as exc:
@@ -3194,8 +3231,16 @@ async def resolve_obsidian_conflict(
     request: Request,
 ) -> Any:
     actor = require_access(request, "writer", "obsidian:sync:push")
+    obsidian = get_obsidian_sync()
     try:
-        result = get_obsidian_sync().resolve_conflict(
+        conflict_vault = obsidian.conflict_vault_id(conflict_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Conflict not found.") from exc
+    # actor was passed through for attribution only; resolving a conflict writes
+    # a document body, so it needs the same vault ownership gate as push.
+    assert_obsidian_vault_owned(actor, conflict_vault or "")
+    try:
+        result = obsidian.resolve_conflict(
             conflict_id=conflict_id,
             actor=actor,
             resolution=body.resolution,
@@ -3304,7 +3349,12 @@ async def source_document(document_id: str, request: Request) -> Any:
             raise HTTPException(status_code=404, detail="Document not found.")
         return {"ok": True, "document": jsonable_encoder(github_document)}
     try:
-        document = get_obsidian_sync().document(document_id)
+        obsidian = get_obsidian_sync()
+        document = obsidian.document(document_id)
+        # document() is a flat global lookup returning the full body and every
+        # revision, so it needs the same ownership gate as manifest/pull. The
+        # cognee branch below already 404s foreign documents; this one didn't.
+        assert_obsidian_vault_owned(identity, obsidian.document_vault_id(document_id) or "")
     except KeyError:
         # Not a github/obsidian doc — fall back to resolving a native cognee
         # search-hit id against the graph store (#28).
@@ -4458,17 +4508,27 @@ async def search(body: SearchBody, request: Request, response: Response) -> Any:
 @app.post("/feedback")
 async def feedback(body: FeedbackBody, request: Request) -> Any:
     actor = require_access(request, "writer", "kb:feedback")
+    # Feedback text lands in durable storage on a cache miss, so it needs the same
+    # byte cap as /ingest — FeedbackBody.text carries no max_length of its own.
+    if body.text:
+        enforce_ingest_size(body.text)
     citadel = get_citadel()
     mesh_state = get_mesh()
-    dataset = body.dataset or citadel.config.default_dataset
+    # Feedback is a durable write on a cache miss, so the caller-supplied dataset
+    # and session MUST go through the same resolvers as /ingest and /api/contribute.
+    # Passing body.dataset through unresolved let any writer token write into (and
+    # emit mesh events attributed to) another seat's node, which
+    # enforce_dataset_allowlist is default-deny for.
+    dataset = resolve_write_dataset(actor, body.dataset, citadel.config)
+    session_id = resolve_session_id(actor, body.session_id)
     try:
         result = await citadel.feedback(
             FeedbackRequest(
                 qa_id=body.qa_id,
                 score=body.score,
                 text=body.text,
-                session_id=body.session_id,
-                dataset=body.dataset,
+                session_id=session_id,
+                dataset=dataset,
             )
         )
     except Exception as exc:  # pragma: no cover - depends on runtime Cognee configuration.
