@@ -1,11 +1,12 @@
 # ADR 0011 — Shared Session Traces as a third storage layer
 
-- **Status:** Proposed (2026-07-20)
+- **Status:** Accepted (2026-07-20 grill)
 - **Amends:** ADR-0007 (seat capture, promotion, and write policy), ADR-0003
   (seat/node/Central private memory)
 - **Relates:** ADR-0009 (mesh read isolation — presence vs content),
   `CONTEXT.md` glossary terms: **Session Trace**, **Shared Session Trace**,
-  **Seat Presence**, **Approved Capture Roots**, **Capture Policy**.
+  **Compact Session Context**, **Seat Presence**, **Approved Capture Roots**,
+  **Capture Policy**.
 - **Design spec:** [`docs/superpowers/specs/2026-07-20-shared-session-index-design.md`](../superpowers/specs/2026-07-20-shared-session-index-design.md)
 
 ## Context
@@ -13,7 +14,8 @@
 When one **Vault Member**'s agent works through a problem, the route it took —
 what was tried, what failed, and why — is discarded at session end. The next
 member's agent rediscovers the same dead ends from scratch. The expensive thing
-to rediscover is the failed attempt, and nothing in the system records it.
+to rediscover is the failed attempt, and nothing in the system records it in a
+place teammates can search.
 
 Citadel today stores **semantic** memory: source-linked facts and decisions,
 curated in **Central**. What is missing is **episodic** memory: the route.
@@ -36,163 +38,138 @@ non-obvious enough that it must be written down.
 A **Shared Session Trace** is a **Session Trace** its author has volunteered to
 the organization. Shared traces live in a dataset (`session-traces`) that is
 **neither a Node nor Central**: readable by every **Seat**, writable by a seat
-only for its own traces, and never curated.
+only for its own traces via explicit in-session MCP share, and never curated.
 
 ### 1. A third storage layer, deliberately
 
 | Layer | Dataset | Write | Read | Curated |
 |---|---|---|---|---|
 | **Node** | `seat:{slug}` | own seat only | own seat only | no (light tier) |
-| **Shared Session Traces** | `session-traces` | own seat, own traces, opt-in | **all seats** | **no — never** |
+| **Shared Session Traces** | `session-traces` | own seat, explicit MCP share | **all seats** | **no — never** |
 | **Central** | `masumi-network` | governed sync + **Promotion** | all seats | yes (full tier) |
 
 Traces are **consultable prior work, not Structured Knowledge**. They carry no
-claim of being true, are never synthesized into canonical pages, and are never
-promoted to **Central**. This is the whole reason they get their own layer
-rather than joining **Central**: routing unverified episodic records through the
-curated path would poison the synthesis that makes **Central** trustworthy.
+claim of being true, are never synthesized into canonical pages, are never
+promoted to **Central**, and **never feed the daily improve / self-improvement
+loop**. Routing unverified episodic records through the curated path would
+poison the synthesis that makes **Central** trustworthy.
 
 ### 2. How this amends ADR-0007
 
 ADR-0007's "Node-only on all channels" becomes:
 
 > Node-only, **except** content the seat explicitly volunteers as a
-> **Shared Session Trace**.
+> **Shared Session Trace** via `citadel_share_session`.
 
 The invariant ADR-0007 was actually protecting survives intact: **no
-involuntary seat write leaves the Node.** ADR-0007 removed the seat's *implicit*
-org-tag route to **Central** precisely because it fired without the member
-choosing it. Volunteering a trace is the opposite — an explicit act, per repo or
-per session.
-
-**Central** remains strictly read-only for seat callers. This ADR opens no path
-from a seat to **Central**.
+involuntary seat write leaves the Node.** **Central** remains strictly read-only
+for seat callers.
 
 ### 3. How this relates to ADR-0003
 
 "Reads never cross seat **Nodes**" holds **literally and without exception**. A
 **Shared Session Trace** is a *copy* written to a separate dataset; no seat ever
-reads another seat's **Node**. Stated explicitly because the feature looks like
-a violation until the copy is noticed — the same dual-write shape ADR-0003
-already chose for **Promotion**.
+reads another seat's **Node**.
 
-### 4. Approved Capture Roots are the outer boundary
+### 4. v1 share surface and consent
 
-Both consent paths are bounded by **Approved Capture Roots** and the merged
-**Capture Policy** deny globs. Roots decide what may leave the machine *at all*;
-the consent level decides whether a trace is additionally shared.
+| v1 | In Approved Capture Root | Outside root |
+|---|---|---|
+| **`citadel_share_session` (MCP, user-approved)** | shares | **refused** |
+| **SessionEnd auto-share** | **off** | off |
+| **`CaptureRoot.share_traces`** | **deferred** (after `citadel unshare`) | — |
 
-| | Root, `share_traces=true` | Root, `share_traces=false` | Not a root |
-|---|---|---|---|
-| **Automatic** (SessionEnd hook) | shares | no | no |
-| **Explicit** (`citadel_share_session`) | shares | shares that one | **refused** |
+Server-side root check on `cwd` for every share.
 
-A trace from a path outside **Approved Capture Roots** is refused with an
-actionable message, never shared silently. The root check is enforced
-**server-side**: the share tool is reachable by any writer token, and a
-client-side check on a token-bearing path is not a check.
+### 5. Compact Session Context and distillation
 
-### 5. Attribution without verdicts on people
+Share uploads **Compact Session Context** — a structured **Session Trace**
+record, not raw transcript:
 
-A **Shared Session Trace** always carries its author **Seat** — so members can
-follow up, and so bad guidance is attributable.
+1. Client: `distill_trace()` + `redact_commands()` (reuse SessionEnd logic)
+2. Server: LLM dead-end distillation **only when client distill captured
+   tool-error pairs**
+3. Dual-write: seat **Node** (light, deterministic) + `session-traces` (shared)
+4. **Deferred + coalesced cognify** (~5–15 min) — not inline before MCP returns
 
-Outcome is recorded per *approach* (`resolution: solved | superseded | dead_end`)
-and never as a verdict on the session or its author. "This approach was a dead
-end" is a fact about the code; "this member abandoned this" is a claim about a
-person. The vault records the first and never the second.
+Private **Node** memory is never enriched.
 
-This also protects the feature's value: abandoned work is the most useful thing
-to share, and members will stop sharing it if sharing produces a durable public
-record of their failures.
+### 6. Retrieval (v1)
 
-### 6. A third ingestion tier: enriched, never synthesized
+Extend default **`citadel_search`** scope to include `session-traces`. Results
+are **split** (`central` vs `session_traces`) with **reference-only** trust
+demotion, `author_seat`, and age on every trace hit.
 
-**Tiered Ingestion** becomes three tiers rather than two:
+**`citadel_prior_work`** (overlap-ranked lookup) is **v1.1**, not v1.
 
-| Tier | Content | Enrichment | Synthesis |
-|---|---|---|---|
-| light | **Node** capture | no | no |
-| **shared** | **Shared Session Trace** | **yes** | **no** |
-| full | org sync, **Promotion** | yes | yes |
+Read scope is **org-wide** for traces, consistent with whole-vault **Access
+Tokens** (department-scoped access was considered and resolved against).
 
-Detecting a tool *failure* is mechanical; detecting a *dead end* — an approach
-tried and then abandoned — is semantic. So dead-end distillation needs an LLM.
-Placing it server-side and only on the shared tier keeps three properties at
-once: the SessionEnd hook stays stdlib-only and never egresses transcript
-content to a model provider; private **Node** memory is never enriched, exactly
-as today; and LLM cost is paid only for traces a member chose to share.
+### 7. Retraction and retention
 
-Shared traces are enriched but **never synthesized**. Synthesis is what produces
-canonical **Structured Knowledge**, and a trace makes no claim of being true.
-Enrichment is the price of volunteering content to the org; synthesis remains a
-**Central** benefit.
+- **`citadel unshare <trace-id>`:** soft retract (hidden from search); **Node**
+  copy untouched; per-trace only
+- **Admin hard-delete:** audited removal from `session-traces`
+- **TTL ~90 days:** prune expired traces
+- Automatic standing consent (`share_traces=true`) ships **after** unshare
 
-### 7. Seat Presence is unchanged
+### 8. Seat Presence and Central improve loop
 
-`CONTEXT.md` **Seat Presence** now reads "never includes **Node** content
-disclosed *involuntarily*". Shared traces are disclosure by choice and are
-governed by this ADR, not by **Seat Presence**. The ADR-0009 rule stands: the
-org broadcast still carries presence only — counts, timing, seat slug — never
-**Node** content.
+**Seat Presence** unchanged — shared traces are disclosure by choice, not
+involuntary **Node** leakage.
 
-### 8. Retrieval
-
-A new MCP tool, `citadel_prior_work(task, files, repo)`, ranks on file-path
-overlap, then same-repo, then semantic fill over `session-traces` only. Results
-render inside a fenced, attributed, reference-only wrapper.
-
-Read scope is **org-wide**, consistent with `CONTEXT.md:311` — department-scoped
-access was considered for the first version and resolved against.
+Daily Citadel improve / self-improvement runs on **Central Structured Knowledge
+only**, never on `session-traces`.
 
 ## Considered Options
 
-- **Route traces through the Promotion queue (ADR-0007's existing lane).**
-  Least new authorization surface and a perfect fit for the existing model.
-  Rejected: promotion requires human approval per item, and an approval queue
-  on a per-session-volume feed dies from neglect — taking the feature with it.
-  Promotion exists to gate what becomes *org truth*; traces make no truth claim.
+- **Route traces through the Promotion queue.** Rejected: approval queue dies from
+  neglect at session volume; promotion gates org truth; traces make no truth
+  claim.
 
-- **Put traces in Central under an `org-ready` tag.** No new layer at all.
-  Rejected: **Central** is curated **Structured Knowledge** with full-tier
-  synthesis. Unverified episodic records would be synthesized into canonical
-  pages as though they were source-linked fact. It would also require reopening
-  the seat→Central write path that ADR-0007 deliberately closed.
+- **Put traces in Central.** Rejected: would synthesize unverified episodic
+  records into canonical pages; reopens seat→Central write path.
 
-- **Share every Session Trace by default, with opt-out.** Maximum coverage, and
-  the feature only pays off at volume. Rejected: reverses the
-  personal-by-default invariant that ADR-0003 and the whole seat model rest on.
+- **Share every Session Trace by default.** Rejected: reverses personal-by-default
+  invariant.
 
-- **Keep traces Node-private; solve reuse by having members write notes.** Zero
-  new risk. Rejected: this is the status quo, and it does not happen — the
-  distiller has been shipping Node traces and none of them are reachable.
+- **Auto-synthesize traces into Central via a curator LLM.** Rejected at grill:
+  risks polluting org context; traces stay separate; agents opt in via search.
+
+- **Volume-only store without cognify.** Considered for cost; rejected at grill:
+  teammates discover traces via **`citadel_search`**; cognify on explicit share
+  only, with defer + coalesce to protect Railway budget.
+
+- **Keep traces Node-private.** Rejected: status quo; distiller ships Node traces
+  and none are reachable cross-seat.
 
 ## Consequences
 
 - **+** Episodic memory becomes reusable across the org without touching
   **Central**'s curation guarantees or the **Node** isolation boundary.
-- **+** Reuses **Approved Capture Roots** as the consent surface rather than
-  inventing a second one.
-- **−** A third dataset class in a codebase whose write and read routers assume
-  a Node/Central dichotomy. Every branch of the form "Central, else it must be a
-  seat node" is now a latent bug. These must be found and fixed, not assumed
-  absent.
-- **−** A high-volume write source contending for the single-writer Kuzu
-  cognify lock (#47), alongside the evolve scheduler, GitHub/Linear sync, and
-  git-push hooks. Requires coalescing before the 15-seat rollout.
+- **+** Teammates use existing **`citadel_search`** habit; trust demotion prevents
+  trace hits being read as org truth.
+- **+** Explicit share-only + gated LLM + coalesced cognify keeps Railway cost
+  bounded.
+- **−** A third dataset class in a codebase whose routers assume a Node/Central
+  dichotomy — latent bugs until audited.
+- **−** Cognify contention on the single-writer Kuzu lock (#47) if share volume
+  exceeds explicit-only assumptions.
 - **− Accepted risk:** cross-seat prompt injection is **contained, not
-  prevented**. A trace authored by an authenticated teammate enters another
-  member's agent context. Containment is structural — typed fields, fenced
-  render, author attribution — with no LLM screening in v1. Related open item:
-  M2 (prompt-injection promotion gate).
-- **Unresolved at proposal time:** retention policy for an uncurated,
-  monotonically growing dataset, and whether a delete/retraction path exists at
-  all in the current stack.
+  prevented** (typed fields, split results, reference-only demotion, attribution).
 
-## Open questions
+## Resolved (2026-07-20 grill)
 
-- Retention: what bounds `session-traces` growth, and does the stack support
-  deletion of ingested content?
-- Retraction: `citadel unshare <trace-id>` is required to make per-repo standing
-  consent safe, but depends on the deletion answer above.
-- Cognify coalescing window, tuned against measured seat volume.
+| Question | Resolution |
+|---|---|
+| Retention | TTL ~90 days; prune job TBD |
+| Retraction | Soft unshare + admin hard-delete; blocks standing auto-share until shipped |
+| Cognify timing | Deferred + coalesced (~5–15 min) |
+| Central boundary | Never auto-update Central or improve loop from traces |
+| Retrieval v1 | Extended `citadel_search`; `citadel_prior_work` → v1.1 |
+
+## Open (implementation)
+
+- Exact cognify coalescing window from measured seat volume
+- Hard delete maturity in Cognee vs AccessStore retraction overlay
+- Injection hardening beyond structured fields (M2 promotion-gate audit item)
