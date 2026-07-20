@@ -26,5 +26,7 @@ jobs:
         run: uv sync --all-extras --dev
       - name: Lint
         run: uv run ruff check .
+      - name: Dependency audit
+        run: uv run pip-audit --cache-dir .pip-audit-cache
       - name: Run tests
         run: uv run pytest tests/ -q
