@@ -41,8 +41,8 @@ The governed transformation of **Source Material** into **Structured Knowledge**
 _Avoid_: self-learning, magic sync, auto-truth
 
 **Tiered Ingestion**:
-Org-bound syncs receive full processing (security review, enrichment, and structuring); raw seat-**Node** agent memory receives lighter indexing only. Canonical **Structured Knowledge** synthesis — per-topic pages maintained in place — is part of the full tier: it runs on the governed **Central** path (org source sync and **Promotion**), never on light-tier **Node** captures. A **Node** holds raw captures with light indexing; synthesized knowledge is a **Central** benefit.
-_Avoid_: same pipeline for all content, skip processing, full enrichment everywhere, synthesize on every seat capture
+Content receives processing proportional to the claim it makes. Three tiers: **light** — raw seat-**Node** agent memory, indexed only, never enriched, so private working memory never reaches an external model; **shared** — a **Shared Session Trace**, enriched (the volunteered route is distilled into approaches and dead ends) but never synthesized, because it is consultable prior work and makes no claim of being true; **full** — org-bound syncs and **Promotion**, which receive security review, enrichment, and structuring. Canonical **Structured Knowledge** synthesis — per-topic pages maintained in place — belongs to the full tier alone: it runs on the governed **Central** path, never on light-tier **Node** captures and never on shared traces. Synthesized knowledge is a **Central** benefit; enrichment is the price of volunteering content to the org.
+_Avoid_: same pipeline for all content, skip processing, full enrichment everywhere, synthesize on every seat capture, enrich private node memory
 
 **Vault Member**:
 A human participant who has permission to access an **Organization Vault**.
@@ -61,8 +61,16 @@ The organization-wide shared knowledge base. Distinct from any seat **Node**.
 _Avoid_: seat node, personal vault, private agent memory
 
 **Seat Presence**:
-The org-visible operational footprint of a **Seat**: it exists, its activity level, sync recency, contribution counts, and promotion-queue depth. Visible to every **Vault Member**; never includes **Node** content (documents, session titles, text, or concepts extracted only from that **Node**).
+The org-visible operational footprint of a **Seat**: it exists, its activity level, sync recency, contribution counts, and promotion-queue depth. Visible to every **Vault Member**; never includes **Node** content disclosed *involuntarily* (documents, session titles, text, or concepts extracted only from that **Node**). A **Vault Member** may deliberately volunteer specific **Node** content as a **Shared Session Trace**; disclosure by choice is not **Seat Presence** and is governed separately.
 _Avoid_: activity feed, people report, session list, surveillance
+
+**Session Trace**:
+A structured record of how a **Seat**'s agent session approached a problem: the task, the approaches tried, which of them were dead ends, and the files touched. Not the conversation itself — a distilled, typed record of the route taken. Light-tier **Node** content, private to its **Seat** by default.
+_Avoid_: transcript, chat log, conversation history, raw session
+
+**Shared Session Trace**:
+A **Session Trace** a **Vault Member** has volunteered to the organization so other **Seats**' agents can consult it instead of rediscovering the same route. Shared by an explicit per-session act, never automatically. Carries its author **Seat** so it can be followed up on and so bad guidance is attributable. It is consultable prior work, not **Structured Knowledge**: it is never synthesized, never promoted to **Central**, and carries no claim of being true.
+_Avoid_: structured knowledge, central, vault truth, promotion, activity feed
 
 **Token**:
 The credential a **Seat** uses to access their **Node** (and **Central** per read rules). Not the storage boundary — the **Node** is.
