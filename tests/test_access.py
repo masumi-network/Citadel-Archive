@@ -6,7 +6,7 @@ from typing import Any
 
 import pytest
 
-from kb.access import AccessStore, default_scopes, validate_role_scopes
+from kb.access import SESSION_TRACES_DATASET, AccessStore, default_scopes, validate_role_scopes
 
 
 def store(tmp_path: Path) -> AccessStore:
@@ -287,12 +287,20 @@ def test_create_seat_provisions_principal_and_scoped_token(tmp_path: Path) -> No
     assert created.principal.email == "alice@example.com"
     assert created.token is not None
     assert created.api_token is not None
-    assert created.api_token.allowed_datasets == ("seat:alice", "masumi-network")
+    assert created.api_token.allowed_datasets == (
+        "seat:alice",
+        "masumi-network",
+        SESSION_TRACES_DATASET,
+    )
 
     session = access_store.authenticate_token(created.token)
     assert session is not None
     assert session.identity.default_dataset == "seat:alice"
-    assert session.identity.allowed_datasets == ("seat:alice", "masumi-network")
+    assert session.identity.allowed_datasets == (
+        "seat:alice",
+        "masumi-network",
+        SESSION_TRACES_DATASET,
+    )
 
 
 def test_create_seat_rejects_duplicate_slug(tmp_path: Path) -> None:
@@ -319,7 +327,11 @@ def test_create_seat_uses_supplied_central_dataset(tmp_path: Path) -> None:
     )
 
     assert created.api_token is not None
-    assert created.api_token.allowed_datasets == ("seat:mallory", "org-vault")
+    assert created.api_token.allowed_datasets == (
+        "seat:mallory",
+        "org-vault",
+        SESSION_TRACES_DATASET,
+    )
 
 
 def test_issue_seat_token_for_existing_seat(tmp_path: Path) -> None:
@@ -330,7 +342,11 @@ def test_issue_seat_token_for_existing_seat(tmp_path: Path) -> None:
 
     assert issued.token.startswith("ctdl_")
     assert issued.api_token.default_dataset == "seat:sarthi"  # routes to the seat
-    assert issued.api_token.allowed_datasets == ("seat:sarthi", "masumi-network")
+    assert issued.api_token.allowed_datasets == (
+        "seat:sarthi",
+        "masumi-network",
+        SESSION_TRACES_DATASET,
+    )
     assert issued.principal.seat_slug == "sarthi"  # linked to the existing seat principal
 
 
