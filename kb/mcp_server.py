@@ -17,8 +17,14 @@ from mcp.server.transport_security import TransportSecuritySettings
 from mcp.types import ToolAnnotations
 
 from kb.access import ROLE_ORDER
+from kb.capture_config import load_capture_config
 from kb.retry import run_with_retries
 from kb.security_scan import redact_secrets
+from kb.session_trace_distill import (
+    distill_trace,
+    format_compact_context,
+    iter_transcript_entries,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -133,6 +139,17 @@ TOOL_POLICIES: dict[str, ToolPolicy] = {
         ),
     ),
     "citadel_ingest": ToolPolicy(
+        role="writer",
+        scope="kb:ingest",
+        risk="additive_write",
+        annotations=ToolAnnotations(
+            readOnlyHint=False,
+            destructiveHint=False,
+            idempotentHint=False,
+            openWorldHint=False,
+        ),
+    ),
+    "citadel_share_session": ToolPolicy(
         role="writer",
         scope="kb:ingest",
         risk="additive_write",
@@ -664,6 +681,7 @@ def create_mcp_server(
     ) -> dict[str, Any]:
         """Search the Citadel Organization Vault.
 
+        Call at task start before editing code on project or architecture questions.
         Searches your personal node and shared Central together by default; pass
         dataset to narrow. Leave session_id default.
         """
@@ -805,6 +823,66 @@ def create_mcp_server(
             "citadel_ingest",
             post_ingest,
         )
+
+    @mcp.tool(annotations=TOOL_POLICIES["citadel_share_session"].annotations)
+    async def citadel_share_session(
+        ctx: Context,
+        cwd: str,
+        data: str | None = None,
+        transcript_path: str | None = None,
+        capture_roots: list[str] | None = None,
+        has_tool_errors: bool = False,
+    ) -> dict[str, Any]:
+        """Volunteer a Shared Session Trace for teammates to find via search.
+
+        **Always ask the user for explicit approval before calling this tool.**
+
+        Provide either ``data`` (Compact Session Context markdown) or a local
+        ``transcript_path`` to distill on this machine. Pass ``capture_roots``
+        from ``~/.citadel/capture.json`` when not using local capture config.
+        Writes to ``session-traces`` (reference-only) and your private Node.
+        """
+
+        def post_share() -> dict[str, Any]:
+            normalized_cwd = _require_non_empty(cwd, "cwd")
+            roots = list(capture_roots or [])
+            if not roots:
+                try:
+                    roots = [root.path for root in load_capture_config().roots]
+                except ValueError:
+                    roots = []
+            if not roots:
+                raise ToolError(
+                    "capture_roots is required when no local capture config exists."
+                )
+
+            payload_data = (data or "").strip()
+            tool_errors = has_tool_errors
+            if not payload_data and transcript_path:
+                session = resolve_client(ctx).get("/api/session", tool_name="citadel_session")
+                seat_slug = str(session.get("seat_slug") or "").strip()
+                if not seat_slug:
+                    raise ToolError("Seat slug required to share a session trace.")
+                entries = iter_transcript_entries(transcript_path)
+                record = distill_trace(entries, cwd=normalized_cwd, author_seat=seat_slug)
+                payload_data = format_compact_context(record)
+                tool_errors = tool_errors or record.has_tool_errors
+            if not payload_data:
+                raise ToolError("Provide data or a readable transcript_path.")
+
+            _validate_ingest_size(payload_data)
+            return resolve_client(ctx).post(
+                "/api/share-session",
+                {
+                    "data": payload_data,
+                    "cwd": normalized_cwd,
+                    "capture_roots": roots,
+                    "has_tool_errors": tool_errors,
+                },
+                tool_name="citadel_share_session",
+            )
+
+        return await _call_async("citadel_share_session", post_share)
 
     @mcp.tool(annotations=TOOL_POLICIES["citadel_contribute"].annotations)
     async def citadel_contribute(

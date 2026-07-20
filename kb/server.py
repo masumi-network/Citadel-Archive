@@ -30,6 +30,7 @@ from pydantic import BaseModel, Field
 
 from kb.access import (
     CENTRAL_DATASET,
+    SESSION_TRACES_DATASET,
     SEAT_DATASET_PREFIX,
     AccessIdentity,
     AccessStore,
@@ -40,6 +41,7 @@ from kb.access import (
     validate_seat_slug,
 )
 from kb.capture_policy import SeatCapturePolicy, capture_policy_payload
+from kb.capture_config import matched_capture_root
 from kb.backup_mirror import BackupMirror, BackupMirrorDisabled, BackupMirrorPublishError
 from kb.conflicts import KnowledgeConflictStore, obsidian_push_conflict_candidate
 from kb.tags import normalize_tags
@@ -49,6 +51,7 @@ from kb.github_sync import GitHubOrgSyncer
 from kb.linear_sync import LinearSyncer
 from kb.knowledge_mesh import KnowledgeMesh
 from kb.learning import LearningOutcome, LearningProcess
+from kb.session_trace import enrich_shared_trace
 from kb.learning_agent import LearningAgent
 from kb.logging_utils import configure_logging
 from kb.mcp_server import TOOL_POLICIES, _max_ingest_bytes, create_mcp_server
@@ -58,7 +61,7 @@ from kb.obsidian_sync import ObsidianSyncStore, SyncPushDocument, normalize_path
 from kb.promotion import PromotionEngine
 from kb.promotion_queue import APPROVED_STATUS, PENDING_STATUS, REJECTED_STATUS
 from kb.repo_content_sync import RepoContentSyncer
-from kb.security_scan import SecretContentError
+from kb.security_scan import SecretContentError, SecurityScanEntry, scan_text_entries
 from kb.self_improve import SelfImprovement
 from kb.service import Citadel
 from kb.skills import skill_catalog, skill_integrity, skill_path
@@ -465,6 +468,17 @@ class SearchBody(BaseModel):
     top_k: int = Field(default=10, ge=1, le=100)
 
 
+class ShareSessionBody(BaseModel):
+    """Compact Session Context from client distill + redact."""
+
+    data: str = Field(min_length=1)
+    cwd: str = Field(min_length=1)
+    capture_roots: list[str] = Field(min_length=1)
+    has_tool_errors: bool = False
+    repo: str | None = None
+    branch: str | None = None
+
+
 class FeedbackBody(BaseModel):
     qa_id: str = Field(min_length=1)
     score: int | None = Field(default=None, ge=-1, le=1)
@@ -560,6 +574,10 @@ class IssueSeatTokenBody(BaseModel):
 
 class CapturePolicyBody(BaseModel):
     deny_globs: list[str] = Field(default_factory=list, max_length=200)
+
+
+class CaptureRootsBody(BaseModel):
+    roots: list[str] = Field(default_factory=list, max_length=50)
 
 
 class ObsidianVaultBody(BaseModel):
@@ -884,6 +902,68 @@ def seat_capture_policy_response(slug: str) -> dict[str, Any]:
     )
 
 
+def require_capture_roots_write(request: Request, slug: str) -> tuple[AccessIdentity, str]:
+    try:
+        normalized = validate_seat_slug(slug)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    identity = require_access(request, "writer", "kb:ingest")
+    if identity.role == "admin" or "access:manage" in effective_scopes(identity):
+        return identity, normalized
+    if identity.seat_slug == normalized:
+        return identity, normalized
+    raise HTTPException(
+        status_code=403,
+        detail="Approved Capture Roots may only be updated by the seat holder or an admin.",
+    )
+
+
+def seat_capture_roots_response(slug: str) -> dict[str, Any]:
+    store = get_access_store()
+    if not store.find_seat_by_slug(slug):
+        raise HTTPException(status_code=404, detail=f"Seat not found: {slug}")
+    roots = store.get_approved_capture_roots(slug)
+    return {
+        "ok": True,
+        "seat_slug": slug,
+        "roots": list(roots.paths),
+        "updated_at": roots.updated_at,
+        "updated_by": roots.updated_by,
+    }
+
+
+def enforce_share_capture_root(actor: AccessIdentity, cwd: str) -> None:
+    if not actor.seat_slug:
+        raise HTTPException(
+            status_code=403,
+            detail="Shared Session Traces may only be volunteered by a seat holder.",
+        )
+    approved = get_access_store().get_approved_capture_roots(actor.seat_slug)
+    if matched_capture_root(cwd, approved.paths) is None:
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                "Share refused: cwd is not under a server-approved Capture Root for "
+                "this seat. Register roots with `citadel setup` (synced to the Node) "
+                "and share from inside them."
+            ),
+        )
+
+
+def scan_share_payload_or_raise(data: str, *, block_severity: str) -> None:
+    scan = scan_text_entries(
+        [SecurityScanEntry(source="share_session", location=SESSION_TRACES_DATASET, text=data)],
+        block_severity=block_severity,
+    )
+    if scan.get("blocked"):
+        raise SecretContentError(
+            dataset=SESSION_TRACES_DATASET,
+            highest_severity=scan.get("highest_severity"),
+            block_severity=block_severity,
+            findings=scan.get("findings", []),
+        )
+
+
 def can_run_promotion(identity: AccessIdentity, seat_dataset: str) -> bool:
     if not is_seat_dataset(seat_dataset):
         return False
@@ -928,6 +1008,10 @@ def redact_pending_item(item: dict[str, Any]) -> dict[str, Any]:
 
 def enforce_dataset_allowlist(identity: AccessIdentity, dataset: str) -> None:
     if can_bypass_dataset_allowlist(identity):
+        return
+    if dataset == SESSION_TRACES_DATASET:
+        # Org-wide consultable prior work: readable by every authenticated caller;
+        # writes are gated by the share-session endpoint instead.
         return
     if dataset in identity.allowed_datasets:
         return
@@ -1033,6 +1117,9 @@ def resolve_search_datasets(
             ):
                 enforce_dataset_allowlist(identity, central)
                 datasets.append(central)
+        enforce_dataset_allowlist(identity, SESSION_TRACES_DATASET)
+        if SESSION_TRACES_DATASET not in datasets:
+            datasets.append(SESSION_TRACES_DATASET)
         return datasets
 
     dataset = identity.default_dataset or config.search_default_dataset or config.default_dataset
@@ -1163,6 +1250,15 @@ def resolve_write_targets(
         enforce_dataset_allowlist(identity, node)
         return [WriteTarget(node, "light")]
 
+    if requested == SESSION_TRACES_DATASET:
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                "Direct ingest to session-traces is not allowed. "
+                "Use citadel_share_session to volunteer a Shared Session Trace."
+            ),
+        )
+
     if requested:
         dataset = requested
         guard_curated_central(identity, dataset, tags, config)
@@ -1191,6 +1287,31 @@ def resolve_write_targets(
     enforce_dataset_allowlist(identity, dataset)
     tier = "light" if is_seat_dataset(dataset) else "full"
     return [WriteTarget(dataset, tier)]
+
+
+def resolve_write_targets_for_share(
+    identity: AccessIdentity,
+    config: CitadelConfig,
+) -> list[WriteTarget]:
+    """Dual-write a volunteered trace to the seat Node (light) and session-traces (shared)."""
+    if not is_seat_identity(identity) or can_bypass_dataset_allowlist(identity):
+        raise HTTPException(
+            status_code=403,
+            detail="Shared Session Traces may only be volunteered by a seat holder.",
+        )
+    node = seat_node_dataset(identity)
+    if not node:
+        raise HTTPException(
+            status_code=403,
+            detail="Seat identity has no personal node configured.",
+        )
+    targets = [
+        WriteTarget(node, "light"),
+        WriteTarget(SESSION_TRACES_DATASET, "shared"),
+    ]
+    for target in targets:
+        enforce_dataset_allowlist(identity, target.dataset)
+    return targets
 
 
 def resolve_write_dataset(
@@ -1291,6 +1412,7 @@ async def execute_learning_writes(
     operation: str,
     detect_conflicts: bool = True,
     run_improve: bool = False,
+    defer_cognify: bool = False,
 ) -> tuple[LearningOutcome, list[LearningOutcome]]:
     outcomes: list[LearningOutcome] = []
     primary: LearningOutcome | None = None
@@ -1304,6 +1426,7 @@ async def execute_learning_writes(
             detect_conflicts=detect_conflicts and target.tier == "full",
             run_improve=run_improve and target.tier == "full",
             tier=target.tier,
+            defer_cognify=defer_cognify,
         )
         outcomes.append(outcome)
         if primary is None or target.tier == "full":
@@ -1553,7 +1676,12 @@ def enforce_ingest_size(text: str) -> None:
 def known_datasets(config: Any) -> list[str]:
     """Datasets a caller can target, in preference order, deduplicated."""
     ordered: list[str] = []
-    for dataset in (config.search_default_dataset, config.github_sync_dataset, config.default_dataset):
+    for dataset in (
+        config.search_default_dataset,
+        config.github_sync_dataset,
+        SESSION_TRACES_DATASET,
+        config.default_dataset,
+    ):
         if dataset and dataset not in ordered:
             ordered.append(dataset)
     return ordered
@@ -1674,7 +1802,64 @@ def with_result_metadata(
     }
     if drilldown_available:
         metadata["document_endpoint"] = document_endpoint
+    if dataset == SESSION_TRACES_DATASET:
+        metadata["trust"] = "reference-only"
+        author_seat = _trace_author_seat(normalized)
+        if author_seat:
+            metadata["author_seat"] = author_seat
+        created_at = _trace_created_at(normalized)
+        if created_at:
+            metadata["created_at"] = created_at
     return {**normalized, "_citadel": metadata}
+
+
+def _trace_author_seat(result: dict[str, Any]) -> str | None:
+    for key in ("Author-Seat", "author_seat"):
+        value = result.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    text = first_string(result.get("text"), result.get("content"))
+    if not text:
+        return None
+    match = re.search(r"^Author-Seat:\s*(.+)$", text, flags=re.MULTILINE)
+    return match.group(1).strip() if match else None
+
+
+def _trace_created_at(result: dict[str, Any]) -> str | None:
+    for key in ("Created-At", "created_at"):
+        value = result.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    text = first_string(result.get("text"), result.get("content"))
+    if not text:
+        return None
+    match = re.search(r"^Created-At:\s*(.+)$", text, flags=re.MULTILINE)
+    return match.group(1).strip() if match else None
+
+
+def split_search_sections(
+    normalized: list[Any],
+    *,
+    central_dataset: str,
+    node_dataset: str | None,
+) -> dict[str, list[Any]]:
+    sections: dict[str, list[Any]] = {
+        "central": [],
+        "session_traces": [],
+        "node": [],
+    }
+    for item in normalized:
+        if not isinstance(item, dict):
+            continue
+        envelope = item.get("_citadel")
+        dataset = envelope.get("dataset") if isinstance(envelope, dict) else None
+        if dataset == SESSION_TRACES_DATASET:
+            sections["session_traces"].append(item)
+        elif dataset == node_dataset:
+            sections["node"].append(item)
+        elif dataset == central_dataset:
+            sections["central"].append(item)
+    return sections
 
 
 def public_base_url(request: Request) -> str:
@@ -2044,6 +2229,44 @@ async def update_seat_capture_policy(
         baseline=baseline,
         env_exclude_patterns=env_exclude_patterns(),
     )
+
+
+@app.get("/api/access/seats/{slug}/capture-roots")
+async def get_seat_capture_roots(slug: str, request: Request) -> dict[str, Any]:
+    require_capture_policy_read(request, slug)
+    return seat_capture_roots_response(slug)
+
+
+@app.put("/api/access/seats/{slug}/capture-roots")
+async def update_seat_capture_roots(
+    slug: str,
+    body: CaptureRootsBody,
+    request: Request,
+) -> dict[str, Any]:
+    actor, normalized = require_capture_roots_write(request, slug)
+    store = get_access_store()
+    seat = store.find_seat_by_slug(normalized)
+    if not seat:
+        raise HTTPException(status_code=404, detail=f"Seat not found: {normalized}")
+    try:
+        roots = store.set_approved_capture_roots(
+            normalized,
+            paths=body.roots,
+            actor_id=actor.actor_id,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    store.record_event(
+        action="access.capture_roots.update",
+        actor=actor,
+        success=True,
+        dataset=seat.default_dataset,
+        detail={
+            "seat_slug": normalized,
+            "root_count": len(roots.paths),
+        },
+    )
+    return seat_capture_roots_response(normalized)
 
 
 @app.post("/api/access/tokens")
@@ -3691,6 +3914,122 @@ async def ingest(body: IngestBody, request: Request) -> Any:
     return payload
 
 
+@app.post("/api/share-session")
+async def share_session(body: ShareSessionBody, request: Request) -> Any:
+    """Volunteer a Shared Session Trace (explicit MCP share only in v1)."""
+    actor = require_access(request, "writer", "kb:ingest")
+    enforce_share_capture_root(actor, body.cwd)
+    enforce_ingest_size(body.data)
+    citadel = get_citadel()
+    learning = get_learning_process()
+    write_targets = resolve_write_targets_for_share(actor, citadel.config)
+    if learning.config.content_scan_enabled:
+        try:
+            scan_share_payload_or_raise(
+                body.data,
+                block_severity=learning.config.content_scan_block_severity,
+            )
+        except SecretContentError as exc:
+            get_access_store().record_event(
+                action="share_session",
+                actor=actor,
+                success=False,
+                dataset=SESSION_TRACES_DATASET,
+                detail={
+                    "operation": "share_session",
+                    "blocked": "secret_content",
+                    "highest_severity": exc.highest_severity,
+                },
+            )
+            raise HTTPException(status_code=422, detail=exc.public_message) from exc
+    data = enrich_shared_trace(body.data, has_tool_errors=body.has_tool_errors)
+    tags = share_session_tags_from_body(actor.seat_slug, body)
+    session_id = resolve_session_id(actor, None)
+    try:
+        outcome, all_outcomes = await execute_learning_writes(
+            learning,
+            data=data,
+            targets=write_targets,
+            tags=tags,
+            session_id=session_id,
+            operation="share_session",
+            detect_conflicts=False,
+            defer_cognify=True,
+        )
+    except SecretContentError as exc:
+        get_access_store().record_event(
+            action="share_session",
+            actor=actor,
+            success=False,
+            dataset=SESSION_TRACES_DATASET,
+            detail={
+                "operation": "share_session",
+                "blocked": "secret_content",
+                "highest_severity": exc.highest_severity,
+            },
+        )
+        raise HTTPException(status_code=422, detail=exc.public_message) from exc
+    except Exception as exc:  # pragma: no cover - depends on runtime Cognee configuration.
+        record_mcp_audit(
+            request,
+            actor=actor,
+            success=False,
+            dataset=SESSION_TRACES_DATASET,
+            detail={"operation": "share_session", "error_type": exc.__class__.__name__},
+        )
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    cognify_datasets = [
+        target.dataset
+        for target, item in zip(write_targets, all_outcomes, strict=True)
+        if item.ingest.accepted
+    ]
+    if cognify_datasets:
+        citadel.cognee.schedule_cognify(list(dict.fromkeys(cognify_datasets)))
+
+    record_mcp_audit(
+        request,
+        actor=actor,
+        success=True,
+        dataset=SESSION_TRACES_DATASET,
+        detail={
+            "operation": "share_session",
+            "accepted": outcome.ingest.accepted,
+            "write_targets": [target.dataset for target in write_targets],
+            "has_tool_errors": body.has_tool_errors,
+        },
+    )
+    get_access_store().record_event(
+        action="share_session",
+        actor=actor,
+        success=True,
+        dataset=SESSION_TRACES_DATASET,
+        detail={
+            "write_targets": [target.dataset for target in write_targets],
+            "author_seat": actor.seat_slug,
+        },
+    )
+    return jsonable_encoder(
+        {
+            "ok": True,
+            "accepted": outcome.ingest.accepted,
+            "dataset": SESSION_TRACES_DATASET,
+            "write_targets": [target.dataset for target in write_targets],
+            "cognify": "deferred",
+            "message": "Shared Session Trace accepted; searchable after coalesced cognify.",
+        }
+    )
+
+
+def share_session_tags_from_body(seat_slug: str, body: ShareSessionBody) -> list[str]:
+    tags = ["shared-session-trace", f"author:{seat_slug}"]
+    if body.repo and body.repo.strip():
+        tags.append(body.repo.strip())
+    if body.branch and body.branch.strip():
+        tags.append(body.branch.strip())
+    return tags
+
+
 @app.get("/api/contributions/recent")
 async def recent_contributions(
     request: Request,
@@ -4087,9 +4426,17 @@ async def search(body: SearchBody, request: Request, response: Response) -> Any:
         for index, (dataset, result) in enumerate(merged)
     ]
     primary_dataset = search_datasets[0]
+    node_dataset = (
+        actor.default_dataset if is_seat_dataset(actor.default_dataset) else None
+    )
     payload: dict[str, Any] = {
         "results": normalized,
         "dataset": primary_dataset,
+        "sections": split_search_sections(
+            normalized,
+            central_dataset=central_dataset(citadel.config),
+            node_dataset=node_dataset,
+        ),
     }
     if len(search_datasets) > 1:
         payload["datasets"] = search_datasets

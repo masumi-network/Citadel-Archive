@@ -395,7 +395,7 @@ def test_tools_list_filters_by_role_and_seat() -> None:
     # Non-seat writer: admin tools hidden; contribute + ingest visible.
     writer = visible({"role": "writer", "seat_slug": None})
     assert not (_ADMIN_TOOLS & writer)
-    assert {"citadel_contribute", "citadel_ingest"} <= writer
+    assert {"citadel_contribute", "citadel_ingest", "citadel_share_session"} <= writer
 
     # Seat writer: contribute additionally hidden (Central read-only from seat MCP).
     seat = visible({"role": "writer", "seat_slug": "sarthi"})
@@ -414,6 +414,14 @@ def test_tools_list_filters_by_role_and_seat() -> None:
     # Fail open: a missing or unknown-role session never blanks the tool list.
     assert _filter_tools_for_session(all_tools, None) == all_tools
     assert _filter_tools_for_session(all_tools, {"role": "bogus"}) == all_tools
+
+
+def test_citadel_search_tool_description_nudges_task_start() -> None:
+    server = create_mcp_server(FakeHttpClient())
+    all_tools = asyncio.run(server.list_tools())
+    search = next(t for t in all_tools if t.name == "citadel_search")
+    assert "task start" in search.description.lower()
+    assert "before editing code" in search.description.lower()
 
 
 def test_promotion_decision_tools_require_admin_in_policy() -> None:
