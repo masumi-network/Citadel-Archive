@@ -30,7 +30,7 @@ TOKEN_ENV = "CITADEL_MCP_ACCESS_TOKEN"
 MCP_SERVER_NAME = "citadel"
 SESSION_HOOK_MARKER = "kb.hooks.sync_session"
 _TIMEOUT = 8.0
-_SEARCH_TIMEOUT = 15.0  # cognee searches are slow when cold; non-gating anyway
+_SEARCH_TIMEOUT = 20.0  # align with server default; cognee cold-start is slow; non-gating
 _INGEST_TIMEOUT = 60.0  # /ingest does real write work (and cold nodes are slow)
 _SMOKE_QUERY = "citadel status connectivity smoke"
 
@@ -217,12 +217,12 @@ def search_node(
     top_k: int = 10,
     *,
     timeout: float = _SEARCH_TIMEOUT,
-) -> list[dict[str, Any]]:
+) -> dict[str, Any]:
     """POST a query to the Node's /search (the same endpoint MCP citadel_search uses).
 
     Zero-dep, HTTPS-only. The Node resolves the dataset from the token's seat, so
-    callers pass only query + top_k. Returns the results list (``results`` or the
-    legacy ``matches`` key), or [] if the shape is unexpected.
+    callers pass only query + top_k. Returns the full search payload (``results``,
+    ``sections``, ``dataset``, …) like MCP ``citadel_search`` — not a flattened list.
     """
     data = _request(
         "POST",
@@ -234,7 +234,19 @@ def search_node(
     results = data.get("results")
     if results is None:
         results = data.get("matches")
-    return results if isinstance(results, list) else []
+    data["results"] = results if isinstance(results, list) else []
+    return data
+
+
+def seatless_token_hint(identity: dict[str, Any]) -> str | None:
+    """Actionable warning when auth succeeded but the token has no seat."""
+    if identity.get("seat_slug"):
+        return None
+    return (
+        "This token has no seat — personal Node search/ingest, capture hooks, and "
+        "citadel_share_session will fail (403). Ask an admin for a seat-bound token "
+        "(dashboard → Create Seat, or `citadel seat create`)."
+    )
 
 
 def ingest_node(
@@ -501,8 +513,11 @@ def render_text(report: StatusReport, *, color: bool = False, verdict: bool = Tr
     lines = [
         identity_line,
         paint(f"node: {report.node_url}", "dim", enable=color),
-        "",
     ]
+    seat_hint = seatless_token_hint(ident)
+    if seat_hint:
+        lines.append(paint(f"  hint: {seat_hint}", "yellow", enable=color))
+    lines.append("")
 
     cols = shutil.get_terminal_size((80, 24)).columns
 
