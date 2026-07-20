@@ -39,6 +39,9 @@ import sys
 import urllib.request
 from typing import Any
 
+from kb.session_trace_distill import distill_node_note as distill_transcript
+from kb.session_trace_distill import git_branch, repo_name
+
 # Mirror kb/mcp_server.py: DEFAULT_MAX_INGEST_BYTES = 200_000.
 DEFAULT_MAX_INGEST_BYTES = 200_000
 DEFAULT_BASE_URL = "https://citadel-archive-production.up.railway.app"
@@ -149,152 +152,13 @@ def _text_of(block: Any) -> str:
     return ""
 
 
-def _first_user_prompt(entries: list[dict[str, Any]]) -> str:
-    for entry in entries:
-        if entry.get("type") != "user":
-            continue
-        for block in _content_blocks(entry):
-            text = _text_of(block)
-            # Skip tool_result echoes that arrive as user-role entries.
-            if isinstance(block, dict) and block.get("type") == "tool_result":
-                continue
-            if text:
-                return text
-    return ""
-
-
-def distill_transcript(entries: list[dict[str, Any]]) -> str:
-    """Build a short, deterministic note from transcript entries (NO LLM).
-
-    Sections: a 1-2 line recap from the first user prompt + last assistant
-    text, files touched (Edit/Write/MultiEdit/NotebookEdit), and a small
-    sample of decision-ish assistant statements. Pure string logic.
-    """
-    files: list[str] = []
-    seen_files: set[str] = set()
-    last_assistant_text = ""
-    decisions: list[str] = []
-    decision_markers = (
-        "decided",
-        "decision",
-        "chose",
-        "we'll use",
-        "going with",
-        "approach",
-        "instead of",
-        "root cause",
-    )
-
-    for entry in entries:
-        etype = entry.get("type")
-        for block in _content_blocks(entry):
-            if not isinstance(block, dict):
-                continue
-            btype = block.get("type")
-            if btype == "tool_use":
-                name = block.get("name")
-                inp = block.get("input")
-                if isinstance(inp, dict) and name in (
-                    "Edit",
-                    "Write",
-                    "MultiEdit",
-                    "NotebookEdit",
-                ):
-                    path = inp.get("file_path") or inp.get("notebook_path")
-                    if isinstance(path, str) and path and path not in seen_files:
-                        seen_files.add(path)
-                        files.append(path)
-            elif btype == "text" and etype == "assistant":
-                text = _text_of(block)
-                if not text:
-                    continue
-                last_assistant_text = text
-                lowered = text.lower()
-                if any(marker in lowered for marker in decision_markers):
-                    # Keep the first sentence-ish slice only.
-                    snippet = text.replace("\n", " ").strip()
-                    if len(snippet) > 200:
-                        snippet = snippet[:200].rstrip() + "..."
-                    if snippet not in decisions:
-                        decisions.append(snippet)
-
-    first_prompt = _first_user_prompt(entries)
-
-    lines: list[str] = ["# Dev session note"]
-
-    recap_bits: list[str] = []
-    if first_prompt:
-        recap = first_prompt.replace("\n", " ").strip()
-        if len(recap) > 280:
-            recap = recap[:280].rstrip() + "..."
-        recap_bits.append(f"Task: {recap}")
-    if last_assistant_text:
-        outcome = last_assistant_text.replace("\n", " ").strip()
-        if len(outcome) > 280:
-            outcome = outcome[:280].rstrip() + "..."
-        recap_bits.append(f"Outcome: {outcome}")
-    if not recap_bits:
-        recap_bits.append("Session captured (no extractable prompt/outcome text).")
-    lines.append("")
-    lines.extend(recap_bits)
-
-    if decisions:
-        lines.append("")
-        lines.append("## Key decisions / facts")
-        for item in decisions[:8]:
-            lines.append(f"- {item}")
-
-    if files:
-        lines.append("")
-        lines.append("## Files changed")
-        for path in files[:40]:
-            lines.append(f"- {path}")
-
-    return "\n".join(lines).strip()
-
-
-def _git_branch(cwd: str) -> str:
-    try:
-        result = subprocess.run(
-            ["git", "rev-parse", "--abbrev-ref", "HEAD"],
-            cwd=cwd or None,
-            capture_output=True,
-            text=True,
-            timeout=5,
-        )
-        branch = result.stdout.strip()
-        if result.returncode == 0 and branch and branch != "HEAD":
-            return branch
-    except Exception:
-        pass
-    return ""
-
-
-def _repo_name(cwd: str) -> str:
-    try:
-        result = subprocess.run(
-            ["git", "rev-parse", "--show-toplevel"],
-            cwd=cwd or None,
-            capture_output=True,
-            text=True,
-            timeout=5,
-        )
-        top = result.stdout.strip()
-        if result.returncode == 0 and top:
-            return os.path.basename(top)
-    except Exception:
-        pass
-    if cwd:
-        return os.path.basename(cwd.rstrip("/"))
-    return ""
-
 
 def build_tags(cwd: str) -> list[str]:
     tags = ["dev-session"]
-    branch = _git_branch(cwd)
+    branch = git_branch(cwd)
     if branch:
         tags.append(branch)
-    repo = _repo_name(cwd)
+    repo = repo_name(cwd)
     if repo and repo not in tags:
         tags.append(repo)
     return tags

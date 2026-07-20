@@ -14,12 +14,16 @@ def test_no_token_is_silent_noop(monkeypatch, capsys) -> None:
     assert capsys.readouterr().out == ""  # nothing injected without a token
 
 
-def test_empty_recent_is_silent(monkeypatch, capsys) -> None:
+def test_empty_recent_still_injects_agent_policy(monkeypatch, capsys) -> None:
     monkeypatch.setenv(sync_start.TOKEN_ENV, "ctdl_x")
     monkeypatch.setattr(sync_start, "fetch_recent", lambda *a, **k: [])
     rc = sync_start.run(io.StringIO("{}"))
     assert rc == 0
-    assert capsys.readouterr().out == ""  # quiet when there is no activity
+    out = capsys.readouterr().out
+    assert "Citadel vault — recent activity" not in out
+    assert "citadel_search" in out
+    assert "reference-only" in out
+    assert "citadel_share_session" in out
 
 
 def test_injects_digest_when_recent(monkeypatch, capsys) -> None:
@@ -34,6 +38,7 @@ def test_injects_digest_when_recent(monkeypatch, capsys) -> None:
     out = capsys.readouterr().out
     assert "Citadel vault — recent activity" in out
     assert "Shipped CLI overhaul" in out
+    assert "citadel_search" in out  # static agent policy follows the digest
     assert "ctdl_x" not in out  # token never leaks into the digest
 
 
@@ -45,7 +50,25 @@ def test_failure_is_swallowed(monkeypatch, capsys) -> None:
 
     monkeypatch.setattr(sync_start, "fetch_recent", boom)
     assert sync_start.run(io.StringIO("{}")) == 0  # fail-silent, exit 0
-    assert capsys.readouterr().out == ""
+    out = capsys.readouterr().out
+    assert "Citadel vault — recent activity" not in out  # digest skipped on failure
+    assert "citadel_search" in out  # policy still injected when token present
+    assert "reference-only" in out
+    assert "citadel_share_session" in out
+
+
+def test_fetch_failure_skips_digest_but_keeps_policy(monkeypatch, capsys) -> None:
+    monkeypatch.setenv(sync_start.TOKEN_ENV, "ctdl_x")
+
+    def boom(*a, **k):
+        raise ConnectionError("timeout")
+
+    monkeypatch.setattr(sync_start, "fetch_recent", boom)
+    rc = sync_start.run(io.StringIO("{}"))
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "Citadel vault — recent activity" not in out
+    assert out.strip() == sync_start.AGENT_POLICY_REMINDER.strip()
 
 
 def test_fetch_recent_refuses_non_https() -> None:
