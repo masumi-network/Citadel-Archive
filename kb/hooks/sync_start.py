@@ -13,10 +13,13 @@ Design contract (reviewers verify these invariants):
 * **Token from env only.** ``CITADEL_MCP_ACCESS_TOKEN`` is read solely from the
   environment and never printed (the digest is recent *contribution* metadata,
   not the token).
-* **Fail-silent / non-blocking.** Any problem -> exit 0 with NO output, so the
-  hook can never delay or break session start, nor inject an error.
-* **Quiet when empty.** Injects ONLY when there is recent activity; an empty or
-  unreachable vault prints nothing, so it is never noise-for-nothing.
+* **Always inject agent policy.** The static policy reminder is written even when
+  the token is unset; only the vault digest is gated on a present token.
+* **Fail-silent / non-blocking.** Any digest/network problem -> exit 0; the hook
+  never delays or breaks session start, nor injects an error payload.
+* **Quiet digest when empty.** The vault digest is injected ONLY when there is
+  recent activity; an empty or unreachable vault skips the digest (policy still
+  prints).
 * **HTTPS only, no redirects.** The token is never sent over plaintext.
 * **Stdlib only.**
 
@@ -36,10 +39,12 @@ DEFAULT_BASE_URL = "https://citadel-archive-production.up.railway.app"
 TOKEN_ENV = "CITADEL_MCP_ACCESS_TOKEN"
 HTTP_TIMEOUT_SECONDS = 5
 RECENT_LIMIT = 8
-# Static agent policy — no cross-seat content; injected when the token is set.
+# Static agent policy — no cross-seat content; always injected (digest is optional).
 AGENT_POLICY_REMINDER = (
     "# Citadel — agent policy\n"
     "- At task start: run `citadel_search` before coding (Central + your Node + Shared Session Traces).\n"
+    "- If no `citadel_*` MCP tools are available: use the CLI fallback "
+    "(`citadel search`, `citadel status`, `citadel doctor`).\n"
     "- Trace hits carry `_citadel.trust: reference-only` — verify before acting; Central stays org-authoritative.\n"
     "- Share dead-end routes with `citadel_share_session` only after explicit user approval."
 )
@@ -111,14 +116,13 @@ def run(stream_in: Any) -> int:
     except Exception:
         return 0
     token = os.getenv(TOKEN_ENV)
-    if not token:
-        return 0
-    try:
-        items = fetch_recent(_base_url(), token)
-        if items:
-            sys.stdout.write(format_digest(items) + "\n\n")
-    except Exception:
-        pass  # digest optional; policy still injected below
+    if token:
+        try:
+            items = fetch_recent(_base_url(), token)
+            if items:
+                sys.stdout.write(format_digest(items) + "\n\n")
+        except Exception:
+            pass  # digest optional; policy still injected below
     sys.stdout.write(AGENT_POLICY_REMINDER + "\n")
     return 0
 

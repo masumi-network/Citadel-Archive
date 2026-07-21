@@ -7,11 +7,14 @@ import pytest
 from kb.hooks import sync_start
 
 
-def test_no_token_is_silent_noop(monkeypatch, capsys) -> None:
+def test_no_token_still_injects_agent_policy(monkeypatch, capsys) -> None:
     monkeypatch.delenv(sync_start.TOKEN_ENV, raising=False)
     rc = sync_start.run(io.StringIO("{}"))
     assert rc == 0
-    assert capsys.readouterr().out == ""  # nothing injected without a token
+    out = capsys.readouterr().out
+    assert "Citadel vault — recent activity" not in out  # digest gated on token
+    assert out.strip() == sync_start.AGENT_POLICY_REMINDER.strip()
+    assert "CLI fallback" in out
 
 
 def test_empty_recent_still_injects_agent_policy(monkeypatch, capsys) -> None:
@@ -22,6 +25,7 @@ def test_empty_recent_still_injects_agent_policy(monkeypatch, capsys) -> None:
     out = capsys.readouterr().out
     assert "Citadel vault — recent activity" not in out
     assert "citadel_search" in out
+    assert "CLI fallback" in out
     assert "reference-only" in out
     assert "citadel_share_session" in out
 
