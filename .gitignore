@@ -23,3 +23,5 @@ logs/
 .brand-preview/
 # Personal, machine-specific workspace ingester (POSTs local docs to prod) — not for the shared repo.
 scripts/ingest_masumi_workspace.py
+.pip-audit-cache/
+.superstack/
