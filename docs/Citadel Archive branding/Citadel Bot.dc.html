@@ -1,0 +1,250 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet data-dc-atomics>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+*{box-sizing:border-box}
+body{margin:0;background:#0B0F0E}
+a{color:#FF5CB0}
+a:hover{color:#FA008C}
+@keyframes ctdBob{0%,100%{transform:translateY(0)}50%{transform:translateY(-6px)}}
+@keyframes ctdDotBounce{0%,80%,100%{transform:translateY(0)}40%{transform:translateY(-6px)}}
+@keyframes ctdZzz{0%{opacity:0;transform:translateY(0) translateX(0)}20%{opacity:1}100%{opacity:0;transform:translateY(-28px) translateX(6px)}}
+@keyframes ctdWiggle{0%,100%{transform:rotate(-5deg)}50%{transform:rotate(5deg)}}
+@keyframes ctdTwinkle{0%,100%{opacity:.15;transform:scale(.5) rotate(45deg)}50%{opacity:1;transform:scale(1.05) rotate(65deg)}}
+@keyframes ctdBurst{0%{opacity:1;transform:scale(.3)}70%{opacity:.85;transform:scale(1.2)}100%{opacity:0;transform:scale(1.5)}}
+@keyframes ctdGlow{0%,100%{opacity:.3}50%{opacity:.9}}
+</style>
+</helmet>
+
+<div style="min-height:100vh;background:#0B0F0E;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:34px;padding:70px 20px;font-family:Inter,system-ui,sans-serif">
+
+  <div style="text-align:center">
+    <div style="font:700 12px 'JetBrains Mono',monospace;letter-spacing:2.5px;text-transform:uppercase;color:rgba(255,255,255,.35)">Citadel</div>
+    <div style="font:600 13.5px Inter,sans-serif;color:rgba(255,255,255,.55);margin-top:5px">the mark, animated &#8212; click a mood</div>
+  </div>
+
+  <div style="position:relative;width:264px;height:264px">
+    <sc-if value="{{ showGlow }}" hint-placeholder-val="{{ true }}">
+      <div style="position:absolute;inset:-10px;border-radius:48px;box-shadow:0 0 0 2px rgba(250,0,140,.15);animation:ctdGlow 2.6s ease-in-out infinite"></div>
+    </sc-if>
+    <sc-if value="{{ showDots }}" hint-placeholder-val="{{ false }}">
+      <div style="position:absolute;top:-26px;left:0;right:0;display:flex;justify-content:center;gap:7px">
+        <div style="width:8px;height:8px;border-radius:50%;background:#22D3EE;animation:ctdDotBounce 1.2s ease-in-out infinite"></div>
+        <div style="width:8px;height:8px;border-radius:50%;background:#22D3EE;animation:ctdDotBounce 1.2s ease-in-out infinite .15s"></div>
+        <div style="width:8px;height:8px;border-radius:50%;background:#22D3EE;animation:ctdDotBounce 1.2s ease-in-out infinite .3s"></div>
+      </div>
+    </sc-if>
+    <sc-if value="{{ showZzz }}" hint-placeholder-val="{{ false }}">
+      <div>
+        <div style="position:absolute;top:-14px;right:36px;font:700 18px Inter,sans-serif;color:#22D3EE;opacity:.85;animation:ctdZzz 2.6s ease-out infinite">z</div>
+        <div style="position:absolute;top:-4px;right:20px;font:700 13px Inter,sans-serif;color:#22D3EE;opacity:.6;animation:ctdZzz 2.6s ease-out infinite 1s">z</div>
+      </div>
+    </sc-if>
+    <sc-if value="{{ showBlush }}" hint-placeholder-val="{{ false }}">
+      <div>
+        <div style="position:absolute;left:-8px;top:118px;width:16px;height:12px;border-radius:50%;background:rgba(250,0,140,{{ blushOpacity }})"></div>
+        <div style="position:absolute;right:-8px;top:118px;width:16px;height:12px;border-radius:50%;background:rgba(250,0,140,{{ blushOpacity }})"></div>
+      </div>
+    </sc-if>
+    <sc-if value="{{ showSparkle }}" hint-placeholder-val="{{ false }}">
+      <div>
+        <div style="position:absolute;top:6px;right:-2px;width:{{ sparkleSize }}px;height:{{ sparkleSize }}px;background:#22D3EE;transform:rotate(45deg);animation:ctdTwinkle 1.5s ease-in-out infinite"></div>
+        <div style="position:absolute;bottom:20px;left:-10px;width:{{ sparkleSize }}px;height:{{ sparkleSize }}px;background:#FF5CB0;transform:rotate(45deg);animation:ctdTwinkle 1.5s ease-in-out infinite .4s"></div>
+        <div style="position:absolute;top:40px;left:-14px;width:6px;height:6px;background:#22D3EE;transform:rotate(45deg);animation:ctdTwinkle 1.5s ease-in-out infinite .8s"></div>
+      </div>
+    </sc-if>
+    <sc-if value="{{ showBurst }}" hint-placeholder-val="{{ false }}">
+      <div style="position:absolute;left:83px;top:100px;width:26px;height:26px">
+        <div style="position:absolute;left:50%;top:0;width:2px;height:26px;background:#22D3EE;transform:translateX(-50%);animation:ctdBurst .6s ease-out"></div>
+        <div style="position:absolute;top:50%;left:0;width:26px;height:2px;background:#22D3EE;transform:translateY(-50%);animation:ctdBurst .6s ease-out"></div>
+        <div style="position:absolute;left:50%;top:0;width:2px;height:26px;background:#22D3EE;transform:translateX(-50%) rotate(45deg);animation:ctdBurst .6s ease-out"></div>
+        <div style="position:absolute;left:50%;top:0;width:2px;height:26px;background:#22D3EE;transform:translateX(-50%) rotate(-45deg);animation:ctdBurst .6s ease-out"></div>
+      </div>
+    </sc-if>
+
+    <div style="width:264px;height:264px;transform:rotate({{ tiltDeg }}deg) scale({{ popScale }});transition:transform .2s ease">
+      <div style="width:264px;height:264px;animation:{{ bobAnim }} {{ bobDuration }} ease-in-out infinite">
+    <div style="width:264px;height:264px;box-sizing:border-box;border:2px solid rgba(255,255,255,.08);border-radius:40px;background:#0B0F0E;padding:14px;display:grid;grid-template-columns:repeat(7,28px);grid-template-rows:repeat(7,28px);gap:6px;overflow:hidden;opacity:{{ tileOpacity }}">
+      <div style="border-radius:5px;background:#FA008C"></div>
+      <div style="border-radius:5px;background:transparent"></div>
+      <div style="border-radius:5px;background:#B246AD"></div>
+      <div style="border-radius:5px;background:transparent"></div>
+      <div style="border-radius:5px;background:#6A8DCD"></div>
+      <div style="border-radius:5px;background:transparent"></div>
+      <div style="border-radius:5px;background:#22D3EE"></div>
+
+      <div style="border-radius:5px;background:#FA008C"></div>
+      <div style="border-radius:5px;background:#D6239C"></div>
+      <div style="border-radius:5px;background:#B246AD"></div>
+      <div style="border-radius:5px;background:#8E6ABD"></div>
+      <div style="border-radius:5px;background:#6A8DCD"></div>
+      <div style="border-radius:5px;background:#46B0DE"></div>
+      <div style="border-radius:5px;background:#22D3EE"></div>
+
+      <div style="border-radius:5px;background:#FA008C"></div>
+      <div style="border-radius:5px;background:#D6239C"></div>
+      <div style="border-radius:5px;background:{{ leftEyeTopColor }};transition:background-color .16s ease"></div>
+      <div style="border-radius:5px;background:#8E6ABD"></div>
+      <div style="border-radius:5px;background:{{ rightEyeTopColor }};transition:background-color .16s ease"></div>
+      <div style="border-radius:5px;background:#46B0DE"></div>
+      <div style="border-radius:5px;background:#22D3EE"></div>
+
+      <div style="border-radius:5px;background:#FA008C"></div>
+      <div style="border-radius:5px;background:#D6239C"></div>
+      <div style="border-radius:5px;background:{{ leftEyeBottomColor }};transition:background-color .16s ease"></div>
+      <div style="border-radius:5px;background:#8E6ABD"></div>
+      <div style="border-radius:5px;background:{{ rightEyeBottomColor }};transition:background-color .16s ease"></div>
+      <div style="border-radius:5px;background:#46B0DE"></div>
+      <div style="border-radius:5px;background:#22D3EE"></div>
+
+      <div style="border-radius:5px;background:#FA008C"></div>
+      <div style="border-radius:5px;background:#D6239C"></div>
+      <div style="border-radius:5px;background:#B246AD"></div>
+      <div style="border-radius:5px;background:#8E6ABD"></div>
+      <div style="border-radius:5px;background:#6A8DCD"></div>
+      <div style="border-radius:5px;background:#46B0DE"></div>
+      <div style="border-radius:5px;background:#22D3EE"></div>
+
+      <div style="border-radius:5px;background:#FA008C"></div>
+      <div style="border-radius:5px;background:#D6239C"></div>
+      <div style="border-radius:5px;background:{{ mouthTopLColor }};transition:background-color .16s ease"></div>
+      <div style="border-radius:5px;background:{{ mouthTopMColor }};transition:background-color .16s ease"></div>
+      <div style="border-radius:5px;background:{{ mouthTopRColor }};transition:background-color .16s ease"></div>
+      <div style="border-radius:5px;background:#46B0DE"></div>
+      <div style="border-radius:5px;background:#22D3EE"></div>
+
+      <div style="border-radius:5px;background:#FA008C"></div>
+      <div style="border-radius:5px;background:#D6239C"></div>
+      <div style="border-radius:5px;background:{{ mouthBotLColor }};transition:background-color .16s ease"></div>
+      <div style="border-radius:5px;background:{{ mouthBotMColor }};transition:background-color .16s ease"></div>
+      <div style="border-radius:5px;background:{{ mouthBotRColor }};transition:background-color .16s ease"></div>
+      <div style="border-radius:5px;background:#46B0DE"></div>
+      <div style="border-radius:5px;background:#22D3EE"></div>
+    </div>
+      </div>
+    </div>
+  </div>
+
+  <div style="display:flex;gap:8px;flex-wrap:wrap;justify-content:center;max-width:480px">
+    <sc-for list="{{ expressions }}" as="e" hint-placeholder-count="6">
+      <div onClick="{{ e.onPick }}" style="font:600 12px Inter,sans-serif;padding:8px 16px;border-radius:20px;cursor:pointer;background:{{ e.bg }};color:{{ e.fg }};border:1px solid {{ e.border }}">{{ e.label }}</div>
+    </sc-for>
+    <div onClick="{{ toggleAutoplay }}" style="font:600 12px Inter,sans-serif;padding:8px 16px;border-radius:20px;cursor:pointer;background:{{ autoplayBg }};color:{{ autoplayFg }};border:1px solid rgba(255,255,255,.15)">&#9654; Auto-play</div>
+  </div>
+
+  <div style="font:400 11.5px Inter,sans-serif;color:rgba(255,255,255,.3);text-align:center;max-width:380px;line-height:1.5">The exact Pixel Bastion mark &#8212; animated through its own windows and gate, nothing added to the grid.</div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script>
+class Component extends DCLogic {
+  state = { expression: 'idle', blinking: false, autoplay: false, popScale: 1 };
+
+  componentDidMount() {
+    this._blinkTimer = setInterval(() => {
+      if (this.state.expression === 'idle' && !this.state.autoplay) {
+        this.setState({ blinking: true });
+        setTimeout(() => this.setState({ blinking: false }), 160);
+      }
+    }, 3400);
+  }
+  componentWillUnmount() {
+    if (this._blinkTimer) clearInterval(this._blinkTimer);
+    if (this._autoplayTimer) clearInterval(this._autoplayTimer);
+  }
+
+  setExpression(e) {
+    this.setState({ expression: e, autoplay: false });
+    if (this._autoplayTimer) { clearInterval(this._autoplayTimer); this._autoplayTimer = null; }
+    this._pop();
+  }
+
+  _pop() {
+    this.setState({ popScale: 1.15 });
+    clearTimeout(this._popTimer);
+    this._popTimer = setTimeout(() => this.setState({ popScale: 1 }), 170);
+  }
+
+  toggleAutoplay() {
+    const next = !this.state.autoplay;
+    this.setState({ autoplay: next });
+    if (next) {
+      const seq = ['smile','wink','laugh','thinking','sleepy','idle'];
+      let i = 0;
+      this._autoplayTimer = setInterval(() => {
+        this.setState({ expression: seq[i % seq.length] });
+        this._pop();
+        i++;
+      }, 2200);
+    } else if (this._autoplayTimer) {
+      clearInterval(this._autoplayTimer);
+      this._autoplayTimer = null;
+    }
+  }
+
+  renderVals() {
+    const s = this.state;
+    const CLOSED = {
+      leftEyeTop:'#B246AD', leftEyeBottom:'#B246AD',
+      rightEyeTop:'#6A8DCD', rightEyeBottom:'#6A8DCD',
+      mouthTopL:'#B246AD', mouthTopM:'#8E6ABD', mouthTopR:'#6A8DCD',
+      mouthBotL:'#B246AD', mouthBotM:'#8E6ABD', mouthBotR:'#6A8DCD'
+    };
+    const EXPR_META = {
+      idle:      { close:[], tilt:0,  bob:'ctdBob',    dur:'3.2s', sparkle:false, sparkleSize:7, blush:false, blushOpacity:0,   burst:false, dots:false, zzz:false, dim:1,   glow:true },
+      smile:     { close:['mouthTopM'], tilt:0, bob:'ctdBob', dur:'2.6s', sparkle:true, sparkleSize:7, blush:true, blushOpacity:.18, burst:false, dots:false, zzz:false, dim:1, glow:false },
+      wink:      { close:['leftEyeTop','leftEyeBottom','mouthTopM'], tilt:-10, bob:'ctdBob', dur:'2.6s', sparkle:true, sparkleSize:7, blush:true, blushOpacity:.18, burst:true, dots:false, zzz:false, dim:1, glow:false },
+      laugh:     { close:['leftEyeTop','leftEyeBottom','rightEyeTop','rightEyeBottom'], tilt:0, bob:'ctdWiggle', dur:'.6s', sparkle:true, sparkleSize:9, blush:true, blushOpacity:.4, burst:false, dots:false, zzz:false, dim:1, glow:false },
+      thinking:  { close:['rightEyeTop','rightEyeBottom','mouthTopL','mouthTopM','mouthTopR'], tilt:6, bob:'ctdBob', dur:'3.2s', sparkle:false, sparkleSize:7, blush:false, blushOpacity:0, burst:false, dots:true, zzz:false, dim:1, glow:false },
+      sleepy:    { close:['leftEyeTop','leftEyeBottom','rightEyeTop','rightEyeBottom','mouthTopL','mouthTopR','mouthBotL','mouthBotR'], tilt:8, bob:'ctdBob', dur:'5s', sparkle:false, sparkleSize:7, blush:false, blushOpacity:0, burst:false, dots:false, zzz:true, dim:.82, glow:false }
+    };
+    const meta = EXPR_META[s.expression] || EXPR_META.idle;
+    let closeList = meta.close;
+    if (s.expression === 'idle' && s.blinking) closeList = ['leftEyeTop','leftEyeBottom','rightEyeTop','rightEyeBottom'];
+    const closeSet = new Set(closeList);
+    const cellColor = (name) => closeSet.has(name) ? CLOSED[name] : 'transparent';
+    const leftEyeTopColor = cellColor('leftEyeTop');
+    const leftEyeBottomColor = cellColor('leftEyeBottom');
+    const rightEyeTopColor = cellColor('rightEyeTop');
+    const rightEyeBottomColor = cellColor('rightEyeBottom');
+    const mouthTopLColor = cellColor('mouthTopL');
+    const mouthTopMColor = cellColor('mouthTopM');
+    const mouthTopRColor = cellColor('mouthTopR');
+    const mouthBotLColor = cellColor('mouthBotL');
+    const mouthBotMColor = cellColor('mouthBotM');
+    const mouthBotRColor = cellColor('mouthBotR');
+
+    const labels = { idle:'Idle', smile:'Smile', wink:'Wink', laugh:'Laugh', thinking:'Thinking', sleepy:'Sleepy' };
+    const expressions = Object.keys(labels).map(id => ({
+      id, label: labels[id],
+      bg: s.expression === id ? '#FA008C' : 'transparent',
+      fg: s.expression === id ? '#0B0F0E' : 'rgba(242,245,243,.6)',
+      border: s.expression === id ? '#FA008C' : 'rgba(255,255,255,.15)',
+      onPick: () => this.setExpression(id)
+    }));
+
+    return {
+      leftEyeTopColor, leftEyeBottomColor, rightEyeTopColor, rightEyeBottomColor,
+      mouthTopLColor, mouthTopMColor, mouthTopRColor, mouthBotLColor, mouthBotMColor, mouthBotRColor,
+      expressions,
+      showDots: meta.dots, showZzz: meta.zzz, showBlush: meta.blush, showSparkle: meta.sparkle,
+      showBurst: meta.burst, showGlow: meta.glow, blushOpacity: meta.blushOpacity, sparkleSize: meta.sparkleSize,
+      tiltDeg: meta.tilt, bobAnim: meta.bob, bobDuration: meta.dur, tileOpacity: meta.dim,
+      popScale: s.popScale,
+      autoplayBg: s.autoplay ? '#FA008C' : 'transparent',
+      autoplayFg: s.autoplay ? '#0B0F0E' : 'rgba(242,245,243,.6)',
+      toggleAutoplay: () => this.toggleAutoplay()
+    };
+  }
+}
+</script>
+</body>
+</html>

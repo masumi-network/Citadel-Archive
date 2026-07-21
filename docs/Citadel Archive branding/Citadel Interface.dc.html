@@ -1,0 +1,536 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet data-dc-atomics>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+*{box-sizing:border-box}
+body{margin:0;background:#0B0F0E}
+a{color:#FF5CB0}
+a:hover{color:#FA008C}
+@keyframes ctdPulse{0%{opacity:1}50%{opacity:.35}100%{opacity:1}}
+</style>
+</helmet>
+
+<div style="display:flex;min-height:100vh;background:#0B0F0E;font-family:Inter,system-ui,sans-serif">
+
+<div style="width:220px;flex:none;background:#0B0F0E;border-right:1px solid rgba(255,255,255,.08);display:flex;flex-direction:column;padding:18px 14px;position:sticky;top:0;height:100vh">
+  <div style="display:flex;align-items:center;gap:9px;padding:6px 6px 22px">
+    <div style="width:30px;height:30px;box-sizing:border-box;border:1px solid rgba(255,255,255,.1);border-radius:8px;background:#0B0F0E;padding:2px;display:grid;grid-template-columns:repeat(7,3px);grid-template-rows:repeat(7,3px);gap:1px;overflow:hidden;flex:none">
+      <sc-for list="{{ pixelGridA }}" as="cell" hint-placeholder-count="49">
+        <div style="background:{{ cell.color }}"></div>
+      </sc-for>
+    </div>
+    <div style="font:800 15px/1 Inter,sans-serif;letter-spacing:.5px;color:#F2F5F3">CITADEL</div>
+  </div>
+
+  <div style="display:flex;flex-direction:column;gap:2px;flex:1">
+    <div onClick="{{ goOverview }}" style="display:flex;align-items:center;gap:11px;padding:9px 10px;border-radius:8px;cursor:pointer;background:{{ navOverview.bg }}">
+      <div style="width:15px;height:15px;display:grid;grid-template-columns:1fr 1fr;grid-template-rows:1fr 1fr;gap:2px">
+        <div style="background:{{ navOverview.iconFg }};border-radius:1px"></div><div style="background:{{ navOverview.iconFg }};border-radius:1px"></div>
+        <div style="background:{{ navOverview.iconFg }};border-radius:1px"></div><div style="background:{{ navOverview.iconFg }};border-radius:1px"></div>
+      </div>
+      <div style="font:500 13px Inter,sans-serif;color:{{ navOverview.fg }}">Overview</div>
+    </div>
+    <div onClick="{{ goSearch }}" style="display:flex;align-items:center;gap:11px;padding:9px 10px;border-radius:8px;cursor:pointer;background:{{ navSearch.bg }}">
+      <div style="width:15px;height:15px;position:relative;flex:none">
+        <div style="width:9px;height:9px;border-radius:50%;border:1.6px solid {{ navSearch.iconFg }};position:absolute;top:0;left:0"></div>
+        <div style="width:6px;height:1.6px;background:{{ navSearch.iconFg }};position:absolute;top:10px;left:8px;transform:rotate(45deg);transform-origin:left center"></div>
+      </div>
+      <div style="font:500 13px Inter,sans-serif;color:{{ navSearch.fg }}">Search</div>
+    </div>
+    <div onClick="{{ goKnowledge }}" style="display:flex;align-items:center;gap:11px;padding:9px 10px;border-radius:8px;cursor:pointer;background:{{ navKnowledge.bg }}">
+      <div style="width:15px;height:15px;position:relative;flex:none">
+        <div style="width:4px;height:4px;border-radius:50%;background:{{ navKnowledge.iconFg }};position:absolute;top:0;left:5px"></div>
+        <div style="width:4px;height:4px;border-radius:50%;background:{{ navKnowledge.iconFg }};position:absolute;top:10px;left:0"></div>
+        <div style="width:4px;height:4px;border-radius:50%;background:{{ navKnowledge.iconFg }};position:absolute;top:10px;left:11px"></div>
+      </div>
+      <div style="font:500 13px Inter,sans-serif;color:{{ navKnowledge.fg }}">Knowledge</div>
+    </div>
+    <div onClick="{{ goActivity }}" style="display:flex;align-items:center;gap:11px;padding:9px 10px;border-radius:8px;cursor:pointer;background:{{ navActivity.bg }}">
+      <div style="width:15px;height:15px;display:flex;align-items:flex-end;gap:2px">
+        <div style="width:3px;height:6px;background:{{ navActivity.iconFg }}"></div>
+        <div style="width:3px;height:12px;background:{{ navActivity.iconFg }}"></div>
+        <div style="width:3px;height:9px;background:{{ navActivity.iconFg }}"></div>
+      </div>
+      <div style="font:500 13px Inter,sans-serif;color:{{ navActivity.fg }}">Activity</div>
+    </div>
+    <div onClick="{{ goWrite }}" style="display:flex;align-items:center;gap:11px;padding:9px 10px;border-radius:8px;cursor:pointer;background:{{ navWrite.bg }}">
+      <div style="width:13px;height:15px;border:1.6px solid {{ navWrite.iconFg }};border-radius:2px;padding:2.5px 2px;display:flex;flex-direction:column;gap:2px;justify-content:center;flex:none">
+        <div style="height:1.3px;background:{{ navWrite.iconFg }}"></div>
+        <div style="height:1.3px;background:{{ navWrite.iconFg }};width:65%"></div>
+      </div>
+      <div style="font:500 13px Inter,sans-serif;color:{{ navWrite.fg }}">Write</div>
+    </div>
+    <div onClick="{{ goAdmin }}" style="display:flex;align-items:center;gap:11px;padding:9px 10px;border-radius:8px;cursor:pointer;background:{{ navAdmin.bg }}">
+      <div style="width:15px;height:15px;border-radius:50%;border:1.6px solid {{ navAdmin.iconFg }};display:flex;align-items:center;justify-content:center;flex:none">
+        <div style="width:4.5px;height:4.5px;border-radius:50%;background:{{ navAdmin.iconFg }}"></div>
+      </div>
+      <div style="font:500 13px Inter,sans-serif;color:{{ navAdmin.fg }}">Admin</div>
+    </div>
+  </div>
+
+  <div style="display:flex;align-items:center;gap:9px;padding:12px 8px 6px;border-top:1px solid rgba(255,255,255,.08)">
+    <div style="width:26px;height:26px;border-radius:50%;background:rgba(250,0,140,.16);color:#FF5CB0;display:flex;align-items:center;justify-content:center;font:700 11px Inter,sans-serif;flex:none">Y</div>
+    <div style="flex:1;min-width:0">
+      <div style="font:600 12px Inter,sans-serif;color:#F2F5F3">seat:you</div>
+      <div style="display:flex;align-items:center;gap:5px;font:500 9.5px 'JetBrains Mono',monospace;color:rgba(255,255,255,.4)"><span style="width:5px;height:5px;border-radius:50%;background:#34D399;display:inline-block"></span>connected</div>
+    </div>
+  </div>
+</div>
+
+<div style="flex:1;padding:36px 40px;min-width:0;overflow:auto">
+
+<sc-if value="{{ isOverview }}" hint-placeholder-val="{{ true }}">
+<div>
+  <div style="margin-bottom:26px">
+    <div style="font:800 25px Inter,sans-serif;color:#F2F5F3">Overview</div>
+    <div style="font:500 12.5px 'JetBrains Mono',monospace;color:rgba(255,255,255,.4);margin-top:4px">masumi-network &#183; Central</div>
+  </div>
+  <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:16px;margin-bottom:20px">
+    <div style="background:#131B18;border:1px solid rgba(255,255,255,.08);border-radius:14px;padding:19px">
+      <div style="font:600 10px 'JetBrains Mono',monospace;letter-spacing:.5px;text-transform:uppercase;color:rgba(255,255,255,.4)">Central</div>
+      <div style="font:700 26px Inter,sans-serif;color:#F2F5F3;margin-top:8px">1,204 <span style="font-size:13px;color:rgba(255,255,255,.4);font-weight:500">docs</span></div>
+      <div style="display:flex;align-items:center;gap:6px;margin-top:9px;font:500 11px Inter,sans-serif;color:#34D399"><span style="width:6px;height:6px;border-radius:50%;background:#34D399;display:inline-block"></span>healthy</div>
+    </div>
+    <div style="background:#131B18;border:1px solid rgba(255,255,255,.08);border-radius:14px;padding:19px">
+      <div style="font:600 10px 'JetBrains Mono',monospace;letter-spacing:.5px;text-transform:uppercase;color:rgba(255,255,255,.4)">Your Node</div>
+      <div style="font:700 26px Inter,sans-serif;color:#F2F5F3;margin-top:8px">38 <span style="font-size:13px;color:rgba(255,255,255,.4);font-weight:500">captures/wk</span></div>
+      <div style="font:500 11px Inter,sans-serif;color:rgba(255,255,255,.45);margin-top:9px">seat:you &#183; synced 2m ago</div>
+    </div>
+    <div style="background:#131B18;border:1px solid rgba(255,255,255,.08);border-radius:14px;padding:19px">
+      <div style="font:600 10px 'JetBrains Mono',monospace;letter-spacing:.5px;text-transform:uppercase;color:rgba(255,255,255,.4)">Promotion Queue</div>
+      <div style="font:700 26px Inter,sans-serif;color:#FBBF24;margin-top:8px">3 <span style="font-size:13px;color:rgba(255,255,255,.4);font-weight:500">pending</span></div>
+      <div style="font:500 11px Inter,sans-serif;color:rgba(255,255,255,.45);margin-top:9px">New Org Project review</div>
+    </div>
+    <div style="background:#131B18;border:1px solid rgba(255,255,255,.08);border-radius:14px;padding:19px">
+      <div style="font:600 10px 'JetBrains Mono',monospace;letter-spacing:.5px;text-transform:uppercase;color:rgba(255,255,255,.4)">Seats</div>
+      <div style="font:700 26px Inter,sans-serif;color:#F2F5F3;margin-top:8px">12 <span style="font-size:13px;color:rgba(255,255,255,.4);font-weight:500">active</span></div>
+      <div style="font:500 11px Inter,sans-serif;color:rgba(255,255,255,.45);margin-top:9px">14 seats total</div>
+    </div>
+  </div>
+  <div style="display:grid;grid-template-columns:1.4fr 1fr;gap:16px">
+    <div style="background:#131B18;border:1px solid rgba(255,255,255,.08);border-radius:14px;padding:22px">
+      <div style="font:700 14px Inter,sans-serif;color:#F2F5F3;margin-bottom:15px">Recent Vault Activity</div>
+      <div style="display:flex;flex-direction:column;gap:13px">
+        <sc-for list="{{ activityFeed }}" as="ev" hint-placeholder-count="7">
+          <div style="display:flex;align-items:baseline;gap:10px">
+            <div style="font:700 9px 'JetBrains Mono',monospace;letter-spacing:.4px;color:{{ ev.tagColor }};width:50px;flex:none">{{ ev.tag }}</div>
+            <div style="font:400 12.5px Inter,sans-serif;color:rgba(242,245,243,.8);flex:1">{{ ev.text }}</div>
+            <div style="font:500 10.5px 'JetBrains Mono',monospace;color:rgba(255,255,255,.35);flex:none">{{ ev.time }}</div>
+          </div>
+        </sc-for>
+      </div>
+    </div>
+    <div style="background:#131B18;border:1px solid rgba(255,255,255,.08);border-radius:14px;padding:22px">
+      <div style="font:700 14px Inter,sans-serif;color:#F2F5F3;margin-bottom:15px">Promotion Approval</div>
+      <div style="display:flex;flex-direction:column;gap:15px">
+        <sc-for list="{{ promotionQueue }}" as="item" hint-placeholder-count="3">
+          <div>
+            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:5px">
+              <div style="font:600 12.5px 'JetBrains Mono',monospace;color:#F2F5F3">{{ item.project }}</div>
+              <div style="font:600 9px Inter,sans-serif;letter-spacing:.3px;text-transform:uppercase;color:{{ item.statusColor }}">{{ item.statusLabel }}</div>
+            </div>
+            <div style="font:400 11px Inter,sans-serif;color:rgba(255,255,255,.45);margin-bottom:8px">from seat:{{ item.seat }}</div>
+            <sc-if value="{{ item.pending }}" hint-placeholder-val="{{ true }}">
+              <div style="display:flex;gap:8px">
+                <div onClick="{{ item.onApprove }}" style="font:600 11px Inter,sans-serif;color:#0B0F0E;background:#34D399;padding:5px 12px;border-radius:6px;cursor:pointer">Approve</div>
+                <div onClick="{{ item.onReject }}" style="font:600 11px Inter,sans-serif;color:rgba(255,255,255,.6);border:1px solid rgba(255,255,255,.15);padding:5px 12px;border-radius:6px;cursor:pointer">Reject</div>
+              </div>
+            </sc-if>
+          </div>
+        </sc-for>
+      </div>
+    </div>
+  </div>
+</div>
+</sc-if>
+
+<sc-if value="{{ isSearch }}" hint-placeholder-val="{{ false }}">
+<div>
+  <div style="margin-bottom:22px">
+    <div style="font:800 25px Inter,sans-serif;color:#F2F5F3">Search</div>
+    <div style="font:500 12.5px 'JetBrains Mono',monospace;color:rgba(255,255,255,.4);margin-top:4px">Central + your Node &#183; citadel_search</div>
+  </div>
+  <div style="background:#131B18;border:1px solid rgba(255,255,255,.08);border-radius:12px;padding:4px;display:flex;align-items:center;gap:10px;margin-bottom:22px;max-width:640px">
+    <div style="width:15px;height:15px;position:relative;margin-left:10px;flex:none">
+      <div style="width:9px;height:9px;border-radius:50%;border:1.6px solid rgba(255,255,255,.4);position:absolute;top:0;left:0"></div>
+      <div style="width:6px;height:1.6px;background:rgba(255,255,255,.4);position:absolute;top:10px;left:8px;transform:rotate(45deg);transform-origin:left center"></div>
+    </div>
+    <input type="text" defaultValue="what did we decide about the vault?" style="flex:1;background:transparent;border:none;outline:none;font:400 14px Inter,sans-serif;color:#F2F5F3;padding:10px 10px 10px 0"/>
+  </div>
+  <div style="display:flex;flex-direction:column;gap:12px;max-width:760px">
+    <sc-for list="{{ searchResults }}" as="r" hint-placeholder-count="5">
+      <div style="background:#131B18;border:1px solid rgba(255,255,255,.08);border-radius:12px;padding:17px 20px">
+        <div style="display:flex;align-items:baseline;justify-content:space-between;margin-bottom:6px;gap:12px">
+          <div style="font:600 14px Inter,sans-serif;color:#F2F5F3">{{ r.title }}</div>
+          <div style="font:500 10.5px 'JetBrains Mono',monospace;color:rgba(255,255,255,.35);flex:none">{{ r.meta }}</div>
+        </div>
+        <div style="font:400 12.5px Inter,sans-serif;color:rgba(255,255,255,.55);line-height:1.5;margin-bottom:10px">{{ r.snippet }}</div>
+        <div style="display:flex;align-items:center;gap:10px">
+          <div style="font:500 10px 'JetBrains Mono',monospace;letter-spacing:.3px;text-transform:uppercase;color:rgba(255,255,255,.45);background:rgba(255,255,255,.06);padding:3px 8px;border-radius:4px">{{ r.source }}</div>
+          <sc-if value="{{ r.hasMaturity }}" hint-placeholder-val="{{ true }}">
+            <div style="display:flex;align-items:center;gap:5px;font:500 11px Inter,sans-serif;color:{{ r.maturity }}"><span style="width:6px;height:6px;border-radius:50%;background:currentColor;display:inline-block"></span>{{ r.maturityLabel }}</div>
+          </sc-if>
+        </div>
+      </div>
+    </sc-for>
+  </div>
+</div>
+</sc-if>
+
+<sc-if value="{{ isKnowledge }}" hint-placeholder-val="{{ false }}">
+<div>
+  <div style="display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:20px;flex-wrap:wrap;gap:12px">
+    <div>
+      <div style="font:800 25px Inter,sans-serif;color:#F2F5F3">Knowledge</div>
+      <div style="font:500 12.5px 'JetBrains Mono',monospace;color:rgba(255,255,255,.4);margin-top:4px">Knowledge Mesh &#183; source-linked relationships, universal view</div>
+    </div>
+    <div style="display:flex;align-items:center;gap:16px">
+      <div style="display:flex;align-items:center;gap:7px"><span style="width:10px;height:10px;border-radius:50%;background:#FA008C;display:inline-block"></span><span style="font:500 11px Inter,sans-serif;color:rgba(255,255,255,.5)">Central</span></div>
+      <div style="display:flex;align-items:center;gap:7px"><span style="width:10px;height:10px;border-radius:50%;background:#FF5CB0;display:inline-block"></span><span style="font:500 11px Inter,sans-serif;color:rgba(255,255,255,.5)">Seat</span></div>
+      <div style="display:flex;align-items:center;gap:7px"><span style="width:8px;height:8px;border-radius:50%;background:#34D399;display:inline-block"></span><span style="font:500 11px Inter,sans-serif;color:rgba(255,255,255,.5)">Knowledge</span></div>
+    </div>
+  </div>
+  <div style="display:grid;grid-template-columns:1fr 300px;gap:16px">
+    <div style="background:#131B18;border:1px solid rgba(255,255,255,.08);border-radius:14px;padding:14px;position:relative">
+      <svg viewBox="0 0 700 460" style="display:block;width:100%;height:auto">
+        <line x1="350" y1="230" x2="500" y2="230" stroke="rgba(255,255,255,.12)" strokeWidth="1.2"></line>
+        <line x1="350" y1="230" x2="425" y2="360" stroke="rgba(255,255,255,.12)" strokeWidth="1.2"></line>
+        <line x1="350" y1="230" x2="275" y2="360" stroke="rgba(255,255,255,.12)" strokeWidth="1.2"></line>
+        <line x1="350" y1="230" x2="200" y2="230" stroke="rgba(255,255,255,.12)" strokeWidth="1.2"></line>
+        <line x1="350" y1="230" x2="275" y2="100" stroke="rgba(255,255,255,.12)" strokeWidth="1.2"></line>
+        <line x1="350" y1="230" x2="425" y2="100" stroke="rgba(255,255,255,.12)" strokeWidth="1.2"></line>
+        <line x1="500" y1="230" x2="572" y2="170" stroke="rgba(255,255,255,.08)" strokeWidth="1"></line>
+        <line x1="500" y1="230" x2="572" y2="290" stroke="rgba(255,255,255,.08)" strokeWidth="1"></line>
+        <line x1="425" y1="360" x2="513" y2="393" stroke="rgba(255,255,255,.08)" strokeWidth="1"></line>
+        <line x1="425" y1="360" x2="410" y2="452" stroke="rgba(255,255,255,.08)" strokeWidth="1"></line>
+        <line x1="275" y1="360" x2="290" y2="452" stroke="rgba(255,255,255,.08)" strokeWidth="1"></line>
+        <line x1="275" y1="360" x2="187" y2="393" stroke="rgba(255,255,255,.08)" strokeWidth="1"></line>
+        <line x1="200" y1="230" x2="128" y2="290" stroke="rgba(255,255,255,.08)" strokeWidth="1"></line>
+        <line x1="200" y1="230" x2="128" y2="170" stroke="rgba(255,255,255,.08)" strokeWidth="1"></line>
+        <line x1="275" y1="100" x2="187" y2="67" stroke="rgba(255,255,255,.08)" strokeWidth="1"></line>
+        <line x1="275" y1="100" x2="304" y2="37" stroke="rgba(255,255,255,.08)" strokeWidth="1"></line>
+        <line x1="425" y1="100" x2="402" y2="37" stroke="rgba(255,255,255,.08)" strokeWidth="1"></line>
+        <line x1="425" y1="100" x2="513" y2="67" stroke="rgba(255,255,255,.08)" strokeWidth="1"></line>
+        <sc-for list="{{ meshNodes }}" as="node" hint-placeholder-count="19">
+          <circle cx="{{ node.cx }}" cy="{{ node.cy }}" r="{{ node.r }}" fill="{{ node.fill }}" stroke="{{ node.stroke }}" strokeWidth="{{ node.strokeW }}" onClick="{{ node.onSelect }}" style="cursor:pointer"></circle>
+        </sc-for>
+      </svg>
+      <div style="position:absolute;left:26px;bottom:18px;display:flex;align-items:center;gap:9px;font:500 10.5px 'JetBrains Mono',monospace;color:rgba(255,255,255,.35)">
+        <span>depth</span>
+        <div style="display:flex;gap:4px">
+          <div style="width:18px;height:4px;border-radius:2px;background:#FA008C"></div>
+          <div style="width:18px;height:4px;border-radius:2px;background:rgba(255,255,255,.15)"></div>
+          <div style="width:18px;height:4px;border-radius:2px;background:rgba(255,255,255,.15)"></div>
+        </div>
+        <span>1 hop</span>
+      </div>
+    </div>
+    <div style="background:#131B18;border:1px solid rgba(255,255,255,.08);border-radius:14px;padding:22px;align-self:start">
+      <div style="font:600 10px 'JetBrains Mono',monospace;letter-spacing:.5px;text-transform:uppercase;color:rgba(255,255,255,.4);margin-bottom:11px">Selected</div>
+      <div style="font:700 15px Inter,sans-serif;color:#F2F5F3;margin-bottom:8px;line-height:1.3">{{ selected.title }}</div>
+      <div style="font:500 11.5px Inter,sans-serif;color:rgba(255,255,255,.45);margin-bottom:14px">{{ selected.sourceType }}</div>
+      <sc-if value="{{ selected.hasMaturity }}" hint-placeholder-val="{{ false }}">
+        <div style="display:inline-flex;align-items:center;gap:6px;font:600 11px Inter,sans-serif;color:{{ selected.maturityColor }};background:rgba(255,255,255,.06);padding:4px 10px;border-radius:6px;margin-bottom:14px">
+          <span style="width:6px;height:6px;border-radius:50%;background:{{ selected.maturityColor }};display:inline-block"></span>{{ selected.maturityLabel }}
+        </div>
+      </sc-if>
+      <div style="font:400 11.5px 'JetBrains Mono',monospace;color:rgba(255,255,255,.4);line-height:1.5;word-break:break-word">{{ selected.sourceLabel }}</div>
+    </div>
+  </div>
+</div>
+</sc-if>
+
+<sc-if value="{{ isActivity }}" hint-placeholder-val="{{ false }}">
+<div>
+  <div style="display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:20px;flex-wrap:wrap;gap:12px">
+    <div>
+      <div style="display:flex;align-items:center;gap:10px">
+        <div style="font:800 25px Inter,sans-serif;color:#F2F5F3">Activity</div>
+        <div style="display:flex;align-items:center;gap:5px;font:600 10px Inter,sans-serif;color:#34D399;text-transform:uppercase;letter-spacing:.4px"><span style="width:7px;height:7px;border-radius:50%;background:#34D399;display:inline-block;animation:ctdPulse 1.8s ease-in-out infinite"></span>live</div>
+      </div>
+      <div style="font:500 12.5px 'JetBrains Mono',monospace;color:rgba(255,255,255,.4);margin-top:4px">Vault Activity &#183; ephemeral, resets with the service</div>
+    </div>
+    <div style="display:flex;background:#131B18;border:1px solid rgba(255,255,255,.08);border-radius:9px;padding:3px">
+      <div onClick="{{ goNodeMode }}" style="font:600 11.5px Inter,sans-serif;padding:7px 14px;border-radius:6px;cursor:pointer;background:{{ nodeModeBg }};color:{{ nodeModeFg }}">Your Node</div>
+      <div onClick="{{ goPresenceMode }}" style="font:600 11.5px Inter,sans-serif;padding:7px 14px;border-radius:6px;cursor:pointer;background:{{ presenceModeBg }};color:{{ presenceModeFg }}">Global presence</div>
+    </div>
+  </div>
+  <sc-if value="{{ isNodeMode }}" hint-placeholder-val="{{ true }}">
+    <div style="background:#131B18;border:1px solid rgba(255,255,255,.08);border-radius:14px;padding:22px">
+      <div style="display:flex;flex-direction:column;gap:0">
+        <sc-for list="{{ activityFeed }}" as="ev" hint-placeholder-count="7">
+          <div style="display:flex;align-items:baseline;gap:12px;padding:13px 0;border-bottom:1px solid rgba(255,255,255,.05)">
+            <div style="font:700 9.5px 'JetBrains Mono',monospace;letter-spacing:.4px;color:{{ ev.tagColor }};width:56px;flex:none">{{ ev.tag }}</div>
+            <div style="font:400 13px Inter,sans-serif;color:rgba(242,245,243,.8);flex:1">{{ ev.text }}</div>
+            <div style="font:500 11px 'JetBrains Mono',monospace;color:rgba(255,255,255,.35);flex:none">{{ ev.time }}</div>
+          </div>
+        </sc-for>
+      </div>
+    </div>
+  </sc-if>
+  <sc-if value="{{ isPresenceMode }}" hint-placeholder-val="{{ false }}">
+    <div style="background:#131B18;border:1px solid rgba(255,255,255,.08);border-radius:14px;padding:22px">
+      <div style="font:400 11.5px Inter,sans-serif;color:rgba(255,255,255,.4);margin-bottom:16px">Counts and timing only &#8212; Node content stays private to each seat.</div>
+      <div style="display:flex;flex-direction:column;gap:15px">
+        <sc-for list="{{ presenceRoster }}" as="p" hint-placeholder-count="6">
+          <div style="display:flex;align-items:center;gap:14px">
+            <div style="font:600 13px 'JetBrains Mono',monospace;color:#F2F5F3;width:88px;flex:none">{{ p.name }}</div>
+            <div style="flex:1;height:6px;background:rgba(255,255,255,.06);border-radius:3px;overflow:hidden">
+              <div style="height:100%;width:{{ p.bar }};background:{{ p.barColor }};border-radius:3px"></div>
+            </div>
+            <div style="font:500 11px Inter,sans-serif;color:rgba(255,255,255,.5);width:84px;text-align:right;flex:none">{{ p.count }} this wk</div>
+            <div style="font:500 11px 'JetBrains Mono',monospace;color:rgba(255,255,255,.35);width:66px;text-align:right;flex:none">{{ p.last }}</div>
+          </div>
+        </sc-for>
+      </div>
+    </div>
+  </sc-if>
+</div>
+</sc-if>
+
+<sc-if value="{{ isWrite }}" hint-placeholder-val="{{ false }}">
+<div>
+  <div style="margin-bottom:22px">
+    <div style="font:800 25px Inter,sans-serif;color:#F2F5F3">Write</div>
+    <div style="font:500 12.5px 'JetBrains Mono',monospace;color:rgba(255,255,255,.4);margin-top:4px">Add a note &#183; routed through the Learning Process</div>
+  </div>
+  <div style="display:grid;grid-template-columns:1fr 260px;gap:16px;max-width:960px">
+    <div style="background:#131B18;border:1px solid rgba(255,255,255,.08);border-radius:14px;padding:22px">
+      <textarea placeholder="A durable note for your Node..." style="width:100%;min-height:130px;background:#0B0F0E;border:1px solid rgba(255,255,255,.08);border-radius:10px;padding:14px;font:400 13.5px Inter,sans-serif;color:#F2F5F3;resize:vertical"></textarea>
+      <div style="display:flex;gap:8px;margin-top:14px;flex-wrap:wrap">
+        <sc-for list="{{ tagOptions }}" as="tag" hint-placeholder-count="4">
+          <div onClick="{{ tag.onToggle }}" style="font:500 11.5px 'JetBrains Mono',monospace;padding:6px 12px;border-radius:16px;cursor:pointer;background:{{ tag.bg }};color:{{ tag.fg }};border:1px solid {{ tag.border }}">{{ tag.id }}</div>
+        </sc-for>
+      </div>
+      <div style="font:400 11.5px Inter,sans-serif;color:rgba(255,255,255,.4);margin-top:14px;line-height:1.5">{{ destinationNote }}</div>
+      <div onClick="{{ submitIngest }}" style="display:inline-block;margin-top:16px;font:600 12.5px Inter,sans-serif;color:#0B0F0E;background:{{ submitBg }};padding:9px 20px;border-radius:8px;cursor:pointer">{{ submitLabel }}</div>
+    </div>
+    <div style="background:#131B18;border:1px solid rgba(255,255,255,.08);border-radius:14px;padding:22px">
+      <div style="font:600 10px 'JetBrains Mono',monospace;letter-spacing:.5px;text-transform:uppercase;color:rgba(255,255,255,.4);margin-bottom:14px">Recent to your Node</div>
+      <div style="display:flex;flex-direction:column;gap:12px;font:400 12px Inter,sans-serif;color:rgba(255,255,255,.6);line-height:1.4">
+        <div>&#8220;Backup mirror restore drill passed&#8221; <span style="color:rgba(255,255,255,.3)">&#183; 2h ago</span></div>
+        <div>&#8220;Obsidian sync conflict notes&#8221; <span style="color:rgba(255,255,255,.3)">&#183; 1d ago</span></div>
+        <div>&#8220;deepseek-v4-flash decision&#8221; <span style="color:rgba(255,255,255,.3)">&#183; 3d ago</span></div>
+      </div>
+    </div>
+  </div>
+</div>
+</sc-if>
+
+<sc-if value="{{ isAdmin }}" hint-placeholder-val="{{ false }}">
+<div>
+  <div style="margin-bottom:22px">
+    <div style="font:800 25px Inter,sans-serif;color:#F2F5F3">Admin</div>
+    <div style="font:500 12.5px 'JetBrains Mono',monospace;color:rgba(255,255,255,.4);margin-top:4px">Seats, tokens, and Promotion Approval</div>
+  </div>
+  <div style="background:#131B18;border:1px solid rgba(255,255,255,.08);border-radius:14px;padding:22px;margin-bottom:18px">
+    <div style="font:700 14px Inter,sans-serif;color:#F2F5F3;margin-bottom:14px">Promotion Approval queue</div>
+    <div style="display:flex;flex-direction:column;gap:0">
+      <sc-for list="{{ promotionQueue }}" as="item" hint-placeholder-count="3">
+        <div style="display:flex;align-items:center;gap:16px;padding:14px 0;border-bottom:1px solid rgba(255,255,255,.05)">
+          <div style="flex:1;min-width:0">
+            <div style="font:600 13px 'JetBrains Mono',monospace;color:#F2F5F3">{{ item.project }}</div>
+            <div style="font:400 11.5px Inter,sans-serif;color:rgba(255,255,255,.45);margin-top:3px">{{ item.snippet }}</div>
+          </div>
+          <div style="font:500 11px Inter,sans-serif;color:rgba(255,255,255,.4);flex:none">seat:{{ item.seat }}</div>
+          <div style="font:600 10px Inter,sans-serif;text-transform:uppercase;letter-spacing:.3px;color:{{ item.statusColor }};width:66px;flex:none">{{ item.statusLabel }}</div>
+          <sc-if value="{{ item.pending }}" hint-placeholder-val="{{ true }}">
+            <div style="display:flex;gap:8px;flex:none">
+              <div onClick="{{ item.onApprove }}" style="font:600 11px Inter,sans-serif;color:#0B0F0E;background:#34D399;padding:6px 13px;border-radius:6px;cursor:pointer">Approve</div>
+              <div onClick="{{ item.onReject }}" style="font:600 11px Inter,sans-serif;color:rgba(255,255,255,.6);border:1px solid rgba(255,255,255,.15);padding:6px 13px;border-radius:6px;cursor:pointer">Reject</div>
+            </div>
+          </sc-if>
+        </div>
+      </sc-for>
+    </div>
+  </div>
+  <div style="background:#131B18;border:1px solid rgba(255,255,255,.08);border-radius:14px;padding:22px">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:15px">
+      <div style="font:700 14px Inter,sans-serif;color:#F2F5F3">Seats</div>
+      <div style="font:600 11.5px Inter,sans-serif;color:#0B0F0E;background:#FA008C;padding:7px 14px;border-radius:7px;cursor:pointer">+ New seat</div>
+    </div>
+    <div style="display:flex;flex-direction:column;gap:0">
+      <sc-for list="{{ presenceRoster }}" as="p" hint-placeholder-count="6">
+        <div style="display:flex;align-items:center;gap:16px;padding:12px 0;border-bottom:1px solid rgba(255,255,255,.05)">
+          <div style="font:600 13px 'JetBrains Mono',monospace;color:#F2F5F3;flex:1">{{ p.name }}</div>
+          <div style="font:500 11.5px Inter,sans-serif;color:rgba(255,255,255,.45);width:120px">last sync {{ p.last }}</div>
+          <div style="font:500 10.5px 'JetBrains Mono',monospace;color:#34D399;background:rgba(52,211,153,.12);padding:4px 10px;border-radius:5px;flex:none">token active</div>
+        </div>
+      </sc-for>
+    </div>
+  </div>
+</div>
+</sc-if>
+
+</div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script>
+class Component extends DCLogic {
+  state = {
+    view: 'overview',
+    selectedMeshId: 'central',
+    activityMode: 'node',
+    promotionQueue: [
+      { id: 'p1', project: 'stableflow-terminal', seat: 'sam', snippet: 'Real-time global intelligence dashboard \u2014 repo not yet in the masumi org list.', status: 'pending' },
+      { id: 'p2', project: 'intent-vault', seat: 'alex', snippet: 'Private workflow wrapper over SolRouter-style inference \u2014 references a personal repo.', status: 'pending' },
+      { id: 'p3', project: 'kairen-dealrail', seat: 'priya', snippet: 'Onchain negotiation + escrow settlement rail \u2014 possible org tie-in, unconfirmed.', status: 'pending' }
+    ],
+    selectedTags: [],
+    ingested: false
+  };
+
+  setView(v) { this.setState({ view: v }); }
+  selectMesh(id) { this.setState({ selectedMeshId: id }); }
+  setActivityMode(m) { this.setState({ activityMode: m }); }
+  decideItem(id, status) {
+    this.setState(s => ({
+      promotionQueue: s.promotionQueue.map(item => item.id === id ? Object.assign({}, item, { status }) : item)
+    }));
+  }
+  toggleTag(tag) {
+    this.setState(s => {
+      const has = s.selectedTags.includes(tag);
+      return { selectedTags: has ? s.selectedTags.filter(t => t !== tag) : s.selectedTags.concat([tag]) };
+    });
+  }
+  submitIngest() {
+    this.setState({ ingested: true });
+    setTimeout(() => this.setState({ ingested: false }), 2600);
+  }
+
+  renderVals() {
+    const s = this.state;
+    const navKey = (id) => ({
+      bg: s.view === id ? 'rgba(250,0,140,.14)' : 'transparent',
+      fg: s.view === id ? '#FF5CB0' : 'rgba(242,245,243,.56)',
+      iconFg: s.view === id ? '#FF5CB0' : 'rgba(242,245,243,.4)'
+    });
+
+    const flagsA = [
+      1,0,1,0,1,0,1, 1,1,1,1,1,1,1, 1,1,0,1,0,1,1, 1,1,0,1,0,1,1,
+      1,1,1,1,1,1,1, 1,1,0,0,0,1,1, 1,1,0,0,0,1,1
+    ];
+    const colsA = ['#FA008C','#D6239C','#B246AD','#8E6ABD','#6A8DCD','#46B0DE','#22D3EE'];
+    const pixelGridA = flagsA.map((f, i) => ({ color: f ? colsA[i % 7] : 'transparent' }));
+
+    const meshRaw = [
+      { id: 'central', kind: 'hub', cx: 350, cy: 230, r: 34, fill: '#FA008C', title: 'Central', sourceType: 'Organization Vault', sourceLabel: 'masumi-network \u00b7 1,204 documents', maturity: null, maturityColor: '' },
+      { id: 'seat-jane', kind: 'seat', cx: 500, cy: 230, r: 20, fill: '#FF5CB0', title: 'seat:jane', sourceType: 'Seat Presence', sourceLabel: 'Active \u00b7 38 contributions this week', maturity: null, maturityColor: '' },
+      { id: 'seat-sam', kind: 'seat', cx: 425, cy: 360, r: 17, fill: '#FF5CB0', title: 'seat:sam', sourceType: 'Seat Presence', sourceLabel: 'Active \u00b7 21 contributions this week', maturity: null, maturityColor: '' },
+      { id: 'seat-alex', kind: 'seat', cx: 275, cy: 360, r: 15, fill: '#FF5CB0', title: 'seat:alex', sourceType: 'Seat Presence', sourceLabel: 'Active \u00b7 17 contributions this week', maturity: null, maturityColor: '' },
+      { id: 'seat-priya', kind: 'seat', cx: 200, cy: 230, r: 18, fill: '#FF5CB0', title: 'seat:priya', sourceType: 'Seat Presence', sourceLabel: 'Active \u00b7 29 contributions this week', maturity: null, maturityColor: '' },
+      { id: 'seat-chen', kind: 'seat', cx: 275, cy: 100, r: 14, fill: '#FF5CB0', title: 'seat:chen', sourceType: 'Seat Presence', sourceLabel: 'Idle \u00b7 4 contributions this week', maturity: null, maturityColor: '' },
+      { id: 'seat-sarah', kind: 'seat', cx: 425, cy: 100, r: 16, fill: '#FF5CB0', title: 'seat:sarah', sourceType: 'Seat Presence', sourceLabel: 'Active \u00b7 12 contributions this week', maturity: null, maturityColor: '' },
+      { id: 'doc-1', kind: 'doc', cx: 572, cy: 170, r: 6, fill: '#34D399', title: 'ADR-0009 \u2014 Mesh read isolation', sourceType: 'Doc \u00b7 Central', sourceLabel: 'docs/adr/0009-mesh-read-isolation-presence-vs-content.md', maturity: 'Stable', maturityColor: '#34D399' },
+      { id: 'doc-2', kind: 'doc', cx: 572, cy: 290, r: 5, fill: '#22D3EE', title: 'Promotion Agent \u2014 classification rules', sourceType: 'Doc \u00b7 Central', sourceLabel: 'docs/adr/0007-seat-capture-promotion-write-policy.md', maturity: 'Growing', maturityColor: '#22D3EE' },
+      { id: 'doc-3', kind: 'doc', cx: 513, cy: 393, r: 6, fill: '#34D399', title: 'Capture Policy \u2014 org baseline', sourceType: 'Doc \u00b7 Central', sourceLabel: 'docs/operations.md', maturity: 'Stable', maturityColor: '#34D399' },
+      { id: 'doc-4', kind: 'doc', cx: 410, cy: 452, r: 5, fill: '#FBBF24', title: 'Session trace \u2014 Railway deploy fix', sourceType: 'Shared Session Trace', sourceLabel: 'session-traces \u00b7 reference-only', maturity: 'Seed', maturityColor: '#FBBF24' },
+      { id: 'doc-5', kind: 'doc', cx: 290, cy: 452, r: 6, fill: '#34D399', title: 'ADR-0007 \u2014 Seat capture promotion', sourceType: 'Doc \u00b7 Central', sourceLabel: 'docs/adr/0007-seat-capture-promotion-write-policy.md', maturity: 'Stable', maturityColor: '#34D399' },
+      { id: 'doc-6', kind: 'doc', cx: 187, cy: 393, r: 5, fill: '#22D3EE', title: 'Obsidian sync \u2014 conflict handling', sourceType: 'Doc \u00b7 Central', sourceLabel: 'docs/obsidian-integration-plan.md', maturity: 'Growing', maturityColor: '#22D3EE' },
+      { id: 'doc-7', kind: 'doc', cx: 128, cy: 290, r: 6, fill: '#34D399', title: 'Linear sync \u2014 seat-scoped mirror', sourceType: 'Doc \u00b7 Central', sourceLabel: 'docs/adr/0004-linear-seat-scoped-mirror.md', maturity: 'Stable', maturityColor: '#34D399' },
+      { id: 'doc-8', kind: 'doc', cx: 128, cy: 170, r: 5, fill: '#22D3EE', title: 'MCP server \u2014 tool inventory', sourceType: 'Doc \u00b7 Central', sourceLabel: 'docs/mcp/README.md', maturity: 'Growing', maturityColor: '#22D3EE' },
+      { id: 'doc-9', kind: 'doc', cx: 187, cy: 67, r: 5, fill: '#FBBF24', title: 'Session trace \u2014 flaky test triage', sourceType: 'Shared Session Trace', sourceLabel: 'session-traces \u00b7 reference-only', maturity: 'Seed', maturityColor: '#FBBF24' },
+      { id: 'doc-10', kind: 'doc', cx: 304, cy: 37, r: 6, fill: '#34D399', title: 'Google Chat digest \u2014 rollout', sourceType: 'Doc \u00b7 Central', sourceLabel: 'docs/google-chat-organization-update-digest-plan.md', maturity: 'Stable', maturityColor: '#34D399' },
+      { id: 'doc-11', kind: 'doc', cx: 402, cy: 37, r: 5, fill: '#22D3EE', title: 'Backup mirror \u2014 restore drill', sourceType: 'Doc \u00b7 Central', sourceLabel: 'docs/vault-backup-mirror.md', maturity: 'Growing', maturityColor: '#22D3EE' },
+      { id: 'doc-12', kind: 'doc', cx: 513, cy: 67, r: 5, fill: '#FBBF24', title: 'Onboarding \u2014 autosync IDE setup', sourceType: 'Doc \u00b7 Central', sourceLabel: 'docs/onboarding/citadel-autosync-ides.md', maturity: 'Seed', maturityColor: '#FBBF24' }
+    ];
+    const meshNodes = meshRaw.map(n => ({
+      cx: n.cx, cy: n.cy, r: n.r, fill: n.fill,
+      stroke: s.selectedMeshId === n.id ? '#F2F5F3' : 'rgba(255,255,255,.15)',
+      strokeW: s.selectedMeshId === n.id ? 2.5 : 1,
+      onSelect: () => this.selectMesh(n.id)
+    }));
+    const selRaw = meshRaw.find(n => n.id === s.selectedMeshId) || meshRaw[0];
+    const selected = {
+      title: selRaw.title,
+      sourceType: selRaw.sourceType,
+      sourceLabel: selRaw.sourceLabel,
+      hasMaturity: !!selRaw.maturity,
+      maturityColor: selRaw.maturityColor,
+      maturityLabel: selRaw.maturity || ''
+    };
+
+    const activityFeed = [
+      { id:'a1', tag:'SYNC', tagColor:'#22D3EE', text:'Captured 3 files from citadel-archive (git push)', time:'12s ago' },
+      { id:'a2', tag:'INGEST', tagColor:'#34D399', text:'Ingested note tagged decision: \u201cStandardized on deepseek-v4-flash\u201d', time:'4m ago' },
+      { id:'a3', tag:'SEARCH', tagColor:'#FF5CB0', text:'citadel_search: \u201cpromotion agent rules\u201d', time:'9m ago' },
+      { id:'a4', tag:'PROMOTE', tagColor:'#FBBF24', text:'Promotion Agent proposed 1 New Org Project note', time:'26m ago' },
+      { id:'a5', tag:'SYNC', tagColor:'#22D3EE', text:'SessionEnd hook captured session trace (light tier)', time:'41m ago' },
+      { id:'a6', tag:'SEARCH', tagColor:'#FF5CB0', text:'citadel_search: \u201cobsidian sync conflicts\u201d', time:'1h ago' },
+      { id:'a7', tag:'INGEST', tagColor:'#34D399', text:'Ingested note tagged org-work: \u201cBackup mirror restore drill passed\u201d', time:'2h ago' }
+    ];
+    const presenceRoster = [
+      { id:'jane', name:'seat:jane', bar:'86%', barColor:'#34D399', last:'2m ago', count: 38 },
+      { id:'priya', name:'seat:priya', bar:'70%', barColor:'#34D399', last:'6m ago', count: 29 },
+      { id:'sam', name:'seat:sam', bar:'52%', barColor:'#22D3EE', last:'14m ago', count: 21 },
+      { id:'alex', name:'seat:alex', bar:'42%', barColor:'#22D3EE', last:'22m ago', count: 17 },
+      { id:'sarah', name:'seat:sarah', bar:'30%', barColor:'#22D3EE', last:'31m ago', count: 12 },
+      { id:'chen', name:'seat:chen', bar:'10%', barColor:'rgba(255,255,255,.3)', last:'3h ago', count: 4 }
+    ];
+    const searchResults = [
+      { id:'r1', title:'Decision: standardized on deepseek-v4-flash', source:'Central', maturity:'#34D399', maturityLabel:'Stable', hasMaturity:true, snippet:'Standardized on it via OpenRouter, replacing the prior default across agents.', meta:'updated 3d ago' },
+      { id:'r2', title:'ADR-0009 \u2014 Mesh read isolation (presence vs content)', source:'Central', maturity:'#34D399', maturityLabel:'Stable', hasMaturity:true, snippet:'Universal means every seat is visible, not that every seat\u2019s memory is readable.', meta:'updated 1w ago' },
+      { id:'r3', title:'Promotion Agent \u2014 New Org Project detection rules', source:'Central', maturity:'#22D3EE', maturityLabel:'Growing', hasMaturity:true, snippet:'Content naming a repo not in the masumi org list requires Promotion Approval.', meta:'updated 2d ago' },
+      { id:'r4', title:'Session trace: debugging the Railway learning-agent cron', source:'Shared Session Trace \u00b7 reference-only', maturity:'', maturityLabel:'', hasMaturity:false, snippet:'Approach tried, one dead end, and the fix \u2014 shared by seat:chen.', meta:'5h ago' },
+      { id:'r5', title:'Obsidian sync \u2014 conflict resolution notes', source:'Your Node', maturity:'#FBBF24', maturityLabel:'Seed', hasMaturity:true, snippet:'First pass at handling two-way edits between Obsidian and Central.', meta:'1d ago' }
+    ];
+    const tagOptions = ['personal','org-work','decision','custom'].map(t => {
+      const active = s.selectedTags.includes(t);
+      return {
+        id: t,
+        bg: active ? 'rgba(250,0,140,.16)' : 'transparent',
+        fg: active ? '#FF5CB0' : 'rgba(255,255,255,.5)',
+        border: active ? 'rgba(250,0,140,.4)' : 'rgba(255,255,255,.15)',
+        onToggle: () => this.toggleTag(t)
+      };
+    });
+    let destinationNote = 'Stays on your Node \u2014 visible only to you until you choose to share it.';
+    if (s.selectedTags.includes('org-work')) {
+      destinationNote = 'org-work roots may auto-promote \u2014 the Promotion Agent checks it against Central and the masumi org repos.';
+    } else if (s.selectedTags.includes('personal')) {
+      destinationNote = 'personal never auto-promotes \u2014 this note stays on your Node.';
+    }
+
+    return {
+      isOverview: s.view === 'overview', isSearch: s.view === 'search', isKnowledge: s.view === 'knowledge',
+      isActivity: s.view === 'activity', isWrite: s.view === 'write', isAdmin: s.view === 'admin',
+      navOverview: navKey('overview'), navSearch: navKey('search'), navKnowledge: navKey('knowledge'),
+      navActivity: navKey('activity'), navWrite: navKey('write'), navAdmin: navKey('admin'),
+      goOverview: () => this.setView('overview'), goSearch: () => this.setView('search'),
+      goKnowledge: () => this.setView('knowledge'), goActivity: () => this.setView('activity'),
+      goWrite: () => this.setView('write'), goAdmin: () => this.setView('admin'),
+      pixelGridA, meshNodes, selected,
+      promotionQueue: s.promotionQueue.map(item => ({
+        id: item.id, project: item.project, seat: item.seat, snippet: item.snippet,
+        pending: item.status === 'pending',
+        statusColor: item.status === 'approved' ? '#34D399' : item.status === 'rejected' ? '#FA140A' : '#FBBF24',
+        statusLabel: item.status === 'approved' ? 'Approved' : item.status === 'rejected' ? 'Rejected' : 'Pending',
+        onApprove: () => this.decideItem(item.id, 'approved'),
+        onReject: () => this.decideItem(item.id, 'rejected')
+      })),
+      isNodeMode: s.activityMode === 'node', isPresenceMode: s.activityMode === 'presence',
+      nodeModeBg: s.activityMode==='node' ? 'rgba(250,0,140,.16)' : 'transparent',
+      nodeModeFg: s.activityMode==='node' ? '#FF5CB0' : 'rgba(255,255,255,.5)',
+      presenceModeBg: s.activityMode==='presence' ? 'rgba(250,0,140,.16)' : 'transparent',
+      presenceModeFg: s.activityMode==='presence' ? '#FF5CB0' : 'rgba(255,255,255,.5)',
+      goNodeMode: () => this.setActivityMode('node'), goPresenceMode: () => this.setActivityMode('presence'),
+      activityFeed, presenceRoster, searchResults, tagOptions, destinationNote,
+      submitBg: s.ingested ? '#34D399' : '#FA008C',
+      submitLabel: s.ingested ? '\u2713 Ingested to your Node' : 'Ingest',
+      submitIngest: () => this.submitIngest()
+    };
+  }
+}
+</script>
+</body>
+</html>

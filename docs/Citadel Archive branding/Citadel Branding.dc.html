@@ -1,0 +1,376 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet data-dc-atomics>
+<meta name="design_doc_mode" content="canvas">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+body{margin:0;background:#eef1ef;font-family:Inter,system-ui,sans-serif}
+a{color:#2a78d6}
+a:hover{color:#1c5aa8}
+.dv-turn{padding:40px 44px 32px;border-bottom:1px solid rgba(0,0,0,.08);scroll-margin-top:16px}
+.dv-thd{display:flex;align-items:baseline;gap:10px;margin:0 0 20px}
+.dv-tid{font:600 10px ui-monospace,Menlo,monospace;padding:3px 7px;background:#1a1a1a;color:#fff;border-radius:4px;text-decoration:none}
+.dv-tname{font:600 13px/1.2 system-ui,sans-serif;color:#1a1a1a}
+.dv-opts{display:flex;flex-wrap:wrap;gap:28px;align-items:flex-start}
+.dv-opt{flex:none;display:flex;flex-direction:column;gap:9px;scroll-margin-top:16px}
+.dv-oid{font:600 10.5px ui-monospace,Menlo,monospace;padding:3px 7px;background:rgba(0,0,0,.08);color:#1a1a1a;border-radius:5px;text-decoration:none}
+.dv-olabel{display:flex;align-items:baseline;gap:8px;font:400 11px/1.3 system-ui,sans-serif;color:rgba(0,0,0,.55)}
+.dv-card{max-width:100%;background:#fff;border:1px solid rgba(0,0,0,.08);border-radius:8px;box-shadow:0 1px 3px rgba(0,0,0,.06);overflow:hidden}
+.dv-opt:target .dv-oid{background:#2a78d6;color:#fff}
+.dv-next{margin:22px 0 0;font:12px/1.5 system-ui,sans-serif;color:rgba(0,0,0,.5)}
+.ctl-lbl{font:600 10.5px system-ui,sans-serif;color:rgba(0,0,0,.4);text-transform:uppercase;letter-spacing:.6px;margin-bottom:10px}
+</style>
+</helmet>
+
+<section class="dv-turn" id="t1">
+<div class="dv-thd"><a class="dv-tid" href="#t1">1</a><span class="dv-tname">Citadel branding — mark, README banner, favicon, terminal</span></div>
+<div class="dv-opts">
+
+<div class="dv-opt" id="1a">
+<div class="dv-olabel"><a class="dv-oid" href="#1a">1a</a>Pixel Bastion — blocky mark, circuit-trace mesh</div>
+<div class="dv-card" style="width:916px;background:#fff;padding:28px 28px 32px">
+<div style="font:400 12.5px/1.5 system-ui,sans-serif;color:rgba(0,0,0,.5);margin-bottom:22px">Crenellated mark built on a literal pixel grid, painted in the CLI's own magenta&#8594;cyan gradient. Circuit-trace mesh nods to the Knowledge Mesh.</div>
+
+<div style="display:flex;gap:32px;margin-bottom:28px">
+<div style="flex:1">
+<div class="ctl-lbl">Mark &amp; lockup</div>
+<div style="background:#0B0F0E;border-radius:16px;padding:26px;display:flex;align-items:center;gap:18px">
+<div style="width:96px;height:96px;box-sizing:border-box;border:1px solid rgba(255,255,255,.08);border-radius:18px;background:#0B0F0E;padding:6px;display:grid;grid-template-columns:repeat(7,10px);grid-template-rows:repeat(7,10px);gap:2px;overflow:hidden;flex:none">
+<sc-for list="{{ pixelGridA }}" as="cell" hint-placeholder-count="49">
+<div style="border-radius:2px;background:{{ cell.color }}"></div>
+</sc-for>
+</div>
+<div>
+<div style="display:flex;align-items:baseline;gap:8px">
+<div style="font:800 32px/1 Inter,sans-serif;letter-spacing:.5px;color:#F2F5F3">CITADEL</div>
+<div style="font:600 10px 'JetBrains Mono',monospace;letter-spacing:.5px;color:rgba(255,255,255,.55);background:rgba(255,255,255,.07);padding:3px 7px;border-radius:4px">ARCHIVE</div>
+</div>
+<div style="font:500 11px 'JetBrains Mono',monospace;letter-spacing:1.5px;text-transform:uppercase;color:rgba(255,255,255,.42);margin-top:6px">the organization vault</div>
+</div>
+</div>
+</div>
+<div style="flex:1">
+<div class="ctl-lbl">Favicon &amp; app icon</div>
+<div style="background:#fff;border-radius:16px;padding:26px 20px;display:flex;align-items:flex-end;gap:22px;height:96px;box-sizing:border-box">
+<div style="display:flex;flex-direction:column;align-items:center;gap:8px">
+<div style="width:64px;height:64px;position:relative;flex:none">
+<div style="width:96px;height:96px;box-sizing:border-box;border:1px solid rgba(255,255,255,.08);border-radius:18px;background:#0B0F0E;padding:6px;display:grid;grid-template-columns:repeat(7,10px);grid-template-rows:repeat(7,10px);gap:2px;overflow:hidden;position:absolute;top:0;left:0;transform:scale(.667);transform-origin:top left">
+<sc-for list="{{ pixelGridA }}" as="cell" hint-placeholder-count="49">
+<div style="border-radius:2px;background:{{ cell.color }}"></div>
+</sc-for>
+</div>
+</div>
+<div style="font:500 9.5px 'JetBrains Mono',monospace;color:rgba(0,0,0,.4)">64px</div>
+</div>
+<div style="display:flex;flex-direction:column;align-items:center;gap:8px">
+<div style="width:32px;height:32px;position:relative;flex:none">
+<div style="width:96px;height:96px;box-sizing:border-box;border:1px solid rgba(255,255,255,.08);border-radius:18px;background:#0B0F0E;padding:6px;display:grid;grid-template-columns:repeat(7,10px);grid-template-rows:repeat(7,10px);gap:2px;overflow:hidden;position:absolute;top:0;left:0;transform:scale(.333);transform-origin:top left">
+<sc-for list="{{ pixelGridA }}" as="cell" hint-placeholder-count="49">
+<div style="border-radius:2px;background:{{ cell.color }}"></div>
+</sc-for>
+</div>
+</div>
+<div style="font:500 9.5px 'JetBrains Mono',monospace;color:rgba(0,0,0,.4)">32px</div>
+</div>
+<div style="display:flex;flex-direction:column;align-items:center;gap:8px">
+<div style="width:16px;height:16px;position:relative;flex:none">
+<div style="width:96px;height:96px;box-sizing:border-box;border:1px solid rgba(255,255,255,.08);border-radius:18px;background:#0B0F0E;padding:6px;display:grid;grid-template-columns:repeat(7,10px);grid-template-rows:repeat(7,10px);gap:2px;overflow:hidden;position:absolute;top:0;left:0;transform:scale(.167);transform-origin:top left">
+<sc-for list="{{ pixelGridA }}" as="cell" hint-placeholder-count="49">
+<div style="border-radius:2px;background:{{ cell.color }}"></div>
+</sc-for>
+</div>
+</div>
+<div style="font:500 9.5px 'JetBrains Mono',monospace;color:rgba(0,0,0,.4)">16px</div>
+</div>
+</div>
+</div>
+</div>
+
+<div style="margin-bottom:24px">
+<div class="ctl-lbl">GitHub README banner</div>
+<div style="position:relative;width:860px;height:220px;border-radius:14px;overflow:hidden;background:#0B0F0E;border:1px solid rgba(255,255,255,.08)">
+<svg viewBox="0 0 860 220" width="860" height="220" style="position:absolute;inset:0">
+<line x1="520" y1="50" x2="600" y2="50" stroke="rgba(255,255,255,.16)" strokeWidth="1.2"></line>
+<line x1="600" y1="50" x2="600" y2="120" stroke="rgba(255,255,255,.16)" strokeWidth="1.2"></line>
+<line x1="600" y1="120" x2="700" y2="120" stroke="rgba(255,255,255,.16)" strokeWidth="1.2"></line>
+<line x1="700" y1="120" x2="700" y2="60" stroke="rgba(255,255,255,.16)" strokeWidth="1.2"></line>
+<line x1="700" y1="60" x2="780" y2="60" stroke="rgba(255,255,255,.16)" strokeWidth="1.2"></line>
+<line x1="780" y1="60" x2="780" y2="170" stroke="rgba(255,255,255,.16)" strokeWidth="1.2"></line>
+<line x1="780" y1="170" x2="660" y2="170" stroke="rgba(255,255,255,.16)" strokeWidth="1.2"></line>
+<line x1="520" y1="170" x2="520" y2="120" stroke="rgba(255,255,255,.16)" strokeWidth="1.2"></line>
+<line x1="520" y1="120" x2="520" y2="50" stroke="rgba(255,255,255,.16)" strokeWidth="1.2"></line>
+<circle cx="520" cy="50" r="3" fill="#FA008C" opacity=".7"></circle>
+<circle cx="600" cy="50" r="3" fill="#22D3EE" opacity=".6"></circle>
+<circle cx="600" cy="120" r="3" fill="#34D399" opacity=".6"></circle>
+<circle cx="700" cy="120" r="3" fill="#FA008C" opacity=".6"></circle>
+<circle cx="700" cy="60" r="3" fill="#22D3EE" opacity=".6"></circle>
+<circle cx="780" cy="60" r="3" fill="#34D399" opacity=".6"></circle>
+<circle cx="780" cy="170" r="3" fill="#FA008C" opacity=".6"></circle>
+<circle cx="660" cy="170" r="3" fill="#22D3EE" opacity=".55"></circle>
+<circle cx="520" cy="170" r="3" fill="#34D399" opacity=".55"></circle>
+<circle cx="520" cy="120" r="3" fill="#FA008C" opacity=".55"></circle>
+</svg>
+<div style="position:absolute;inset:0;display:flex;align-items:center;padding:0 40px">
+<div style="display:flex;align-items:center;gap:20px">
+<div style="width:72px;height:72px;position:relative;flex:none">
+<div style="width:96px;height:96px;box-sizing:border-box;border:1px solid rgba(255,255,255,.08);border-radius:18px;background:#0B0F0E;padding:6px;display:grid;grid-template-columns:repeat(7,10px);grid-template-rows:repeat(7,10px);gap:2px;overflow:hidden;position:absolute;top:0;left:0;transform:scale(.75);transform-origin:top left">
+<sc-for list="{{ pixelGridA }}" as="cell" hint-placeholder-count="49">
+<div style="border-radius:2px;background:{{ cell.color }}"></div>
+</sc-for>
+</div>
+</div>
+<div>
+<div style="display:flex;align-items:baseline;gap:10px">
+<div style="font:800 44px/1 Inter,sans-serif;letter-spacing:.5px;color:#F2F5F3">CITADEL</div>
+<div style="font:600 11px 'JetBrains Mono',monospace;letter-spacing:.5px;color:rgba(255,255,255,.55);background:rgba(255,255,255,.07);padding:3px 8px;border-radius:4px">ARCHIVE</div>
+</div>
+<div style="font:500 13px 'JetBrains Mono',monospace;letter-spacing:2px;text-transform:uppercase;color:rgba(255,255,255,.42);margin-top:8px">the organization vault</div>
+</div>
+</div>
+</div>
+<div style="position:absolute;left:40px;right:40px;bottom:18px;display:flex;justify-content:space-between;font:500 10.5px 'JetBrains Mono',monospace;letter-spacing:1px;text-transform:uppercase;color:rgba(255,255,255,.32);border-top:1px solid rgba(255,255,255,.08);padding-top:10px">
+<span>Self-hosted organization vault</span>
+<span>CLI &#183; MCP &#183; HTTP API &#183; Web UI</span>
+</div>
+</div>
+</div>
+
+<div>
+<div class="ctl-lbl">Terminal banner</div>
+<div style="width:860px;border-radius:12px;overflow:hidden;border:1px solid rgba(0,0,0,.08);box-shadow:0 16px 40px -20px rgba(0,0,0,.35)">
+<div style="height:34px;background:#1a2420;display:flex;align-items:center;gap:8px;padding:0 14px">
+<div style="display:flex;gap:6px">
+<div style="width:10px;height:10px;border-radius:50%;background:#FA140A"></div>
+<div style="width:10px;height:10px;border-radius:50%;background:#FBBF24"></div>
+<div style="width:10px;height:10px;border-radius:50%;background:#34D399"></div>
+</div>
+<div style="flex:1;text-align:center;font:500 11px 'JetBrains Mono',monospace;color:rgba(255,255,255,.35)">zsh — citadel</div>
+</div>
+<div style="background:#0B0F0E;padding:26px 30px 30px">
+<div style="font:400 13px 'JetBrains Mono',monospace;color:rgba(255,255,255,.4);margin-bottom:20px">$ <span style="color:#F2F5F3">citadel status</span></div>
+<div style="display:flex;align-items:center;gap:16px;margin-bottom:18px">
+<div style="width:56px;height:56px;position:relative;flex:none">
+<div style="width:96px;height:96px;box-sizing:border-box;border:1px solid rgba(255,255,255,.08);border-radius:18px;background:#0B0F0E;padding:6px;display:grid;grid-template-columns:repeat(7,10px);grid-template-rows:repeat(7,10px);gap:2px;overflow:hidden;position:absolute;top:0;left:0;transform:scale(.5833);transform-origin:top left">
+<sc-for list="{{ pixelGridA }}" as="cell" hint-placeholder-count="49">
+<div style="border-radius:2px;background:{{ cell.color }}"></div>
+</sc-for>
+</div>
+</div>
+<div>
+<div style="font:800 24px/1 Inter,sans-serif;letter-spacing:.5px;color:#F2F5F3">CITADEL</div>
+<div style="font:500 10.5px 'JetBrains Mono',monospace;letter-spacing:1.5px;text-transform:uppercase;color:rgba(255,255,255,.4);margin-top:5px">the organization vault</div>
+</div>
+</div>
+<div style="font:400 12.5px 'JetBrains Mono',monospace;line-height:1.85;color:rgba(255,255,255,.75)">
+<div><span style="color:#34D399">✓</span> Connected &#183; seat:jane &#183; Central 1,204 docs</div>
+<div><span style="color:#34D399">✓</span> MCP hosted &#183; Web UI :8000</div>
+</div>
+</div>
+</div>
+</div>
+</div>
+</div>
+
+<div class="dv-opt" id="1b">
+<div class="dv-olabel"><a class="dv-oid" href="#1b">1b</a>Signal Keep — geometric mark, soft node-mesh</div>
+<div class="dv-card" style="width:916px;background:#fff;padding:28px 28px 32px">
+<div style="font:400 12.5px/1.5 system-ui,sans-serif;color:rgba(0,0,0,.5);margin-bottom:22px">Simplified geometric keep with a glowing node nested at its heart — the vault as living memory, not just walls. Softer, more polished mesh scatter.</div>
+
+<div style="display:flex;gap:32px;margin-bottom:28px">
+<div style="flex:1">
+<div class="ctl-lbl">Mark &amp; lockup</div>
+<div style="background:#0B0F0E;border-radius:16px;padding:26px;display:flex;align-items:center;gap:18px">
+<div style="width:96px;height:96px;box-sizing:border-box;border:1px solid rgba(255,255,255,.08);border-radius:22px;background:#0B0F0E;position:relative;overflow:hidden;flex:none">
+<div style="position:absolute;left:17px;bottom:16px;width:62px;height:34px;background:#16201C;border:1px solid rgba(255,255,255,.07);border-radius:6px"></div>
+<sc-for list="{{ teethB }}" as="tooth" hint-placeholder-count="4">
+<div style="position:absolute;bottom:50px;left:{{ tooth.left }}px;width:10px;height:16px;border-radius:3px 3px 0 0;background:{{ tooth.color }}"></div>
+</sc-for>
+<div style="position:absolute;left:41px;bottom:16px;width:14px;height:18px;border-radius:7px 7px 0 0;background:#0B0F0E"></div>
+<div style="position:absolute;left:45px;bottom:54px;width:8px;height:8px;border-radius:50%;background:#34D399;box-shadow:0 0 10px 2px rgba(52,211,153,.65)"></div>
+</div>
+<div>
+<div style="display:flex;align-items:baseline;gap:8px">
+<div style="font:800 32px/1 Inter,sans-serif;letter-spacing:.5px;color:#F2F5F3">CITADEL</div>
+<div style="font:600 10px 'JetBrains Mono',monospace;letter-spacing:.5px;color:rgba(255,255,255,.55);background:rgba(255,255,255,.07);padding:3px 7px;border-radius:4px">ARCHIVE</div>
+</div>
+<div style="font:500 11px 'JetBrains Mono',monospace;letter-spacing:1.5px;text-transform:uppercase;color:rgba(255,255,255,.42);margin-top:6px">the organization vault</div>
+</div>
+</div>
+</div>
+<div style="flex:1">
+<div class="ctl-lbl">Favicon &amp; app icon</div>
+<div style="background:#fff;border-radius:16px;padding:26px 20px;display:flex;align-items:flex-end;gap:22px;height:96px;box-sizing:border-box">
+<div style="display:flex;flex-direction:column;align-items:center;gap:8px">
+<div style="width:64px;height:64px;position:relative;flex:none">
+<div style="width:96px;height:96px;box-sizing:border-box;border:1px solid rgba(255,255,255,.08);border-radius:22px;background:#0B0F0E;position:absolute;top:0;left:0;overflow:hidden;transform:scale(.667);transform-origin:top left">
+<div style="position:absolute;left:17px;bottom:16px;width:62px;height:34px;background:#16201C;border:1px solid rgba(255,255,255,.07);border-radius:6px"></div>
+<sc-for list="{{ teethB }}" as="tooth" hint-placeholder-count="4">
+<div style="position:absolute;bottom:50px;left:{{ tooth.left }}px;width:10px;height:16px;border-radius:3px 3px 0 0;background:{{ tooth.color }}"></div>
+</sc-for>
+<div style="position:absolute;left:41px;bottom:16px;width:14px;height:18px;border-radius:7px 7px 0 0;background:#0B0F0E"></div>
+<div style="position:absolute;left:45px;bottom:54px;width:8px;height:8px;border-radius:50%;background:#34D399;box-shadow:0 0 10px 2px rgba(52,211,153,.65)"></div>
+</div>
+</div>
+<div style="font:500 9.5px 'JetBrains Mono',monospace;color:rgba(0,0,0,.4)">64px</div>
+</div>
+<div style="display:flex;flex-direction:column;align-items:center;gap:8px">
+<div style="width:32px;height:32px;position:relative;flex:none">
+<div style="width:96px;height:96px;box-sizing:border-box;border:1px solid rgba(255,255,255,.08);border-radius:22px;background:#0B0F0E;position:absolute;top:0;left:0;overflow:hidden;transform:scale(.333);transform-origin:top left">
+<div style="position:absolute;left:17px;bottom:16px;width:62px;height:34px;background:#16201C;border:1px solid rgba(255,255,255,.07);border-radius:6px"></div>
+<sc-for list="{{ teethB }}" as="tooth" hint-placeholder-count="4">
+<div style="position:absolute;bottom:50px;left:{{ tooth.left }}px;width:10px;height:16px;border-radius:3px 3px 0 0;background:{{ tooth.color }}"></div>
+</sc-for>
+<div style="position:absolute;left:41px;bottom:16px;width:14px;height:18px;border-radius:7px 7px 0 0;background:#0B0F0E"></div>
+<div style="position:absolute;left:45px;bottom:54px;width:8px;height:8px;border-radius:50%;background:#34D399;box-shadow:0 0 10px 2px rgba(52,211,153,.65)"></div>
+</div>
+</div>
+<div style="font:500 9.5px 'JetBrains Mono',monospace;color:rgba(0,0,0,.4)">32px</div>
+</div>
+<div style="display:flex;flex-direction:column;align-items:center;gap:8px">
+<div style="width:16px;height:16px;position:relative;flex:none">
+<div style="width:96px;height:96px;box-sizing:border-box;border:1px solid rgba(255,255,255,.08);border-radius:22px;background:#0B0F0E;position:absolute;top:0;left:0;overflow:hidden;transform:scale(.167);transform-origin:top left">
+<div style="position:absolute;left:17px;bottom:16px;width:62px;height:34px;background:#16201C;border:1px solid rgba(255,255,255,.07);border-radius:6px"></div>
+<sc-for list="{{ teethB }}" as="tooth" hint-placeholder-count="4">
+<div style="position:absolute;bottom:50px;left:{{ tooth.left }}px;width:10px;height:16px;border-radius:3px 3px 0 0;background:{{ tooth.color }}"></div>
+</sc-for>
+<div style="position:absolute;left:41px;bottom:16px;width:14px;height:18px;border-radius:7px 7px 0 0;background:#0B0F0E"></div>
+<div style="position:absolute;left:45px;bottom:54px;width:8px;height:8px;border-radius:50%;background:#34D399;box-shadow:0 0 10px 2px rgba(52,211,153,.65)"></div>
+</div>
+</div>
+<div style="font:500 9.5px 'JetBrains Mono',monospace;color:rgba(0,0,0,.4)">16px</div>
+</div>
+</div>
+</div>
+</div>
+
+<div style="margin-bottom:24px">
+<div class="ctl-lbl">GitHub README banner</div>
+<div style="position:relative;width:860px;height:220px;border-radius:14px;overflow:hidden;background:#0B0F0E;border:1px solid rgba(255,255,255,.08)">
+<svg viewBox="0 0 860 220" width="860" height="220" style="position:absolute;inset:0">
+<line x1="500" y1="45" x2="555" y2="85" stroke="rgba(255,255,255,.14)" strokeWidth="1"></line>
+<line x1="555" y1="85" x2="535" y2="145" stroke="rgba(255,255,255,.14)" strokeWidth="1"></line>
+<line x1="605" y1="60" x2="645" y2="125" stroke="rgba(255,255,255,.14)" strokeWidth="1"></line>
+<line x1="645" y1="125" x2="700" y2="48" stroke="rgba(255,255,255,.14)" strokeWidth="1"></line>
+<line x1="700" y1="48" x2="718" y2="108" stroke="rgba(255,255,255,.14)" strokeWidth="1"></line>
+<line x1="718" y1="108" x2="758" y2="165" stroke="rgba(255,255,255,.14)" strokeWidth="1"></line>
+<line x1="800" y1="72" x2="788" y2="148" stroke="rgba(255,255,255,.14)" strokeWidth="1"></line>
+<line x1="628" y1="178" x2="645" y2="125" stroke="rgba(255,255,255,.14)" strokeWidth="1"></line>
+<line x1="478" y1="118" x2="535" y2="145" stroke="rgba(255,255,255,.14)" strokeWidth="1"></line>
+<circle cx="500" cy="45" r="3" fill="#FA008C" opacity=".55"></circle>
+<circle cx="555" cy="85" r="4" fill="#22D3EE" opacity=".5"></circle>
+<circle cx="535" cy="145" r="2.5" fill="#34D399" opacity=".55"></circle>
+<circle cx="605" cy="60" r="3" fill="#FA008C" opacity=".5"></circle>
+<circle cx="645" cy="125" r="4" fill="#22D3EE" opacity=".45"></circle>
+<circle cx="700" cy="48" r="3" fill="#34D399" opacity=".5"></circle>
+<circle cx="718" cy="108" r="2.5" fill="#FA008C" opacity=".5"></circle>
+<circle cx="758" cy="165" r="4" fill="#22D3EE" opacity=".45"></circle>
+<circle cx="800" cy="72" r="3" fill="#34D399" opacity=".5"></circle>
+<circle cx="788" cy="148" r="2.5" fill="#FA008C" opacity=".45"></circle>
+<circle cx="628" cy="178" r="3" fill="#22D3EE" opacity=".45"></circle>
+<circle cx="478" cy="118" r="2.5" fill="#34D399" opacity=".5"></circle>
+</svg>
+<div style="position:absolute;inset:0;display:flex;align-items:center;padding:0 40px">
+<div style="display:flex;align-items:center;gap:20px">
+<div style="width:72px;height:72px;position:relative;flex:none">
+<div style="width:96px;height:96px;box-sizing:border-box;border:1px solid rgba(255,255,255,.08);border-radius:22px;background:#0B0F0E;position:absolute;top:0;left:0;overflow:hidden;transform:scale(.75);transform-origin:top left">
+<div style="position:absolute;left:17px;bottom:16px;width:62px;height:34px;background:#16201C;border:1px solid rgba(255,255,255,.07);border-radius:6px"></div>
+<sc-for list="{{ teethB }}" as="tooth" hint-placeholder-count="4">
+<div style="position:absolute;bottom:50px;left:{{ tooth.left }}px;width:10px;height:16px;border-radius:3px 3px 0 0;background:{{ tooth.color }}"></div>
+</sc-for>
+<div style="position:absolute;left:41px;bottom:16px;width:14px;height:18px;border-radius:7px 7px 0 0;background:#0B0F0E"></div>
+<div style="position:absolute;left:45px;bottom:54px;width:8px;height:8px;border-radius:50%;background:#34D399;box-shadow:0 0 10px 2px rgba(52,211,153,.65)"></div>
+</div>
+</div>
+<div>
+<div style="display:flex;align-items:baseline;gap:10px">
+<div style="font:800 44px/1 Inter,sans-serif;letter-spacing:.5px;color:#F2F5F3">CITADEL</div>
+<div style="font:600 11px 'JetBrains Mono',monospace;letter-spacing:.5px;color:rgba(255,255,255,.55);background:rgba(255,255,255,.07);padding:3px 8px;border-radius:4px">ARCHIVE</div>
+</div>
+<div style="font:500 13px 'JetBrains Mono',monospace;letter-spacing:2px;text-transform:uppercase;color:rgba(255,255,255,.42);margin-top:8px">the organization vault</div>
+</div>
+</div>
+</div>
+<div style="position:absolute;left:40px;right:40px;bottom:18px;display:flex;justify-content:space-between;font:500 10.5px 'JetBrains Mono',monospace;letter-spacing:1px;text-transform:uppercase;color:rgba(255,255,255,.32);border-top:1px solid rgba(255,255,255,.08);padding-top:10px">
+<span>Self-hosted organization vault</span>
+<span>CLI &#183; MCP &#183; HTTP API &#183; Web UI</span>
+</div>
+</div>
+</div>
+
+<div>
+<div class="ctl-lbl">Terminal banner</div>
+<div style="width:860px;border-radius:12px;overflow:hidden;border:1px solid rgba(0,0,0,.08);box-shadow:0 16px 40px -20px rgba(0,0,0,.35)">
+<div style="height:34px;background:#1a2420;display:flex;align-items:center;gap:8px;padding:0 14px">
+<div style="display:flex;gap:6px">
+<div style="width:10px;height:10px;border-radius:50%;background:#FA140A"></div>
+<div style="width:10px;height:10px;border-radius:50%;background:#FBBF24"></div>
+<div style="width:10px;height:10px;border-radius:50%;background:#34D399"></div>
+</div>
+<div style="flex:1;text-align:center;font:500 11px 'JetBrains Mono',monospace;color:rgba(255,255,255,.35)">zsh — citadel</div>
+</div>
+<div style="background:#0B0F0E;padding:26px 30px 30px">
+<div style="font:400 13px 'JetBrains Mono',monospace;color:rgba(255,255,255,.4);margin-bottom:20px">$ <span style="color:#F2F5F3">citadel status</span></div>
+<div style="display:flex;align-items:center;gap:16px;margin-bottom:18px">
+<div style="width:56px;height:56px;position:relative;flex:none">
+<div style="width:96px;height:96px;box-sizing:border-box;border:1px solid rgba(255,255,255,.08);border-radius:22px;background:#0B0F0E;position:absolute;top:0;left:0;overflow:hidden;transform:scale(.5833);transform-origin:top left">
+<div style="position:absolute;left:17px;bottom:16px;width:62px;height:34px;background:#16201C;border:1px solid rgba(255,255,255,.07);border-radius:6px"></div>
+<sc-for list="{{ teethB }}" as="tooth" hint-placeholder-count="4">
+<div style="position:absolute;bottom:50px;left:{{ tooth.left }}px;width:10px;height:16px;border-radius:3px 3px 0 0;background:{{ tooth.color }}"></div>
+</sc-for>
+<div style="position:absolute;left:41px;bottom:16px;width:14px;height:18px;border-radius:7px 7px 0 0;background:#0B0F0E"></div>
+<div style="position:absolute;left:45px;bottom:54px;width:8px;height:8px;border-radius:50%;background:#34D399;box-shadow:0 0 10px 2px rgba(52,211,153,.65)"></div>
+</div>
+</div>
+<div>
+<div style="font:800 24px/1 Inter,sans-serif;letter-spacing:.5px;color:#F2F5F3">CITADEL</div>
+<div style="font:500 10.5px 'JetBrains Mono',monospace;letter-spacing:1.5px;text-transform:uppercase;color:rgba(255,255,255,.4);margin-top:5px">the organization vault</div>
+</div>
+</div>
+<div style="font:400 12.5px 'JetBrains Mono',monospace;line-height:1.85;color:rgba(255,255,255,.75)">
+<div><span style="color:#34D399">✓</span> Connected &#183; seat:jane &#183; Central 1,204 docs</div>
+<div><span style="color:#34D399">✓</span> MCP hosted &#183; Web UI :8000</div>
+</div>
+</div>
+</div>
+</div>
+</div>
+</div>
+
+</div>
+<p class="dv-next">Try next: "combine <a class="dv-oid" href="#1b">1b</a>'s glowing node onto <a class="dv-oid" href="#1a">1a</a>'s pixel mark" &#183; "make the README banner full-bleed / wider" &#183; "show the light-mode variant"</p>
+</section>
+</x-dc>
+<script type="text/x-dc" data-dc-script>
+class Component extends DCLogic {
+  renderVals() {
+    const flagsA = [
+      1,0,1,0,1,0,1,
+      1,1,1,1,1,1,1,
+      1,1,0,1,0,1,1,
+      1,1,0,1,0,1,1,
+      1,1,1,1,1,1,1,
+      1,1,0,0,0,1,1,
+      1,1,0,0,0,1,1
+    ];
+    const colsA = ['#FA008C','#D6239C','#B246AD','#8E6ABD','#6A8DCD','#46B0DE','#22D3EE'];
+    const pixelGridA = flagsA.map((f, i) => ({ color: f ? colsA[i % 7] : 'transparent' }));
+    const teethB = [
+      { color: '#FA008C', left: 20 },
+      { color: '#B246AD', left: 36 },
+      { color: '#6A8DCD', left: 52 },
+      { color: '#22D3EE', left: 68 }
+    ];
+    return { pixelGridA, teethB };
+  }
+}
+</script>
+</body>
+</html>

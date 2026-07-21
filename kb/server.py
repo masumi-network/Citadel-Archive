@@ -422,21 +422,32 @@ LOGIN_HTML = """<!doctype html>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Citadel</title>
-    <link rel="stylesheet" href="/static/styles.css" />
+    <link rel="icon" href="/static/favicon.svg" type="image/svg+xml" />
+    <link rel="stylesheet" href="/static/styles.css?v=pixel-bastion-4" />
   </head>
   <body>
     <main class="login-shell">
       <section class="login-panel">
-        <div class="brand compact">
-          <div class="brand-mark" aria-hidden="true">CA</div>
-          <div>
-            <h1>Citadel</h1>
-            <p>Seat access</p>
+        <div class="login-brand">
+          <img
+            class="brand-pixel-img brand-pixel-img--hero"
+            src="/static/pixel-bastion.svg?v=pixel-bastion-4"
+            width="72"
+            height="72"
+            alt=""
+            aria-hidden="true"
+          />
+          <div class="login-brand-text">
+            <div class="sidebar-brand-text">
+              <div class="brand-wordmark">CITADEL</div>
+              <div class="brand-chip">ARCHIVE</div>
+            </div>
+            <p class="login-tagline">the organization vault</p>
           </div>
         </div>
         <form id="loginForm" class="form">
           <div class="field">
-            <label for="adminKey">Seat token or access key</label>
+            <label for="adminKey">Seat token</label>
             <input
               id="adminKey"
               name="accessKey"
@@ -448,8 +459,8 @@ LOGIN_HTML = """<!doctype html>
             />
           </div>
           <p class="form-hint">
-            Members: paste the seat token from your admin (or
-            <code>citadel seat token</code>). Operators: env admin key still works.
+            Paste the seat token from your admin (or
+            <code>citadel seat token</code>). Operators can still use the env admin key.
           </p>
           <p id="loginError" class="form-error" role="alert"></p>
           <button id="loginSubmit" class="primary-button" type="submit">Open workspace</button>

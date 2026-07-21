@@ -8,6 +8,16 @@ All notable changes to `citadel-archive` are documented here. Format follows
 
 ### Added
 
+- **Pixel Bastion brand kit.** Canonical 7×7 mark (`kb/banner.py`) across CLI
+  (TTY cascade + idle blink), GitHub README banner (`docs/brand/readme-banner.svg`),
+  favicon (`kb/static/favicon.svg`), login/sidebar lockup
+  (`kb/static/pixel-bastion.svg` + CSP-safe `.brand-pixel--cN` grid), and self-hosted
+  Inter / JetBrains Mono. Dashboard chrome restyled sidebar-first to match the
+  Interface design canvas (14px cards, seat footer).
+- **Overview / Activity analytics panels.** Volume, ops/type, and outcome charts
+  on the Overview and Vault Activity pages (SVG bars; horizontal widths are
+  CSP-safe — no inline `style=`). Knowledge Mesh `#graphCanvas` unchanged.
+
 - **Shared Session Traces v1 (ADR-0011).** Explicit in-session share via MCP
   `citadel_share_session` and `POST /api/share-session`: **Compact Session
   Context** (client distill + redaction, server LLM dead-end refinement only when

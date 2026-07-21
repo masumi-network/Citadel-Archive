@@ -16,7 +16,7 @@ pipx install citadel-archive    # the zero-dep `citadel` base client
 citadel onboard                 # or just run `citadel` on a fresh terminal — it auto-onboards
 ```
 
-On a terminal you'll see the Citadel castle banner (cyan walls, bold wordmark);
+On a terminal you'll see the Pixel Bastion mark (magenta→cyan, bold wordmark);
 `--json`/piped output is always plain. A bare `citadel` on a fresh interactive
 terminal auto-enters this wizard (then shows the home screen); skip with
 `--no-onboard` or `CITADEL_NO_ONBOARD=1`. It walks these steps, merging into

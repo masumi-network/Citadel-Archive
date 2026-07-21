@@ -55,12 +55,16 @@ citadel onboard
 ```
 
 ```
-  ▙ ▟ ▙ ▟ ▙ ▟ ▙ ▟
-  ███████████████   CITADEL
-  ██ ▟▀▙   ▟▀▙ ██   the organization vault     ← citadel onboard / status
-  ██ █ █   █ █ ██
-  ███████████████
+  ■ · ■ · ■ · ■
+  ■■■■■■■         CITADEL
+  ■■·■·■■         the organization vault     ← citadel onboard / status
+  ■■·■·■■
+  ■■■■■■■
+  ■■···■■
+  ■■···■■
 ```
+
+Pixel Bastion mark (magenta→cyan). See [`brand.md`](../../brand.md).
 
 This runs all of the steps below for you — pastes your token into your shell rc
 (once, masked), installs the bundled git-push + SessionEnd/SessionStart hooks
