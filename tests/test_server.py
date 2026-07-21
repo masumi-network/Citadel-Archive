@@ -4329,6 +4329,64 @@ class PartialSessionTraceWriteCitadel(FakeCitadel):
         return IngestResult(True, "accepted", dataset, tuple(kwargs.get("tags") or ()))
 
 
+class FlakySessionTraceWriteCitadel(FakeCitadel):
+    """Rejects session-traces on first attempt, accepts on retry."""
+
+    def __init__(self) -> None:
+        self.ingest_calls: list[dict[str, Any]] = []
+        self.session_traces_attempts = 0
+        self.cognee = type("_FakeCognee", (), {})()
+        self.cognee.scheduled: list[list[str]] = []
+        self.cognee.schedule_cognify = lambda datasets: self.cognee.scheduled.append(list(datasets))
+
+    async def ingest(self, data: str, **kwargs: Any) -> IngestResult:
+        self.ingest_calls.append({"data": data, **kwargs})
+        dataset = kwargs.get("dataset") or "notes"
+        if dataset == SESSION_TRACES_DATASET:
+            self.session_traces_attempts += 1
+            if self.session_traces_attempts == 1:
+                return IngestResult(
+                    False,
+                    "rejected",
+                    dataset,
+                    tuple(kwargs.get("tags") or ()),
+                )
+        return IngestResult(True, "accepted", dataset, tuple(kwargs.get("tags") or ()))
+
+
+def test_share_session_retries_session_traces_then_succeeds(tmp_path: Any) -> None:
+    app.state.access_store = AccessStore(tmp_path / "access.json")
+    admin = authed_client()
+    token = admin.post("/api/access/seats", json={"name": "Alice", "slug": "alice"}).json()["token"]
+    citadel = FlakySessionTraceWriteCitadel()
+    app.state.citadel = citadel
+    client = TestClient(app, base_url="https://testserver")
+    root = str(tmp_path)
+    register_seat_capture_roots(admin, "alice", [root])
+    data = (
+        "# Shared Session Trace\nAuthor-Seat: alice\nCreated-At: 2026-07-20T12:00:00Z\n\n"
+        "Task: flaky session-traces write\nApproach: retry once before success"
+    )
+
+    response = client.post(
+        "/api/share-session",
+        json={"data": data, "cwd": root, "capture_roots": [root], "has_tool_errors": False},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ok"] is True
+    assert payload["cognify"] == "deferred"
+    assert [call["dataset"] for call in citadel.ingest_calls] == [
+        "seat:alice",
+        SESSION_TRACES_DATASET,
+        SESSION_TRACES_DATASET,
+    ]
+    assert citadel.session_traces_attempts == 2
+    assert citadel.cognee.scheduled == [["seat:alice", SESSION_TRACES_DATASET]]
+
+
 def test_share_session_fails_when_session_traces_write_rejected(tmp_path: Any) -> None:
     app.state.access_store = AccessStore(tmp_path / "access.json")
     admin = authed_client()
@@ -4351,12 +4409,19 @@ def test_share_session_fails_when_session_traces_write_rejected(tmp_path: Any) -
     assert response.status_code == 500
     detail = response.json()["detail"]
     assert detail["error_type"] == "partial_write_failure"
+    assert detail["retried"] is True
     assert SESSION_TRACES_DATASET in detail["failed_targets"]
+    assert [call["dataset"] for call in app.state.citadel.ingest_calls] == [
+        "seat:alice",
+        SESSION_TRACES_DATASET,
+        SESSION_TRACES_DATASET,
+    ]
     assert app.state.citadel.cognee.scheduled == []
     events = app.state.access_store.snapshot()["audit_events"]
     failed = [event for event in events if event["action"] == "share_session" and not event["success"]]
     assert failed
     assert failed[-1]["detail"]["error_type"] == "partial_write_failure"
+    assert failed[-1]["detail"]["retried"] is True
 
 
 def test_search_marks_session_trace_hits_reference_only(tmp_path: Any) -> None:

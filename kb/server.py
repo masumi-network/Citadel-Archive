@@ -1436,6 +1436,43 @@ async def execute_learning_writes(
     return primary, outcomes
 
 
+async def retry_failed_learning_writes(
+    learning: LearningProcess,
+    *,
+    data: str,
+    targets: list[WriteTarget],
+    outcomes: list[LearningOutcome],
+    tags: list[str],
+    session_id: str | None,
+    operation: str,
+    detect_conflicts: bool = True,
+    run_improve: bool = False,
+    defer_cognify: bool = False,
+) -> list[LearningOutcome]:
+    """Retry once for targets whose initial write was not accepted."""
+    updated = list(outcomes)
+    for index, (target, outcome) in enumerate(zip(targets, outcomes, strict=True)):
+        if outcome.ingest.accepted:
+            continue
+        logger.warning(
+            "%s write to %s was not accepted; retrying once",
+            operation,
+            target.dataset,
+        )
+        updated[index] = await learning.learn(
+            data,
+            dataset=target.dataset,
+            tags=tags,
+            session_id=session_id,
+            operation=operation,
+            detect_conflicts=detect_conflicts and target.tier == "full",
+            run_improve=run_improve and target.tier == "full",
+            tier=target.tier,
+            defer_cognify=defer_cognify,
+        )
+    return updated
+
+
 def assert_requested_session_allowed(identity: AccessIdentity, requested: str | None) -> None:
     # A session id is private context, and session-scoped recall ignores the
     # dataset allowlist (Cognee recalls by session without a dataset constraint).
@@ -4037,11 +4074,29 @@ async def share_session(body: ShareSessionBody, request: Request) -> Any:
         if not item.ingest.accepted
     ]
     if failed_targets:
+        all_outcomes = await retry_failed_learning_writes(
+            learning,
+            data=data,
+            targets=write_targets,
+            outcomes=all_outcomes,
+            tags=tags,
+            session_id=session_id,
+            operation="share_session",
+            detect_conflicts=False,
+            defer_cognify=True,
+        )
+        failed_targets = [
+            target.dataset
+            for target, item in zip(write_targets, all_outcomes, strict=True)
+            if not item.ingest.accepted
+        ]
+    if failed_targets:
         failure_detail = {
             "operation": "share_session",
             "error_type": "partial_write_failure",
             "failed_targets": failed_targets,
             "write_targets": [target.dataset for target in write_targets],
+            "retried": True,
         }
         record_mcp_audit(
             request,
