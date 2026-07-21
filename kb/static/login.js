@@ -17,7 +17,7 @@ form.addEventListener("submit", async (event) => {
     });
     if (!response.ok) {
       const body = await response.json().catch(() => ({}));
-      throw new Error(body.detail || "Admin key was rejected.");
+      throw new Error(body.detail || "Seat token or access key was rejected.");
     }
     window.location.assign("/");
   } catch (err) {

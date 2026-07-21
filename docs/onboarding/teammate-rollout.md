@@ -3,11 +3,14 @@
 This is the canonical one-pager for M6.5. One admin step, then each teammate
 runs **four setup steps** and is done — Claude Code sessions and git pushes
 auto-save to their private Citadel node, and `citadel_search` works in any MCP
-client. No dashboard login needed after setup.
+client. Dashboard login is **optional** after setup (paste the same seat token
+on `/login` to open your Seat home).
 
 > **Deep-dive:** [`citadel-autosync.md`](citadel-autosync.md) (what syncs),
 > [`citadel-autosync-ides.md`](citadel-autosync-ides.md) (per-IDE notes).
 > This page is the short version.
+> **Portal:** [`../plans/seat-scoped-portal.md`](../plans/seat-scoped-portal.md)
+> (seat-scoped dashboard — token login → My Node).
 
 ---
 
@@ -211,6 +214,20 @@ another seat's Node content.
 You should get a short note back sourced from your node / Central. If you get an
 auth error, your token isn't in the environment of the client that's running
 (restart the client so it picks up the new env var).
+
+---
+
+## Optional: open the portal with your seat token
+
+MCP + hooks remain the primary write path. To **see** your Node in the browser:
+
+1. Open the Node URL `/login` (same host as `CITADEL_NODE_URL`).
+2. Paste your `ctdl_…` seat token (same secret as `CITADEL_MCP_ACCESS_TOKEN`).
+3. You land on **My Node** (Seat home): doc counts, empty-state checklist, links
+   to Search / Graph / Activity. Session chrome shows your seat slug.
+
+Central stays searchable even when your Node is empty. Token rotation stays
+admin-only for now (`citadel seat token <slug>` or Access → revoke).
 
 ---
 

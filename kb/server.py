@@ -421,7 +421,7 @@ LOGIN_HTML = """<!doctype html>
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Citadel Admin</title>
+    <title>Citadel</title>
     <link rel="stylesheet" href="/static/styles.css" />
   </head>
   <body>
@@ -430,13 +430,13 @@ LOGIN_HTML = """<!doctype html>
         <div class="brand compact">
           <div class="brand-mark" aria-hidden="true">CA</div>
           <div>
-            <h1>Citadel Archive</h1>
-            <p>Workspace access</p>
+            <h1>Citadel</h1>
+            <p>Seat access</p>
           </div>
         </div>
         <form id="loginForm" class="form">
           <div class="field">
-            <label for="adminKey">Access key</label>
+            <label for="adminKey">Seat token or access key</label>
             <input
               id="adminKey"
               name="accessKey"
@@ -444,8 +444,13 @@ LOGIN_HTML = """<!doctype html>
               autocomplete="current-password"
               required
               autofocus
+              placeholder="ctdl_…"
             />
           </div>
+          <p class="form-hint">
+            Members: paste the seat token from your admin (or
+            <code>citadel seat token</code>). Operators: env admin key still works.
+          </p>
           <p id="loginError" class="form-error" role="alert"></p>
           <button id="loginSubmit" class="primary-button" type="submit">Open workspace</button>
         </form>
@@ -2097,6 +2102,146 @@ async def current_session(request: Request) -> dict[str, Any]:
         detail={"role": identity.role},
     )
     return {"ok": True, **role_payload(identity.role, identity)}
+
+
+@app.get("/api/me/summary")
+async def me_summary(request: Request) -> dict[str, Any]:
+    """Seat-home aggregates for the authenticated caller (Phase 1 portal).
+
+    Reflects only the caller's seat Node — never another seat's content.
+    Non-seat callers get ``seat_slug: null`` and empty Node stats.
+    """
+    identity = require_access(request, "reader", "kb:read")
+    config = get_citadel().config
+    scope = resolved_memory_scope(identity, config)
+    node = seat_node_dataset(identity)
+    seat_slug = identity.seat_slug
+
+    pending_count = 0
+    if seat_slug:
+        pending_count = len(
+            get_access_store().list_promotion_pending(
+                seat_slug=seat_slug,
+                status="pending",
+            )
+        )
+
+    document_count = 0
+    recent_activity: list[dict[str, Any]] = []
+    last_ingest_at: str | None = None
+    if node:
+        try:
+            snapshot = await get_mesh().snapshot(config)
+            scoped = scope_mesh_snapshot(snapshot, identity)
+            for mesh_node in scoped.get("nodes") or []:
+                if not isinstance(mesh_node, dict):
+                    continue
+                if mesh_node.get("type") != "document":
+                    continue
+                meta = mesh_node.get("metadata") if isinstance(mesh_node.get("metadata"), dict) else {}
+                if meta.get("dataset") == node:
+                    document_count += 1
+        except Exception:
+            logger.exception("me/summary mesh document count failed")
+
+        # Scope the timeline page to this seat Node *before* the limit slice.
+        # Filtering only after a mixed visible page (Central + shared traces)
+        # can drop all Node activity when org traffic is busy.
+        def _node_visible(dataset: str | None) -> bool:
+            return dataset == node
+
+        try:
+            timeline = await get_mesh().timeline(limit=12, visible=_node_visible)
+            for event in timeline.get("events") or []:
+                if not isinstance(event, dict):
+                    continue
+                details = event.get("details") if isinstance(event.get("details"), dict) else {}
+                recent_activity.append(
+                    {
+                        "id": event.get("id"),
+                        "type": event.get("type"),
+                        "message": event.get("message"),
+                        "created_at": event.get("created_at") or event.get("at"),
+                        "dataset": details.get("dataset"),
+                    }
+                )
+                if last_ingest_at is None and event.get("type") == "ingest":
+                    last_ingest_at = event.get("created_at") or event.get("at")
+        except Exception:
+            logger.exception("me/summary timeline failed")
+
+        # Mesh is ephemeral across process restarts. Prefer live mesh document
+        # nodes for the Documents count; use durable AccessStore audit only for
+        # presence, last_ingest_at, and recent activity so Seat home does not
+        # contradict itself after a redeploy.
+        audit_ingests: list[dict[str, Any]] = []
+        for audit_event in reversed(get_access_store().snapshot().get("audit_events") or []):
+            if not isinstance(audit_event, dict):
+                continue
+            if audit_event.get("dataset") != node or not audit_event.get("success"):
+                continue
+            action = str(audit_event.get("action") or "")
+            if action != "ingest" and not action.endswith("citadel_ingest"):
+                continue
+            detail = audit_event.get("detail") if isinstance(audit_event.get("detail"), dict) else {}
+            if detail.get("accepted") is False:
+                continue
+            audit_ingests.append(audit_event)
+
+        if last_ingest_at is None and audit_ingests:
+            last_ingest_at = audit_ingests[0].get("created_at")
+
+        # Only synthesize activity from audit when the live mesh page is empty
+        # (e.g. post-restart). Never prepend audit rows over current mesh traffic.
+        if not recent_activity and audit_ingests:
+            recent_activity = [
+                {
+                    "id": audit_event.get("id"),
+                    "type": "ingest",
+                    "message": "Node ingest",
+                    "created_at": audit_event.get("created_at"),
+                    "dataset": node,
+                }
+                for audit_event in audit_ingests[:8]
+            ]
+
+    # Capture proof is documents or a durable ingest timestamp — not search
+    # timeline rows, which can appear on an empty Node.
+    capture_done = document_count > 0 or last_ingest_at is not None
+    empty = bool(seat_slug) and not capture_done
+    return {
+        "ok": True,
+        "seat_slug": seat_slug,
+        "node_label": scope.get("node_label"),
+        "node_dataset": node,
+        "search_datasets": scope.get("search_datasets") or [scope.get("default_dataset")],
+        "document_count": document_count,
+        "pending_promotions": pending_count,
+        "last_ingest_at": last_ingest_at,
+        "recent_activity": recent_activity[:8],
+        "empty": empty,
+        "checklist": [
+            {
+                "id": "capture",
+                "label": "Run capture or MCP ingest into your Node",
+                "done": capture_done,
+            },
+            {
+                "id": "search",
+                "label": "Search — Central is available even while your Node is empty",
+                "done": False,
+            },
+            {
+                "id": "promote",
+                # Phase 1: approve/reject is admin-only (`sources:sync`); members
+                # see pending count as a status signal, not a self-serve action.
+                "label": "Promotions to Central are clear (admin approves in Phase 1)",
+                "done": pending_count == 0 and capture_done,
+            },
+        ]
+        if seat_slug
+        else [],
+    }
 
 
 @app.get("/api/access")
@@ -4024,10 +4169,30 @@ async def ingest(body: IngestBody, request: Request) -> Any:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
     result = outcome.ingest
+    # Durable HTTP ingest audit (MCP path already records via record_mcp_audit).
+    # Only accepted writes count as capture proof for Seat home.
+    if result.accepted and not mcp_tool_name(request):
+        get_access_store().record_event(
+            action="ingest",
+            actor=actor,
+            success=True,
+            dataset=outcome.dataset,
+            detail={
+                "operation": "ingest",
+                "accepted": True,
+                "reason": result.reason,
+                "data_bytes": len(body.data.encode("utf-8")),
+                "tag_count": len(body.tags),
+                "write_targets": [target.dataset for target in write_targets],
+                "scope_override": scope_override_active(
+                    actor, [target.dataset for target in write_targets]
+                ),
+            },
+        )
     record_mcp_audit(
         request,
         actor=actor,
-        success=True,
+        success=bool(result.accepted),
         dataset=outcome.dataset,
         detail={
             "operation": "ingest",
