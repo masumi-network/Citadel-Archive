@@ -90,16 +90,54 @@ def _request(
     return json.loads(body) if body else {}
 
 
+def resolve_seat_slug(base_url: str, token: str) -> str | None:
+    """Return the seat slug for a seat-bound token, or None for org/admin tokens."""
+    session = _request("GET", "/api/session", base_url=base_url, token=token)
+    slug = session.get("seat_slug")
+    return str(slug) if slug else None
+
+
 def resolve_seat_dataset(base_url: str, token: str, explicit: str | None) -> str:
     if explicit:
         return explicit
-    session = _request("GET", "/api/session", base_url=base_url, token=token)
-    slug = session.get("seat_slug")
+    slug = resolve_seat_slug(base_url, token)
     if not slug:
         raise PromotionClientError(
             "could not resolve seat dataset — pass --dataset seat:<slug>"
         )
     return f"seat:{slug}"
+
+
+def get_seat_capture_roots(
+    slug: str,
+    *,
+    base_url: str,
+    token: str | None = None,
+) -> dict[str, Any]:
+    token = token or capture_token()
+    return _request(
+        "GET",
+        f"/api/access/seats/{slug}/capture-roots",
+        base_url=base_url,
+        token=token,
+    )
+
+
+def update_seat_capture_roots(
+    slug: str,
+    roots: list[str],
+    *,
+    base_url: str,
+    token: str | None = None,
+) -> dict[str, Any]:
+    token = token or capture_token()
+    return _request(
+        "PUT",
+        f"/api/access/seats/{slug}/capture-roots",
+        base_url=base_url,
+        token=token,
+        payload={"roots": roots},
+    )
 
 
 def list_pending(

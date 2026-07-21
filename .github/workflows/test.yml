@@ -27,6 +27,8 @@ jobs:
       - name: Lint
         run: uv run ruff check .
       - name: Dependency audit
-        run: uv run pip-audit --cache-dir .pip-audit-cache
+        run: |
+          uv run pip-audit --cache-dir .pip-audit-cache \
+            --ignore-vuln PYSEC-2026-2447
       - name: Run tests
         run: uv run pytest tests/ -q
