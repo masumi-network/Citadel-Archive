@@ -181,8 +181,23 @@ def _wire_codex(url: str) -> ToolResult:
     return ToolResult("codex", "wrote", str(path))
 
 
-def _wire_claude(url: str) -> ToolResult:
+def _ensure_claude_project_mcp(node_base: str) -> None:
+    """Merge hosted HTTP citadel into the repo's `.mcp.json` (Claude project scope)."""
+    from kb.onboard import git_root_or_cwd, merge_mcp_config
+
+    try:
+        repo = git_root_or_cwd()
+    except (OSError, subprocess.SubprocessError, AttributeError, ValueError):
+        repo = Path.cwd()
+    try:
+        merge_mcp_config(repo / ".mcp.json", node_base)
+    except (ValueError, OSError):
+        pass
+
+
+def _wire_claude(url: str, *, node_base: str) -> ToolResult:
     """Prefer `claude mcp add --scope user`; else merge ~/.claude.json (#36)."""
+    block = {"type": "http", "url": url, "headers": {"Authorization": f"Bearer ${{{TOKEN_ENV}}}"}}
     if _which("claude"):
         try:
             subprocess.run(
@@ -195,15 +210,20 @@ def _wire_claude(url: str) -> ToolResult:
                 capture_output=True,
                 timeout=30,
             )
-            return ToolResult("claude", "wrote", "via `claude mcp add --scope user`")
+            _ensure_claude_project_mcp(node_base)
+            return ToolResult("claude", "wrote", "via `claude mcp add --scope user` + project .mcp.json")
         except (OSError, subprocess.SubprocessError):
             pass  # fall back to editing ~/.claude.json directly
-    return _merge_json_mcp(
+    result = _merge_json_mcp(
         Path("~/.claude.json").expanduser(),
         "claude",
         "mcpServers",
-        {"type": "http", "url": url, "headers": {"Authorization": f"Bearer ${{{TOKEN_ENV}}}"}},
+        block,
     )
+    _ensure_claude_project_mcp(node_base)
+    if result.action == "wrote":
+        result = ToolResult("claude", result.action, f"{result.detail} + project .mcp.json")
+    return result
 
 
 def apply(name: str, *, node_url: str = DEFAULT_NODE_URL) -> ToolResult:
@@ -240,7 +260,7 @@ def apply(name: str, *, node_url: str = DEFAULT_NODE_URL) -> ToolResult:
             {"serverUrl": url, "headers": {"Authorization": "Bearer ${env:%s}" % TOKEN_ENV}},
         )
     if name == "claude":
-        return _wire_claude(url)
+        return _wire_claude(url, node_base=node_url.rstrip("/"))
     if name == "cline":
         # `type` MUST be the camelCase "streamableHttp" or Cline falls back to
         # legacy SSE and 405s. No header env-interpolation → literal token.

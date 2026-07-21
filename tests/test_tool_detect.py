@@ -89,6 +89,10 @@ def test_snippet_shapes() -> None:
 def test_claude_writes_user_scope_via_cli(tmp_path, monkeypatch) -> None:
     # #36: with the `claude` CLI present, wire user scope via `claude mcp add`.
     monkeypatch.setenv("HOME", str(tmp_path))
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / ".git").mkdir()
+    monkeypatch.chdir(repo)
     calls: list[list[str]] = []
 
     def fake_run(cmd, **kwargs):
@@ -102,11 +106,17 @@ def test_claude_writes_user_scope_via_cli(tmp_path, monkeypatch) -> None:
     assert result.action == "wrote"
     assert calls and calls[0][:3] == ["claude", "mcp", "add"]
     assert "--scope" in calls[0] and "user" in calls[0]
+    assert (repo / ".mcp.json").exists()
+    assert json.loads((repo / ".mcp.json").read_text())["mcpServers"]["citadel"]["type"] == "http"
 
 
 def test_claude_merges_claude_json_when_cli_absent(tmp_path, monkeypatch) -> None:
     # #36: without the CLI, merge ~/.claude.json (env-ref header, not a plaintext token).
     monkeypatch.setenv("HOME", str(tmp_path))
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / ".git").mkdir()
+    monkeypatch.chdir(repo)
     monkeypatch.setattr(td, "_which", lambda name: False)
 
     result = td.apply("claude", node_url=NODE)
@@ -114,6 +124,7 @@ def test_claude_merges_claude_json_when_cli_absent(tmp_path, monkeypatch) -> Non
     entry = json.loads((tmp_path / ".claude.json").read_text())["mcpServers"]["citadel"]
     assert entry["url"] == "https://node.example/mcp/"
     assert entry["headers"]["Authorization"] == "Bearer ${CITADEL_MCP_ACCESS_TOKEN}"
+    assert (repo / ".mcp.json").exists()
     assert td.apply("claude", node_url=NODE).action == "unchanged"
 
 
