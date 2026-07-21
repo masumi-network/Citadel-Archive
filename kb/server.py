@@ -345,6 +345,13 @@ async def lifespan(app: FastAPI) -> Any:
             await mesh.rehydrate(get_citadel().config)
         except Exception:
             logger.exception("Mesh rehydrate failed; starting with empty counters")
+        try:
+            await ensure_session_traces_dataset(get_citadel())
+        except Exception:
+            logger.exception(
+                "Failed to bootstrap %s dataset; seat search/share may fail until provisioned",
+                SESSION_TRACES_DATASET,
+            )
         evolve_task = _start_evolve_scheduler()
         try:
             yield
@@ -1707,6 +1714,52 @@ def enforce_ingest_size(text: str) -> None:
         raise HTTPException(
             status_code=413,
             detail=f"Payload is {byte_count} bytes; limit is {max_bytes} bytes.",
+        )
+
+
+SESSION_TRACES_BOOTSTRAP_MARKER = (
+    "Citadel bootstrap marker for the shared session-traces dataset (ADR-0011)."
+)
+
+
+async def ensure_session_traces_dataset(citadel: Citadel) -> None:
+    """Ensure the Cognee dataset exists before seat search/share include it.
+
+    PR #93 adds session-traces to default seat search and share dual-write, but
+    existing production nodes may never have received a write to that dataset name.
+    A missing dataset makes Cognee search fail with DatasetNotFoundError and
+    share_session partial_write_failure on the shared tier.
+    """
+    try:
+        from cognee import datasets as cognee_datasets
+
+        existing = await cognee_datasets.list_datasets()
+        names = {
+            str(getattr(item, "name", "") or "").strip()
+            for item in existing
+        }
+        if SESSION_TRACES_DATASET in names:
+            return
+    except Exception:
+        logger.debug(
+            "Could not list Cognee datasets before %s bootstrap; ingesting marker",
+            SESSION_TRACES_DATASET,
+            exc_info=True,
+        )
+
+    result = await citadel.ingest(
+        SESSION_TRACES_BOOTSTRAP_MARKER,
+        dataset=SESSION_TRACES_DATASET,
+        tags=["citadel-bootstrap", "shared-session-traces"],
+        defer_cognify=True,
+    )
+    if result.accepted:
+        logger.info("Bootstrapped Cognee dataset %s", SESSION_TRACES_DATASET)
+    else:
+        logger.warning(
+            "Bootstrap ingest for %s was not accepted: %s",
+            SESSION_TRACES_DATASET,
+            result.reason,
         )
 
 
