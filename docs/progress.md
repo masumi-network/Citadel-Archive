@@ -1,6 +1,30 @@
 # Citadel Progress
 
-Last updated: 2026-07-20.
+Last updated: 2026-07-21.
+
+## 2026-07-21 — Seat-scoped portal Phase 1 — SHIPPED (PR #95)
+
+**PR #95** (`cursor/seat-scoped-portal-phase1`) ships Phase 1 of the
+[seat-scoped portal plan](plans/seat-scoped-portal.md): members paste a seat
+`ctdl_…` token on `/login` and land on **My Node** (Seat home).
+
+**Shipped:**
+
+- Session chrome surfaces `seat_slug` + Node label (not role-only).
+- Seat home via `GET /api/me/summary` — doc counts, recent Node activity, empty
+  checklist, links to search / graph / activity.
+- Member-first login copy; admin nav hidden for non-admin; My Node vs Central
+  search badges.
+- Optional portal path in [`onboarding/teammate-rollout.md`](onboarding/teammate-rollout.md).
+
+**Grill outcomes (locked, unchanged):** Option A token sessions; working
+hypothesis B+C (visibility/UX, not write-router); “linked” = all surfaces (Phase 1
+= chrome/home); analytics columns + audience **B** deferred to Phase 2;
+Promotion-only Central UI; always presence graph; empty Node until capture;
+admin-only token rotation in Phase 1.
+
+**Phase 2 remaining:** seat activity analytics table, Access inventory
+deep-links, graph “you” highlight / hub context panel, Vault Activity seat POV.
 
 ## 2026-07-20 — Shared Session Traces v1 + multi-agent policy onboard — SHIPPED (PR #93)
 
