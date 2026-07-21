@@ -13,7 +13,7 @@ from fastapi.testclient import TestClient
 
 import kb.server as server_module
 
-from kb.access import AccessStore, SESSION_TRACES_DATASET
+from kb.access import AccessIdentity, AccessStore, SESSION_TRACES_DATASET
 from kb.config import CitadelConfig
 from kb.conflicts import KnowledgeConflictStore
 from kb.knowledge_mesh import KnowledgeMesh
@@ -3262,6 +3262,97 @@ def test_me_summary_for_seat_reports_node_scope(tmp_path: Any) -> None:
     assert payload["empty"] is True
     assert payload["search_datasets"][0] == "seat:nora"
     assert any(item["id"] == "capture" for item in payload["checklist"])
+
+
+def test_me_summary_uses_audit_when_mesh_empty(tmp_path: Any) -> None:
+    # After a process restart the runtime mesh is empty; durable audit must still
+    # keep Seat home from claiming an empty Node when ingests are on record.
+    # Documents count stays mesh-backed (0 here); empty/checklist use audit presence.
+    app.state.access_store = AccessStore(tmp_path / "access.json")
+    app.state.mesh = MeshState()
+    admin = authed_client()
+    token = admin.post(
+        "/api/access/seats",
+        json={"name": "Nora", "slug": "nora"},
+    ).json()["token"]
+    app.state.access_store.record_event(
+        action="ingest",
+        actor=AccessIdentity(
+            role="writer",
+            actor_id="seat:nora",
+            actor_kind="user",
+            actor_name="Nora",
+            source="token",
+            seat_slug="nora",
+        ),
+        success=True,
+        dataset="seat:nora",
+        detail={"surface": "test"},
+    )
+    api_client = TestClient(app, base_url="https://testserver")
+
+    summary = api_client.get(
+        "/api/me/summary", headers={"Authorization": f"Bearer {token}"}
+    )
+
+    assert summary.status_code == 200
+    payload = summary.json()
+    assert payload["document_count"] == 0
+    assert payload["empty"] is False
+    assert payload["last_ingest_at"] is not None
+    assert payload["recent_activity"]
+    assert all(item["dataset"] == "seat:nora" for item in payload["recent_activity"])
+    assert any(item["id"] == "capture" and item["done"] for item in payload["checklist"])
+
+
+def test_me_summary_keeps_node_activity_when_central_is_busy(tmp_path: Any) -> None:
+    # Seat home must still surface Node timeline rows when Central/shared traffic
+    # fills a mixed visible page — filter to the seat Node before the limit slice.
+    app.state.access_store = AccessStore(tmp_path / "access.json")
+    app.state.mesh = MeshState()
+    admin = authed_client()
+    token = admin.post(
+        "/api/access/seats",
+        json={"name": "Nora", "slug": "nora"},
+    ).json()["token"]
+    config = server_module.get_citadel().config
+    mesh = server_module.get_mesh()
+
+    async def _populate() -> None:
+        await mesh.record_ingest(
+            config,
+            IngestResult(accepted=True, reason="stored", dataset="seat:nora", tags=()),
+            data="nora private note",
+            dataset="seat:nora",
+            tags=[],
+        )
+        for i in range(20):
+            await mesh.record_ingest(
+                config,
+                IngestResult(
+                    accepted=True,
+                    reason="stored",
+                    dataset="masumi-network",
+                    tags=(),
+                ),
+                data=f"central noise {i}",
+                dataset="masumi-network",
+                tags=[],
+            )
+
+    asyncio.run(_populate())
+    api_client = TestClient(app, base_url="https://testserver")
+
+    summary = api_client.get(
+        "/api/me/summary", headers={"Authorization": f"Bearer {token}"}
+    )
+
+    assert summary.status_code == 200
+    payload = summary.json()
+    assert payload["document_count"] >= 1
+    assert payload["recent_activity"], "expected Node activity despite busy Central"
+    assert all(item["dataset"] == "seat:nora" for item in payload["recent_activity"])
+    assert payload["last_ingest_at"] is not None
 
 
 def test_me_summary_non_seat_has_null_seat(tmp_path: Any) -> None:

@@ -2144,21 +2144,18 @@ async def me_summary(request: Request) -> dict[str, Any]:
         except Exception:
             logger.exception("me/summary mesh document count failed")
 
-        visible_cache: dict[str, bool] = {}
-
-        def _visible(dataset: str | None) -> bool:
-            if dataset is None:
-                return False
-            return _mesh_dataset_visible(identity, dataset, visible_cache)
+        # Scope the timeline page to this seat Node *before* the limit slice.
+        # Filtering only after a mixed visible page (Central + shared traces)
+        # can drop all Node activity when org traffic is busy.
+        def _node_visible(dataset: str | None) -> bool:
+            return dataset == node
 
         try:
-            timeline = await get_mesh().timeline(limit=12, visible=_visible)
+            timeline = await get_mesh().timeline(limit=12, visible=_node_visible)
             for event in timeline.get("events") or []:
                 if not isinstance(event, dict):
                     continue
                 details = event.get("details") if isinstance(event.get("details"), dict) else {}
-                if details.get("dataset") != node:
-                    continue
                 recent_activity.append(
                     {
                         "id": event.get("id"),
@@ -2173,18 +2170,45 @@ async def me_summary(request: Request) -> dict[str, Any]:
         except Exception:
             logger.exception("me/summary timeline failed")
 
-        if last_ingest_at is None:
-            for audit_event in reversed(get_access_store().snapshot().get("audit_events") or []):
-                if not isinstance(audit_event, dict):
-                    continue
-                if audit_event.get("dataset") != node or not audit_event.get("success"):
-                    continue
-                action = str(audit_event.get("action") or "")
-                if action == "ingest" or action.endswith("citadel_ingest"):
-                    last_ingest_at = audit_event.get("created_at")
-                    break
+        # Mesh is ephemeral across process restarts. Prefer live mesh document
+        # nodes for the Documents count; use durable AccessStore audit only for
+        # presence, last_ingest_at, and recent activity so Seat home does not
+        # contradict itself after a redeploy.
+        audit_ingests: list[dict[str, Any]] = []
+        for audit_event in reversed(get_access_store().snapshot().get("audit_events") or []):
+            if not isinstance(audit_event, dict):
+                continue
+            if audit_event.get("dataset") != node or not audit_event.get("success"):
+                continue
+            action = str(audit_event.get("action") or "")
+            if action != "ingest" and not action.endswith("citadel_ingest"):
+                continue
+            detail = audit_event.get("detail") if isinstance(audit_event.get("detail"), dict) else {}
+            if detail.get("accepted") is False:
+                continue
+            audit_ingests.append(audit_event)
 
-    empty = bool(seat_slug) and document_count == 0
+        if last_ingest_at is None and audit_ingests:
+            last_ingest_at = audit_ingests[0].get("created_at")
+
+        # Only synthesize activity from audit when the live mesh page is empty
+        # (e.g. post-restart). Never prepend audit rows over current mesh traffic.
+        if not recent_activity and audit_ingests:
+            recent_activity = [
+                {
+                    "id": audit_event.get("id"),
+                    "type": "ingest",
+                    "message": "Node ingest",
+                    "created_at": audit_event.get("created_at"),
+                    "dataset": node,
+                }
+                for audit_event in audit_ingests[:8]
+            ]
+
+    # Capture proof is documents or a durable ingest timestamp — not search
+    # timeline rows, which can appear on an empty Node.
+    capture_done = document_count > 0 or last_ingest_at is not None
+    empty = bool(seat_slug) and not capture_done
     return {
         "ok": True,
         "seat_slug": seat_slug,
@@ -2200,7 +2224,7 @@ async def me_summary(request: Request) -> dict[str, Any]:
             {
                 "id": "capture",
                 "label": "Run capture or MCP ingest into your Node",
-                "done": document_count > 0,
+                "done": capture_done,
             },
             {
                 "id": "search",
@@ -2209,8 +2233,10 @@ async def me_summary(request: Request) -> dict[str, Any]:
             },
             {
                 "id": "promote",
-                "label": "Approve promotions when you want Node work in Central",
-                "done": pending_count == 0 and document_count > 0,
+                # Phase 1: approve/reject is admin-only (`sources:sync`); members
+                # see pending count as a status signal, not a self-serve action.
+                "label": "Promotions to Central are clear (admin approves in Phase 1)",
+                "done": pending_count == 0 and capture_done,
             },
         ]
         if seat_slug
@@ -4143,10 +4169,30 @@ async def ingest(body: IngestBody, request: Request) -> Any:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
     result = outcome.ingest
+    # Durable HTTP ingest audit (MCP path already records via record_mcp_audit).
+    # Only accepted writes count as capture proof for Seat home.
+    if result.accepted and not mcp_tool_name(request):
+        get_access_store().record_event(
+            action="ingest",
+            actor=actor,
+            success=True,
+            dataset=outcome.dataset,
+            detail={
+                "operation": "ingest",
+                "accepted": True,
+                "reason": result.reason,
+                "data_bytes": len(body.data.encode("utf-8")),
+                "tag_count": len(body.tags),
+                "write_targets": [target.dataset for target in write_targets],
+                "scope_override": scope_override_active(
+                    actor, [target.dataset for target in write_targets]
+                ),
+            },
+        )
     record_mcp_audit(
         request,
         actor=actor,
-        success=True,
+        success=bool(result.accepted),
         dataset=outcome.dataset,
         detail={
             "operation": "ingest",

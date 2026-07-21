@@ -3308,6 +3308,9 @@ document.getElementById("refreshButton").addEventListener("click", () => {
   loadGithubSync();
   loadObsidianSources();
   loadConflicts();
+  if (state.seatSlug) {
+    loadSeatHome();
+  }
   if (state.graphMode === "knowledge") {
     loadKnowledgeGraph(true);
   }
