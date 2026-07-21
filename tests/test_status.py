@@ -87,6 +87,44 @@ def test_check_local_setup_all_missing(tmp_path: Path, monkeypatch) -> None:
     assert checks["capture_roots"].ok  # "none" is a valid state
 
 
+def test_gather_status_skips_search_by_default(tmp_path: Path, monkeypatch) -> None:
+    seen: list[str] = []
+
+    def fake_open(request: Any, timeout: float | None = None) -> _FakeResp:
+        url = request.full_url
+        seen.append(url)
+        if "/healthz" in url:
+            return _FakeResp({"ok": True})
+        if "/api/session" in url:
+            return _FakeResp({"ok": True, "role": "writer", "seat_slug": "s", "actor": {"name": "S"}})
+        if "/readyz" in url:
+            return _FakeResp({"ok": True, "corpus": {"ok": True, "tracked_sources": 1, "indexed_docs": 1}})
+        if "/api/contributions/recent" in url:
+            return _FakeResp({"contributions": []})
+        raise AssertionError(f"unexpected URL {url}")
+
+    monkeypatch.setattr(status_mod._OPENER, "open", fake_open)
+    report = gather_status(
+        "https://node.example", "ctdl_tok", repo=tmp_path, config_path=tmp_path / "c.json"
+    )
+    assert report.healthy
+    assert all("/search" not in u for u in seen)
+    assert all(c.name != "search" for c in report.checks)
+
+
+def test_check_search_uses_short_smoke_timeout(monkeypatch) -> None:
+    captured: dict[str, float | None] = {"timeout": None}
+
+    def fake_open(request: Any, timeout: float | None = None) -> _FakeResp:
+        captured["timeout"] = timeout
+        return _FakeResp({"results": [{"id": 1}]})
+
+    monkeypatch.setattr(status_mod._OPENER, "open", fake_open)
+    check = status_mod.check_search("https://node.example", "ctdl_tok")
+    assert check.ok
+    assert captured["timeout"] == status_mod._SMOKE_SEARCH_TIMEOUT
+
+
 def test_gather_status_healthy(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setattr(
         status_mod._OPENER,
@@ -107,7 +145,13 @@ def test_gather_status_healthy(tmp_path: Path, monkeypatch) -> None:
             }
         ),
     )
-    report = gather_status("https://node.example", "ctdl_tok", repo=tmp_path, config_path=tmp_path / "c.json")
+    report = gather_status(
+        "https://node.example",
+        "ctdl_tok",
+        repo=tmp_path,
+        config_path=tmp_path / "c.json",
+        with_search=True,
+    )
     assert report.healthy
     assert report.identity["seat_slug"] == "sarthi"
     names = {c.name: c.ok for c in report.checks}
@@ -226,7 +270,7 @@ def test_render_text_search_failure_warns_not_fails() -> None:
         identity={},
         checks=[
             Check("node", ok=True, detail="healthy"),
-            Check("search", ok=False, detail="timed out after 20s — node warming up", data={"timed_out": True}),
+            Check("search", ok=False, detail="timed out after 3s — node warming up", data={"timed_out": True}),
         ],
         recent=[],
     )
@@ -285,6 +329,7 @@ def test_status_command_json_and_exit(tmp_path: Path, monkeypatch, capsys) -> No
         node_url="https://node.example",
         repo=str(tmp_path),
         config=str(tmp_path / "c.json"),
+        check_search=False,
         no_search=False,
         no_recent=False,
     )
@@ -307,6 +352,7 @@ def test_status_command_unhealthy_exits_one(tmp_path: Path, monkeypatch, capsys)
         node_url="https://node.example",
         repo=str(tmp_path),
         config=str(tmp_path / "c.json"),
+        check_search=False,
         no_search=True,
         no_recent=True,
     )

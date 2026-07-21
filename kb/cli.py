@@ -1252,7 +1252,10 @@ async def _status(args: argparse.Namespace) -> int:
             token,
             repo=repo,
             config_path=config_path,
-            with_search=not args.no_search,
+            # Search smoke is opt-in: it never gates `healthy` and often costs
+            # multi-second Railway/cognee latency (or the full smoke budget).
+            with_search=bool(getattr(args, "check_search", False))
+            and not bool(getattr(args, "no_search", False)),
             with_recent=not args.no_recent,
         )
 
@@ -1274,7 +1277,7 @@ async def _status(args: argparse.Namespace) -> int:
                 payload["hint"] = hint
         _print_json(payload)
     else:
-        # The search check can take ~20s cold — spin so it doesn't look hung.
+        # --check-search can take a few seconds cold — spin so it doesn't look hung.
         with _Spinner("Checking Citadel…"):
             report, mesh = await asyncio.gather(
                 _gather(), asyncio.to_thread(fetch_mesh, node_url, token)
@@ -2211,7 +2214,16 @@ def build_parser() -> argparse.ArgumentParser:
     status.add_argument("--node-url", help="Override Node URL (default: from config)")
     status.add_argument("--repo", help="Repo to check hooks/MCP in (default: git toplevel or cwd)")
     status.add_argument("--config", help="Override capture config path")
-    status.add_argument("--no-search", action="store_true", help="Skip the search smoke check")
+    status.add_argument(
+        "--check-search",
+        action="store_true",
+        help="Also smoke-test /search (opt-in; short timeout; never gates health)",
+    )
+    status.add_argument(
+        "--no-search",
+        action="store_true",
+        help="Skip the search smoke check (default; kept for script compatibility)",
+    )
     status.add_argument("--no-recent", action="store_true", help="Skip recent-activity fetch")
     status.set_defaults(handler=_status)
 
