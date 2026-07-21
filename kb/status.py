@@ -30,7 +30,10 @@ TOKEN_ENV = "CITADEL_MCP_ACCESS_TOKEN"
 MCP_SERVER_NAME = "citadel"
 SESSION_HOOK_MARKER = "kb.hooks.sync_session"
 _TIMEOUT = 8.0
-_SEARCH_TIMEOUT = 20.0  # align with server default; cognee cold-start is slow; non-gating
+_SEARCH_TIMEOUT = 20.0  # full vault search (`citadel search`); cognee cold-start is slow
+# Status smoke must not inherit the full search budget — search never gates
+# `healthy`, so a 20s hang was pure wall-time tax on every `citadel status`.
+_SMOKE_SEARCH_TIMEOUT = 3.0
 _INGEST_TIMEOUT = 60.0  # /ingest does real write work (and cold nodes are slow)
 _SMOKE_QUERY = "citadel status connectivity smoke"
 
@@ -150,7 +153,9 @@ def check_auth(base_url: str, token: str | None, *, timeout: float = _TIMEOUT) -
     return Check("auth", ok=bool(data.get("ok")), detail="valid", latency_ms=latency, data=identity)
 
 
-def check_search(base_url: str, token: str | None, *, timeout: float = _SEARCH_TIMEOUT) -> Check:
+def check_search(
+    base_url: str, token: str | None, *, timeout: float = _SMOKE_SEARCH_TIMEOUT
+) -> Check:
     if not token:
         return Check("search", ok=False, detail="skipped (no token)")
     started = time.monotonic()
@@ -164,11 +169,21 @@ def check_search(base_url: str, token: str | None, *, timeout: float = _SEARCH_T
         )
     except TimeoutError:
         return Check(
-            "search", ok=False,
-            detail=f"timed out after {int(timeout)}s — node warming up",
+            "search",
+            ok=False,
+            detail=f"timed out after {timeout:g}s — node warming up",
             data={"timed_out": True},
         )
     except Exception as exc:
+        # urllib may wrap a socket timeout as URLError("timed out") — treat like
+        # TimeoutError so the smoke budget reads as warm-up, not a cryptic net error.
+        if "timed out" in str(exc).lower():
+            return Check(
+                "search",
+                ok=False,
+                detail=f"timed out after {timeout:g}s — node warming up",
+                data={"timed_out": True},
+            )
         return Check("search", ok=False, detail=_humanize_net_error(exc))
     latency = int((time.monotonic() - started) * 1000)
     results = data.get("results")
@@ -190,6 +205,7 @@ def check_corpus(base_url: str, token: str | None, *, timeout: float = _TIMEOUT)
     if not token:
         return None
     url = f"{base_url.rstrip('/')}/readyz"
+    started = time.monotonic()
     try:
         data = _request("GET", url, token=token, timeout=timeout)
     except urllib.error.HTTPError as exc:
@@ -201,13 +217,14 @@ def check_corpus(base_url: str, token: str | None, *, timeout: float = _TIMEOUT)
             return None
     except Exception:
         return None
+    latency = int((time.monotonic() - started) * 1000)
     corpus = data.get("corpus") or {}
     canary = data.get("canary")
     indexed = corpus.get("indexed_docs")
     tracked = corpus.get("tracked_sources")
     ok = bool(corpus.get("ok", True)) and (canary is None or bool(canary.get("ok", True)))
     detail = "ok" if indexed is None else f"{indexed} indexed / {tracked} tracked"
-    return Check("corpus", ok=ok, detail=detail, data={"canary": canary})
+    return Check("corpus", ok=ok, detail=detail, latency_ms=latency, data={"canary": canary})
 
 
 def search_node(
@@ -428,7 +445,7 @@ def gather_status(
     *,
     repo: Path | None = None,
     config_path: Path | None = None,
-    with_search: bool = True,
+    with_search: bool = False,
     with_recent: bool = True,
     timeout: float = _TIMEOUT,
 ) -> StatusReport:
@@ -436,7 +453,8 @@ def gather_status(
     repo = repo or Path.cwd()
 
     # The network checks are independent, so they run concurrently — wall time
-    # is the slowest check (search, when cold), not the sum of all of them.
+    # is the slowest check, not the sum of all of them. Search smoke is opt-in
+    # (non-gating) and uses a short budget so status stays snappy by default.
     # Each check still captures its own failure, so a thread never raises.
     with ThreadPoolExecutor(max_workers=5) as pool:
         node_f = pool.submit(check_node_health, base_url, timeout=timeout)
@@ -450,7 +468,7 @@ def gather_status(
         auth = auth_f.result()
         checks = [node, auth]
         if search_f is not None:
-            checks.append(search_f.result())  # uses its own longer timeout
+            checks.append(search_f.result())
         corpus = corpus_f.result()
         if corpus is not None:
             checks.append(corpus)

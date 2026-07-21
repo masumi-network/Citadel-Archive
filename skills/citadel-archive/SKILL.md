@@ -172,7 +172,7 @@ Common commands (add `--json` to any read for machine output; every read exits
 `1` on auth failure, `0` on success):
 
 ```bash
-citadel status --json          # connection · identity · role · latency (add --no-search to skip the smoke search)
+citadel status --json          # connection · identity · role · latency (add --check-search to smoke /search)
 citadel search "..." --json --top-k 5    # search the vault
 citadel activity --json        # recent Vault Activity — captures · syncs · promotions · searches
 citadel activity --local       # offline capture receipts (~/.citadel/activity.log) — no server needed

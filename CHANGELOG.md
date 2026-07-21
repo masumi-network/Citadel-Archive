@@ -30,6 +30,11 @@ All notable changes to `citadel-archive` are documented here. Format follows
 
 ### Changed
 
+- **`citadel status` no longer smoke-tests `/search` by default.** The search
+  check never gated `healthy`, but it often dominated wall time (Railway/cognee
+  ~4–20s, or a full 20s timeout). Use `--check-search` when you want it; smoke
+  timeout is 3s (full `citadel search` still uses 20s). `--no-search` remains a
+  no-op alias for existing scripts.
 - **`SKILL.md` reworked for cold-agent onboarding (validated by a fresh-agent
   audit).** Adds an **Agent Fast Start** runbook (`install → set token →
   status --json verify → search`) and a **How Citadel Works** 30-second model
