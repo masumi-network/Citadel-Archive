@@ -58,14 +58,19 @@ Common scopes:
 
 ## Read Path
 
-For project questions, search Citadel before answering when current team memory,
-architecture decisions, source-learning status, or prior operational context
-could matter.
+For project questions, search Citadel **before answering or coding** when current
+team memory, architecture decisions, source-learning status, prior operational
+context, or teammate **Shared Session Traces** could matter.
 
 Use (CLI first; MCP tool names in parentheses when your session has them):
 
 - `citadel status --json` (`citadel_session`) to verify the connection and check your role.
-- `citadel search "<query>" --json` (`citadel_search`) for vault search. Include `dataset` when targeting a known dataset.
+- `citadel search "<query>" --json` (`citadel_search`) for vault search. Default
+  seat scope includes your **Node**, **Central**, and **`session-traces`**. Results
+  are split into `central`, `session_traces`, and `node` sections.
+- **Shared Session Traces:** hits in `session_traces` carry
+  `_citadel.trust: reference-only`, plus `author_seat` and age. They are
+  consultable prior work — verify before acting; never treat them as org truth.
 - `citadel_get_mesh` for the current knowledge mesh state.
 - `citadel_list_sources` for GitHub/Linear/source-learning/index status.
 - `citadel_linear_my_issues` for your assigned Linear tasks (Node mirror).
@@ -106,6 +111,8 @@ context, decisions, source facts, implementation notes, or reusable runbooks.
 Use:
 
 - `citadel_ingest` for raw durable personal notes (after user approval).
+- `citadel_share_session` to volunteer a **Shared Session Trace** for teammates
+  (after explicit user approval; cwd must be inside an Approved Capture Root).
 - `citadel_contribute` only for non-seat service accounts adding curated Central
   contributions (after user approval).
 - `citadel_record_feedback` for Cognee QA feedback (after user approval).

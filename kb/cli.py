@@ -37,6 +37,7 @@ from kb.capture_config import (
     save_capture_config,
 )
 from kb.capture import build_capture_payload, capture_token, post_capture
+from kb.capture_roots_sync import sync_local_capture_roots_to_server, sync_warning_message
 from kb.onboard import (
     TOKEN_ENV,
     claude_user_settings_path,
@@ -44,6 +45,7 @@ from kb.onboard import (
     ensure_env_in_rc,
     ensure_token_in_rc,
     git_root_or_cwd,
+    install_agent_policies,
     install_pre_push_hook,
     mask_token,
     merge_claude_settings,
@@ -84,6 +86,7 @@ from kb.status import (
     gather_status,
     render_text,
     render_verdict,
+    seatless_token_hint,
 )
 
 
@@ -329,23 +332,68 @@ async def _ingest_local(args: argparse.Namespace) -> int:
     return _result_exit(result)
 
 
-def _render_search(results: list[Any], query: str) -> None:
+_SEARCH_SECTION_LABELS = {
+    "central": "Central",
+    "session_traces": "Session traces (reference-only — verify before acting)",
+    "node": "Node",
+}
+_SEARCH_SECTION_ORDER = ("central", "session_traces", "node")
+
+
+def _search_item_text(item: Any) -> str:
+    if isinstance(item, dict):
+        text = (
+            item.get("text") or item.get("content") or item.get("summary")
+            or item.get("title") or item.get("name") or json.dumps(item, default=str)
+        )
+    else:
+        text = str(item)
+    text = " ".join(str(text).split())
+    return text[:300] + ("…" if len(text) > 300 else "")
+
+
+def _search_item_meta(item: dict[str, Any], *, color: bool) -> str:
+    envelope = item.get("_citadel")
+    if not isinstance(envelope, dict):
+        return ""
+    parts: list[str] = []
+    trust = envelope.get("trust")
+    if trust:
+        parts.append(f"trust: {trust}")
+    author = envelope.get("author_seat")
+    if author:
+        parts.append(f"author: {author}")
+    if not parts:
+        return ""
+    return paint(f"({' · '.join(parts)}) ", "yellow", enable=color)
+
+
+def _render_search(payload: dict[str, Any], query: str) -> None:
     color = supports_color()
+    results = payload.get("results") or []
+    if not isinstance(results, list):
+        results = []
     if not results:
         print(paint(f'No results for "{query}".', "dim", enable=color))
         return
     print(f'{len(results)} result(s) for "{query}":\n')
+    sections = payload.get("sections")
+    if isinstance(sections, dict) and any(sections.get(key) for key in _SEARCH_SECTION_ORDER):
+        index = 1
+        for key in _SEARCH_SECTION_ORDER:
+            items = sections.get(key) or []
+            if not items:
+                continue
+            print(paint(_SEARCH_SECTION_LABELS[key], "bold", enable=color))
+            for item in items:
+                meta = _search_item_meta(item, color=color) if isinstance(item, dict) else ""
+                print(f"  {paint(f'{index}.', 'cyan', enable=color)} {meta}{_search_item_text(item)}")
+                index += 1
+            print()
+        return
     for index, item in enumerate(results, 1):
-        if isinstance(item, dict):
-            text = (
-                item.get("text") or item.get("content") or item.get("summary")
-                or item.get("title") or item.get("name") or json.dumps(item, default=str)
-            )
-        else:
-            text = str(item)
-        text = " ".join(str(text).split())
-        snippet = text[:300] + ("…" if len(text) > 300 else "")
-        print(f"  {paint(f'{index}.', 'cyan', enable=color)} {snippet}")
+        meta = _search_item_meta(item, color=color) if isinstance(item, dict) else ""
+        print(f"  {paint(f'{index}.', 'cyan', enable=color)} {meta}{_search_item_text(item)}")
 
 
 async def _search(args: argparse.Namespace) -> int:
@@ -365,7 +413,7 @@ async def _search(args: argparse.Namespace) -> int:
 
     try:
         with _Spinner("Searching the vault…"):
-            results = await asyncio.to_thread(search_node, base_url, token, args.query, args.top_k)
+            payload = await asyncio.to_thread(search_node, base_url, token, args.query, args.top_k)
     except urllib.error.HTTPError as exc:
         detail = exc.read().decode(errors="replace")[:200] if exc.fp else exc.reason
         print(f"citadel search: HTTP {exc.code} {detail}", file=sys.stderr)
@@ -375,9 +423,9 @@ async def _search(args: argparse.Namespace) -> int:
         print(f"citadel search: {exc}", file=sys.stderr)
         return 1
     if getattr(args, "json", False):
-        _print_json(results)
+        _print_json(payload)
     else:
-        _render_search(results, args.query)
+        _render_search(payload, args.query)
     return 0
 
 
@@ -582,10 +630,21 @@ async def _setup(args: argparse.Namespace) -> int:
     written = save_capture_config(
         config, path=config_path, updated_at=datetime.now(timezone.utc).isoformat()
     )
+    sync_result = sync_local_capture_roots_to_server(config) if config.roots else None
+    warning = sync_warning_message(sync_result) if sync_result else None
     if getattr(args, "json", False):
-        _print_json(load_capture_config(config_path).to_dict())
+        payload = load_capture_config(config_path).to_dict()
+        if sync_result is not None:
+            payload["capture_roots_sync"] = {
+                "status": sync_result.status,
+                "detail": sync_result.detail,
+                "seat_slug": sync_result.seat_slug,
+            }
+        _print_json(payload)
     else:
         print(f"\nSaved {len(config.roots)} approved root(s) to {written}")
+        if warning:
+            print(f"Warning: {warning}", file=sys.stderr)
     return 0
 
 
@@ -1213,7 +1272,7 @@ async def _status(args: argparse.Namespace) -> int:
                 payload["hint"] = hint
         _print_json(payload)
     else:
-        # The search check can take ~15s cold — spin so it doesn't look hung.
+        # The search check can take ~20s cold — spin so it doesn't look hung.
         with _Spinner("Checking Citadel…"):
             report, mesh = await asyncio.gather(
                 _gather(), asyncio.to_thread(fetch_mesh, node_url, token)
@@ -1579,14 +1638,18 @@ def _render_identity(auth: Any, node_url: str, color: bool) -> str:
         flag for flag, on in (("read", caps.get("read")), ("write", caps.get("write")), ("admin", caps.get("admin"))) if on
     ) or "—"
     writes = f"seat:{seat}" if ident.get("seat_slug") else "shared org dataset"
-    return "\n".join([
+    lines = [
         paint(f"  {mark(True, enable=color)} authenticated", "green", enable=color),
         f"      seat     {paint(str(seat), 'cyan', enable=color)}",
         f"      role     {ident.get('role') or '—'}",
         f"      access   {access}",
         f"      writes   {writes}",
         paint(f"      node     {node_url}", "dim", enable=color),
-    ])
+    ]
+    hint = seatless_token_hint(ident)
+    if hint:
+        lines.append(paint(f"      hint     {hint}", "yellow", enable=color))
+    return "\n".join(lines)
 
 
 def _prompt_hidden(prompt: str) -> str:
@@ -1725,6 +1788,7 @@ async def _onboard(args: argparse.Namespace) -> int:
         # Session hooks go to the USER-scope settings so they fire across every
         # repo, not only the onboard repo (#38).
         steps.append(("SessionEnd hook", merge_claude_settings(claude_user_settings_path())))
+        steps.extend(install_agent_policies(repo))
         if not args.no_mcp:
             steps.append(("MCP server (.mcp.json)", merge_mcp_config(repo / ".mcp.json", node_url)))
     except ValueError as exc:
@@ -1792,6 +1856,25 @@ async def _onboard(args: argparse.Namespace) -> int:
             cfg, path=cfg_path, updated_at=datetime.now(timezone.utc).isoformat()
         )
         steps.append((f"capture roots → {cfg_path}", f"{len(cfg.roots)} root(s)"))
+        sync_result = sync_local_capture_roots_to_server(
+            cfg,
+            base_url=node_url,
+            token=token,
+        )
+        warning = sync_warning_message(sync_result)
+        if warning:
+            steps.append(("capture roots → Node", f"warning: {warning}"))
+        elif sync_result.status == "synced":
+            steps.append(
+                (
+                    "capture roots → Node",
+                    f"synced {sync_result.merged_count} root(s) to seat {sync_result.seat_slug}",
+                )
+            )
+        elif sync_result.status == "unchanged":
+            steps.append(("capture roots → Node", "unchanged on Node"))
+        else:
+            steps.append(("capture roots → Node", sync_result.detail))
 
     if interactive and not getattr(args, "no_tools", False):
         _wire_detected_tools(node_url, color=color)
@@ -1836,8 +1919,12 @@ async def _onboard(args: argparse.Namespace) -> int:
             )
         )
     print(
-        f"\nNext: restart your shell (or `source {rc_path}`), then in your agent ask:\n"
-        '  "use citadel_search to find what we decided about the vault"'
+        f"\nNext: restart your shell (or `source {rc_path}`), then in your agent:\n"
+        '  • at task start — "use citadel_search before we code on <topic>"\n'
+        '  • proactive capture — see /skills/proactive-ingest for mid-session ingest + autosync\n'
+        '  • when a route is worth reusing — ask the user, then `citadel_share_session` '
+        "(Shared Session Traces are reference-only, not org truth)\n"
+        '  • smoke test — "use citadel_search to find what we decided about the vault"'
     )
     return 0
 

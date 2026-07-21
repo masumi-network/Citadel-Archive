@@ -84,7 +84,16 @@ def test_doctor_fix_installs_missing_local_setup(tmp_path: Path, monkeypatch, ca
 
 def test_search_http_renders_results(monkeypatch, capsys) -> None:
     monkeypatch.setattr("kb.cli.capture_token", lambda: "ctdl_x")
-    monkeypatch.setattr("kb.status.search_node", lambda *a, **k: [{"text": "hello vault"}])
+    payload = {
+        "results": [{"text": "hello vault", "_citadel": {"dataset": "masumi-network"}}],
+        "sections": {
+            "central": [{"text": "hello vault", "_citadel": {"dataset": "masumi-network"}}],
+            "session_traces": [],
+            "node": [],
+        },
+        "dataset": "masumi-network",
+    }
+    monkeypatch.setattr("kb.status.search_node", lambda *a, **k: payload)
     args = argparse.Namespace(
         query="hi", top_k=10, json=True, node_url="https://node.example",
         local=False, dataset=None, session=None,
@@ -92,7 +101,37 @@ def test_search_http_renders_results(monkeypatch, capsys) -> None:
     rc = asyncio.run(_search(args))
     assert rc == 0
     out = json.loads(capsys.readouterr().out)
-    assert out == [{"text": "hello vault"}]
+    assert out["sections"]["central"][0]["text"] == "hello vault"
+    assert out["results"][0]["text"] == "hello vault"
+
+
+def test_search_http_renders_trace_sections(monkeypatch, capsys) -> None:
+    monkeypatch.setattr("kb.cli.capture_token", lambda: "ctdl_x")
+    trace_hit = {
+        "text": "fixed the kuzu lock",
+        "_citadel": {
+            "dataset": "session-traces",
+            "trust": "reference-only",
+            "author_seat": "alice",
+        },
+    }
+    payload = {
+        "results": [trace_hit],
+        "sections": {"central": [], "session_traces": [trace_hit], "node": []},
+        "dataset": "masumi-network",
+    }
+    monkeypatch.setattr("kb.status.search_node", lambda *a, **k: payload)
+    args = argparse.Namespace(
+        query="kuzu", top_k=10, json=False, node_url="https://node.example",
+        local=False, dataset=None, session=None,
+    )
+    rc = asyncio.run(_search(args))
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "Session traces (reference-only" in out
+    assert "trust: reference-only" in out
+    assert "author: alice" in out
+    assert "fixed the kuzu lock" in out
 
 
 def test_search_no_token_exits_one(monkeypatch, capsys) -> None:

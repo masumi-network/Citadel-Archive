@@ -13,7 +13,7 @@ from fastapi.testclient import TestClient
 
 import kb.server as server_module
 
-from kb.access import AccessStore
+from kb.access import AccessStore, SESSION_TRACES_DATASET
 from kb.config import CitadelConfig
 from kb.conflicts import KnowledgeConflictStore
 from kb.knowledge_mesh import KnowledgeMesh
@@ -499,6 +499,49 @@ def test_knowledge_events_api_returns_resumable_timeline() -> None:
     assert unauthenticated.status_code == 401
 
 
+def test_knowledge_events_scopes_timeline_to_the_caller(tmp_path: Any) -> None:
+    # ADR-0009: the timeline carries Node content (event messages, dataset names,
+    # error operations). It previously discarded the identity and returned every
+    # seat's events to any reader token — visible in plain `citadel activity`
+    # output, which printed other seats' ingests under the caller's own token.
+    app.state.access_store = AccessStore(tmp_path / "access.json")
+    admin = authed_client()
+    created = admin.post(
+        "/api/access/tokens",
+        json={
+            "name": "scoped-reader",
+            "role": "writer",
+            "kind": "service_account",
+            "default_dataset": "personal",
+            "allowed_datasets": ["personal"],
+        },
+    )
+    token = created.json()["token"]
+    api_client = TestClient(app, base_url="https://testserver")
+    headers = {"Authorization": f"Bearer {token}"}
+
+    # An event on a dataset the scoped token cannot see, and one it can.
+    admin.post("/ingest", json={"data": "Another seat's note", "dataset": "masumi-network"})
+    api_client.post("/ingest", json={"data": "My own note"}, headers=headers)
+
+    scoped = api_client.get("/api/knowledge/events?limit=50", headers=headers)
+    unscoped = admin.get("/api/knowledge/events?limit=50")
+
+    assert scoped.status_code == 200
+    scoped_datasets = {
+        (event.get("details") or {}).get("dataset") for event in scoped.json()["events"]
+    }
+    assert "masumi-network" not in scoped_datasets
+    assert "personal" in scoped_datasets
+    # latest_event_id stays global so --watch resumption cannot loop forever.
+    assert scoped.json()["latest_event_id"] == unscoped.json()["latest_event_id"]
+    # An admin/bypass caller still sees everything.
+    unscoped_datasets = {
+        (event.get("details") or {}).get("dataset") for event in unscoped.json()["events"]
+    }
+    assert {"masumi-network", "personal"} <= unscoped_datasets
+
+
 def test_reader_access_can_view_and_search_but_not_mutate() -> None:
     client = authed_client("test-reader")
 
@@ -778,6 +821,63 @@ def test_token_allowed_datasets_rejects_other_dataset(tmp_path: Any) -> None:
     assert allowed.json()["dataset"] == "personal"
     assert denied.status_code == 403
     assert denied.json()["detail"] == "Dataset not allowed: masumi-network."
+
+
+def test_feedback_rejects_dataset_outside_token_allowlist(tmp_path: Any) -> None:
+    # /feedback is a durable write on a cache miss. Before this was resolved, a
+    # writer token could name any dataset — including another seat's node, which
+    # enforce_dataset_allowlist is default-deny for — and have the write and its
+    # mesh event attributed there.
+    app.state.access_store = AccessStore(tmp_path / "access.json")
+    client = authed_client()
+    created = client.post(
+        "/api/access/tokens",
+        json={
+            "name": "scoped-feedback-writer",
+            "role": "writer",
+            "kind": "service_account",
+            "default_dataset": "personal",
+            "allowed_datasets": ["personal"],
+        },
+    )
+    token = created.json()["token"]
+    api_client = TestClient(app, base_url="https://testserver")
+
+    denied = api_client.post(
+        "/feedback",
+        json={"qa_id": "qa-1", "score": 1, "text": "useful", "dataset": "seat:someone-else"},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    allowed = api_client.post(
+        "/feedback",
+        json={"qa_id": "qa-1", "score": 1, "text": "useful"},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert denied.status_code == 403
+    assert denied.json()["detail"] == "Dataset not allowed: seat:someone-else."
+    assert allowed.status_code == 200
+
+
+def test_feedback_rejects_oversized_text(tmp_path: Any) -> None:
+    # FeedbackBody.text carries no max_length; the durable-write path needs the
+    # same byte cap as /ingest.
+    app.state.access_store = AccessStore(tmp_path / "access.json")
+    client = authed_client()
+    created = client.post(
+        "/api/access/tokens",
+        json={"name": "feedback-writer", "role": "writer", "kind": "service_account"},
+    )
+    token = created.json()["token"]
+    api_client = TestClient(app, base_url="https://testserver")
+
+    oversized = api_client.post(
+        "/feedback",
+        json={"qa_id": "qa-1", "score": 1, "text": "x" * (200 * 1024 + 1)},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert oversized.status_code == 413
 
 
 def test_tokens_without_memory_fields_use_config_defaults(tmp_path: Any) -> None:
@@ -1178,6 +1278,69 @@ def test_backup_mirror_push_errors_are_audited(tmp_path: Any) -> None:
     assert events[-1]["action"] == "backup_mirror.run"
     assert events[-1]["success"] is False
     assert events[-1]["detail"]["reason"] == "publish_failed"
+
+
+def test_obsidian_vault_is_not_readable_or_writable_by_another_actor(tmp_path: Any) -> None:
+    # owner_actor_id was recorded at registration and read nowhere, so any token
+    # holding the obsidian scopes could address another seat's vault by id — and
+    # ids are disclosed via /api/sources. Reads returned full note bodies and
+    # revision history. 404 (not 403) everywhere: no existence oracle.
+    app.state.access_store = AccessStore(tmp_path / "access.json")
+    app.state.obsidian_sync = ObsidianSyncStore(tmp_path / "obsidian.json")
+    admin = authed_client()
+
+    owner_token = admin.post(
+        "/api/access/tokens",
+        json={"name": "vault-owner", "role": "writer", "kind": "service_account"},
+    ).json()["token"]
+    intruder_token = admin.post(
+        "/api/access/tokens",
+        json={"name": "vault-intruder", "role": "writer", "kind": "service_account"},
+    ).json()["token"]
+
+    api = TestClient(app, base_url="https://testserver")
+    owner_headers = {"Authorization": f"Bearer {owner_token}"}
+    intruder_headers = {"Authorization": f"Bearer {intruder_token}"}
+
+    vault_id = api.post(
+        "/api/obsidian/vaults", json={"vault_name": "Private Vault"}, headers=owner_headers
+    ).json()["vault"]["id"]
+    api.post(
+        "/api/obsidian/sync/push",
+        json={
+            "vault_id": vault_id,
+            "documents": [{"path": "Secrets.md", "content": "private body", "base_rev": None}],
+        },
+        headers=owner_headers,
+    )
+
+    owner_manifest = api.get(f"/api/obsidian/manifest?vault_id={vault_id}", headers=owner_headers)
+    document_id = owner_manifest.json()["documents"][0]["id"]
+
+    intruder_manifest = api.get(
+        f"/api/obsidian/manifest?vault_id={vault_id}", headers=intruder_headers
+    )
+    intruder_pull = api.get(
+        f"/api/obsidian/sync/pull?vault_id={vault_id}&cursor=0", headers=intruder_headers
+    )
+    intruder_document = api.get(f"/api/documents/{document_id}", headers=intruder_headers)
+    intruder_push = api.post(
+        "/api/obsidian/sync/push",
+        json={
+            "vault_id": vault_id,
+            "documents": [{"path": "Secrets.md", "content": "overwritten", "base_rev": None}],
+        },
+        headers=intruder_headers,
+    )
+
+    assert owner_manifest.status_code == 200
+    assert intruder_manifest.status_code == 404
+    assert intruder_pull.status_code == 404
+    assert intruder_document.status_code == 404
+    assert intruder_push.status_code == 404
+    # The owner still has full access, and an admin/bypass token is unaffected.
+    assert api.get(f"/api/documents/{document_id}", headers=owner_headers).status_code == 200
+    assert admin.get(f"/api/obsidian/manifest?vault_id={vault_id}").status_code == 200
 
 
 def test_obsidian_vault_sync_registers_pushes_pulls_and_lists_sources(tmp_path: Any) -> None:
@@ -2612,6 +2775,11 @@ class MultiSearchCitadel(FakeCitadel):
     def __init__(self) -> None:
         self.search_calls: list[str] = []
         self.session_calls: dict[str, str | None] = {}
+        self.cognee = type(
+            "_Cognee",
+            (),
+            {"scheduled": [], "schedule_cognify": lambda self, datasets: self.scheduled.append(list(datasets))},
+        )()
 
     async def search(self, query: str, **kwargs: Any) -> list[dict[str, Any]]:
         dataset = kwargs["dataset"]
@@ -2653,7 +2821,11 @@ def test_create_seat_api_provisions_node_and_writer_token(tmp_path: Any) -> None
     assert payload["principal"]["default_dataset"] == "seat:alice"
     assert payload["principal"]["default_session"] == "seat-alice"
     assert payload["api_token"]["default_dataset"] == "seat:alice"
-    assert payload["api_token"]["allowed_datasets"] == ["seat:alice", "masumi-network"]
+    assert payload["api_token"]["allowed_datasets"] == [
+        "seat:alice",
+        "masumi-network",
+        SESSION_TRACES_DATASET,
+    ]
     assert payload["token"].startswith("ctdl_")
 
     duplicate = client.post(
@@ -2695,20 +2867,32 @@ def test_seat_token_searches_node_and_central(tmp_path: Any) -> None:
     assert search.status_code == 200
     payload = search.json()
     assert payload["dataset"] == "seat:bob"
-    assert payload["datasets"] == ["seat:bob", "masumi-network"]
-    assert len(payload["results"]) == 2
+    assert payload["datasets"] == ["seat:bob", "masumi-network", SESSION_TRACES_DATASET]
+    assert len(payload["results"]) == 3
     assert payload["results"][0]["dataset"] == "seat:bob"
     assert payload["results"][1]["dataset"] == "masumi-network"
-    assert set(app.state.citadel.search_calls) == {"seat:bob", "masumi-network"}
+    assert payload["results"][2]["dataset"] == SESSION_TRACES_DATASET
+    assert set(app.state.citadel.search_calls) == {
+        "seat:bob",
+        "masumi-network",
+        SESSION_TRACES_DATASET,
+    }
     # The seat session scopes the private node only; Central must stay
     # dataset-wide (session_id None) or org-wide hits get hidden.
     assert app.state.citadel.session_calls == {
         "seat:bob": "seat-bob",
         "masumi-network": None,
+        SESSION_TRACES_DATASET: None,
     }
 
     assert knowledge.status_code == 200
-    assert knowledge.json()["datasets"] == ["seat:bob", "masumi-network"]
+    assert knowledge.json()["datasets"] == [
+        "seat:bob",
+        "masumi-network",
+        SESSION_TRACES_DATASET,
+    ]
+    assert "sections" in payload
+    assert payload["sections"]["session_traces"]
 
 
 def test_seat_cannot_recall_another_seats_session(tmp_path: Any) -> None:
@@ -2740,10 +2924,8 @@ def test_seat_cannot_recall_another_seats_session(tmp_path: Any) -> None:
     assert app.state.citadel.session_calls == {
         "seat:bob": "seat-bob",
         "masumi-network": None,
+        SESSION_TRACES_DATASET: None,
     }
-
-
-def test_admin_may_target_any_session(tmp_path: Any) -> None:
     app.state.access_store = AccessStore(tmp_path / "access.json")
     admin = authed_client()
     token = admin.post(
@@ -3049,7 +3231,11 @@ def test_seat_session_reports_own_seat_slug_and_node(tmp_path: Any) -> None:
     assert payload["seat_slug"] == "nora"
     assert payload["default_dataset"] == "seat:nora"
     assert payload["node_label"] == "nora's private Node"
-    assert payload["search_datasets"] == ["seat:nora", "masumi-network"]
+    assert payload["search_datasets"] == [
+        "seat:nora",
+        "masumi-network",
+        SESSION_TRACES_DATASET,
+    ]
 
 
 def test_non_seat_token_session_nulls_seat_slug(tmp_path: Any) -> None:
@@ -3866,3 +4052,395 @@ def test_promotion_approve_reject_require_admin_not_seat_writer(tmp_path: Any) -
 
     # The seat's own pending item is still queued (never approved/rejected/promoted).
     assert app.state.access_store.get_promotion_pending(item.id) is not None
+
+
+def register_seat_capture_roots(client: TestClient, slug: str, roots: list[str]) -> None:
+    response = client.put(
+        f"/api/access/seats/{slug}/capture-roots",
+        json={"roots": roots},
+    )
+    assert response.status_code == 200
+    stored = response.json()["roots"]
+    assert stored == [str(Path(root).resolve()) for root in roots]
+
+
+class ShareCitadel(FakeCitadel):
+    def __init__(self) -> None:
+        self.ingest_calls: list[dict[str, Any]] = []
+        self.cognee = type("_FakeCognee", (), {})()
+        self.cognee.scheduled = []
+        self.cognee.schedule_cognify = lambda datasets: self.cognee.scheduled.append(list(datasets))
+
+    async def ingest(self, data: str, **kwargs: Any) -> IngestResult:
+        self.ingest_calls.append({"data": data, **kwargs})
+        dataset = kwargs.get("dataset") or "notes"
+        return IngestResult(True, "accepted", dataset, tuple(kwargs.get("tags") or ()))
+
+
+class CrossSeatTraceCitadel(FakeCitadel):
+    """Stateful fake: shared traces ingested by one seat are searchable by another."""
+
+    def __init__(self) -> None:
+        self.ingest_calls: list[dict[str, Any]] = []
+        self.traces: list[dict[str, Any]] = []
+        self.cognee = type("_FakeCognee", (), {})()
+        self.cognee.scheduled: list[list[str]] = []
+        self.cognee.schedule_cognify = lambda datasets: self.cognee.scheduled.append(list(datasets))
+
+    async def ingest(self, data: str, **kwargs: Any) -> IngestResult:
+        self.ingest_calls.append({"data": data, **kwargs})
+        dataset = kwargs.get("dataset") or "notes"
+        if dataset == SESSION_TRACES_DATASET:
+            self.traces.append({"text": data, "dataset": dataset})
+        return IngestResult(True, "accepted", dataset, tuple(kwargs.get("tags") or ()))
+
+    async def search(self, query: str, **kwargs: Any) -> list[dict[str, Any]]:
+        dataset = kwargs["dataset"]
+        if dataset == SESSION_TRACES_DATASET:
+            needle = query.lower()
+            return [
+                {"text": trace["text"], "dataset": dataset}
+                for trace in self.traces
+                if needle in trace["text"].lower()
+            ]
+        if dataset.startswith("seat:"):
+            return []
+        return [{"query": query, "dataset": dataset, "text": f"{query} in {dataset}"}]
+
+
+def test_share_session_dual_writes_and_schedules_cognify(tmp_path: Any) -> None:
+    app.state.access_store = AccessStore(tmp_path / "access.json")
+    admin = authed_client()
+    token = admin.post("/api/access/seats", json={"name": "Alice", "slug": "alice"}).json()["token"]
+    app.state.citadel = ShareCitadel()
+    client = TestClient(app, base_url="https://testserver")
+    root = str(tmp_path)
+    register_seat_capture_roots(admin, "alice", [root])
+    data = (
+        "# Shared Session Trace\nAuthor-Seat: alice\nCreated-At: 2026-07-20T12:00:00Z\n\n"
+        "Task: fix lock\nApproach: in-process cognify"
+    )
+
+    response = client.post(
+        "/api/share-session",
+        json={"data": data, "cwd": root, "capture_roots": [root], "has_tool_errors": True},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ok"] is True
+    assert payload["cognify"] == "deferred"
+    datasets = [call["dataset"] for call in app.state.citadel.ingest_calls]
+    assert datasets == ["seat:alice", SESSION_TRACES_DATASET]
+    assert app.state.citadel.cognee.scheduled == [["seat:alice", SESSION_TRACES_DATASET]]
+
+
+def test_share_session_trace_visible_to_other_seat(tmp_path: Any) -> None:
+    app.state.access_store = AccessStore(tmp_path / "access.json")
+    admin = authed_client()
+    alice_token = admin.post(
+        "/api/access/seats",
+        json={"name": "Alice", "slug": "alice"},
+    ).json()["token"]
+    bob_token = admin.post(
+        "/api/access/seats",
+        json={"name": "Bob", "slug": "bob"},
+    ).json()["token"]
+    citadel = CrossSeatTraceCitadel()
+    app.state.citadel = citadel
+    client = TestClient(app, base_url="https://testserver")
+    root = str(tmp_path)
+    register_seat_capture_roots(admin, "alice", [root])
+    marker = "kuzu-lock-dead-end-cross-seat-marker"
+    data = (
+        "# Shared Session Trace\nAuthor-Seat: alice\nCreated-At: 2026-07-20T12:00:00Z\n\n"
+        f"Task: fix lock\nApproach: in-process cognify\nDead ends: {marker}"
+    )
+
+    share = client.post(
+        "/api/share-session",
+        json={"data": data, "cwd": root, "capture_roots": [root], "has_tool_errors": True},
+        headers={"Authorization": f"Bearer {alice_token}"},
+    )
+    assert share.status_code == 200
+    assert [call["dataset"] for call in citadel.ingest_calls] == [
+        "seat:alice",
+        SESSION_TRACES_DATASET,
+    ]
+
+    search = client.post(
+        "/search",
+        json={"query": marker},
+        headers={"Authorization": f"Bearer {bob_token}"},
+    )
+
+    assert search.status_code == 200
+    payload = search.json()
+    trace_hits = payload["sections"]["session_traces"]
+    assert trace_hits
+    assert trace_hits[0]["_citadel"]["trust"] == "reference-only"
+    assert trace_hits[0]["_citadel"]["author_seat"] == "alice"
+    assert payload["sections"]["node"] == []
+    assert "seat:alice" not in {hit.get("dataset") for hit in payload["results"]}
+
+
+def test_share_session_trace_not_visible_without_share(tmp_path: Any) -> None:
+    app.state.access_store = AccessStore(tmp_path / "access.json")
+    admin = authed_client()
+    bob_token = admin.post(
+        "/api/access/seats",
+        json={"name": "Bob", "slug": "bob"},
+    ).json()["token"]
+    app.state.citadel = CrossSeatTraceCitadel()
+    client = TestClient(app, base_url="https://testserver")
+
+    search = client.post(
+        "/search",
+        json={"query": "kuzu-lock-dead-end-cross-seat-marker"},
+        headers={"Authorization": f"Bearer {bob_token}"},
+    )
+
+    assert search.status_code == 200
+    assert search.json()["sections"]["session_traces"] == []
+
+
+def test_share_session_refuses_outside_capture_root(tmp_path: Any) -> None:
+    app.state.access_store = AccessStore(tmp_path / "access.json")
+    admin = authed_client()
+    token = admin.post("/api/access/seats", json={"name": "Alice", "slug": "alice"}).json()["token"]
+    app.state.citadel = ShareCitadel()
+    client = TestClient(app, base_url="https://testserver")
+    register_seat_capture_roots(admin, "alice", [str(tmp_path)])
+
+    response = client.post(
+        "/api/share-session",
+        json={
+            "data": "Task: secret path",
+            "cwd": "/tmp/outside",
+            "capture_roots": [str(tmp_path)],
+        },
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert response.status_code == 403
+    assert "server-approved Capture Root" in response.json()["detail"]
+
+
+def test_share_session_rejects_spoofed_client_capture_roots(tmp_path: Any) -> None:
+    app.state.access_store = AccessStore(tmp_path / "access.json")
+    admin = authed_client()
+    token = admin.post("/api/access/seats", json={"name": "Alice", "slug": "alice"}).json()["token"]
+    app.state.citadel = ShareCitadel()
+    client = TestClient(app, base_url="https://testserver")
+    approved = str(tmp_path / "approved")
+    approved_path = Path(approved)
+    approved_path.mkdir()
+    register_seat_capture_roots(admin, "alice", [approved])
+
+    response = client.post(
+        "/api/share-session",
+        json={
+            "data": "Task: spoofed root bypass attempt",
+            "cwd": "/tmp/spoofed",
+            "capture_roots": ["/tmp/spoofed"],
+            "has_tool_errors": True,
+        },
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert response.status_code == 403
+    assert app.state.citadel.ingest_calls == []
+
+
+def test_share_session_blocks_secret_before_llm(tmp_path: Any, monkeypatch: Any) -> None:
+    app.state.access_store = AccessStore(tmp_path / "access.json")
+    admin = authed_client()
+    token = admin.post("/api/access/seats", json={"name": "Alice", "slug": "alice"}).json()["token"]
+    app.state.citadel = ShareCitadel()
+    client = TestClient(app, base_url="https://testserver")
+    root = str(tmp_path)
+    register_seat_capture_roots(admin, "alice", [root])
+
+    def explode(*args: Any, **kwargs: Any) -> str:
+        raise AssertionError("flagged share payload must never reach OpenRouter")
+
+    monkeypatch.setattr("kb.session_trace.enrichment_enabled", lambda: True)
+    monkeypatch.setattr("kb.session_trace.openrouter_chat", explode)
+    data = (
+        "# Shared Session Trace\nAuthor-Seat: alice\nCreated-At: 2026-07-20T12:00:00Z\n\n"
+        "Task: deploy key AKIAIOSFODNN7EXAMPLE do not share\nApproach: retry auth"
+    )
+
+    response = client.post(
+        "/api/share-session",
+        json={"data": data, "cwd": root, "capture_roots": [root], "has_tool_errors": True},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert response.status_code == 422
+    assert "AKIAIOSFODNN7EXAMPLE" not in response.text
+    assert app.state.citadel.ingest_calls == []
+    events = app.state.access_store.snapshot()["audit_events"]
+    blocked = [event for event in events if event["detail"].get("blocked") == "secret_content"]
+    assert blocked
+    assert blocked[-1]["action"] == "share_session"
+
+
+def test_share_session_overwrites_spoofed_author_seat(tmp_path: Any) -> None:
+    app.state.access_store = AccessStore(tmp_path / "access.json")
+    admin = authed_client()
+    token = admin.post("/api/access/seats", json={"name": "Alice", "slug": "alice"}).json()["token"]
+    app.state.citadel = ShareCitadel()
+    client = TestClient(app, base_url="https://testserver")
+    root = str(tmp_path)
+    register_seat_capture_roots(admin, "alice", [root])
+    data = (
+        "# Shared Session Trace\nAuthor-Seat: bob\nCreated-At: 2026-07-20T12:00:00Z\n\n"
+        "Task: spoof author attribution\nApproach: claim bob wrote this"
+    )
+
+    response = client.post(
+        "/api/share-session",
+        json={"data": data, "cwd": root, "capture_roots": [root], "has_tool_errors": False},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert response.status_code == 200
+    ingested = app.state.citadel.ingest_calls[-1]["data"]
+    assert "Author-Seat: alice" in ingested
+    assert "Author-Seat: bob" not in ingested
+
+
+class PartialSessionTraceWriteCitadel(FakeCitadel):
+    """Accepts seat-node writes but rejects session-traces ingest."""
+
+    def __init__(self) -> None:
+        self.ingest_calls: list[dict[str, Any]] = []
+        self.cognee = type("_FakeCognee", (), {})()
+        self.cognee.scheduled: list[list[str]] = []
+        self.cognee.schedule_cognify = lambda datasets: self.cognee.scheduled.append(list(datasets))
+
+    async def ingest(self, data: str, **kwargs: Any) -> IngestResult:
+        self.ingest_calls.append({"data": data, **kwargs})
+        dataset = kwargs.get("dataset") or "notes"
+        if dataset == SESSION_TRACES_DATASET:
+            return IngestResult(False, "rejected", dataset, tuple(kwargs.get("tags") or ()))
+        return IngestResult(True, "accepted", dataset, tuple(kwargs.get("tags") or ()))
+
+
+class FlakySessionTraceWriteCitadel(FakeCitadel):
+    """Rejects session-traces on first attempt, accepts on retry."""
+
+    def __init__(self) -> None:
+        self.ingest_calls: list[dict[str, Any]] = []
+        self.session_traces_attempts = 0
+        self.cognee = type("_FakeCognee", (), {})()
+        self.cognee.scheduled: list[list[str]] = []
+        self.cognee.schedule_cognify = lambda datasets: self.cognee.scheduled.append(list(datasets))
+
+    async def ingest(self, data: str, **kwargs: Any) -> IngestResult:
+        self.ingest_calls.append({"data": data, **kwargs})
+        dataset = kwargs.get("dataset") or "notes"
+        if dataset == SESSION_TRACES_DATASET:
+            self.session_traces_attempts += 1
+            if self.session_traces_attempts == 1:
+                return IngestResult(
+                    False,
+                    "rejected",
+                    dataset,
+                    tuple(kwargs.get("tags") or ()),
+                )
+        return IngestResult(True, "accepted", dataset, tuple(kwargs.get("tags") or ()))
+
+
+def test_share_session_retries_session_traces_then_succeeds(tmp_path: Any) -> None:
+    app.state.access_store = AccessStore(tmp_path / "access.json")
+    admin = authed_client()
+    token = admin.post("/api/access/seats", json={"name": "Alice", "slug": "alice"}).json()["token"]
+    citadel = FlakySessionTraceWriteCitadel()
+    app.state.citadel = citadel
+    client = TestClient(app, base_url="https://testserver")
+    root = str(tmp_path)
+    register_seat_capture_roots(admin, "alice", [root])
+    data = (
+        "# Shared Session Trace\nAuthor-Seat: alice\nCreated-At: 2026-07-20T12:00:00Z\n\n"
+        "Task: flaky session-traces write\nApproach: retry once before success"
+    )
+
+    response = client.post(
+        "/api/share-session",
+        json={"data": data, "cwd": root, "capture_roots": [root], "has_tool_errors": False},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ok"] is True
+    assert payload["cognify"] == "deferred"
+    assert [call["dataset"] for call in citadel.ingest_calls] == [
+        "seat:alice",
+        SESSION_TRACES_DATASET,
+        SESSION_TRACES_DATASET,
+    ]
+    assert citadel.session_traces_attempts == 2
+    assert citadel.cognee.scheduled == [["seat:alice", SESSION_TRACES_DATASET]]
+
+
+def test_share_session_fails_when_session_traces_write_rejected(tmp_path: Any) -> None:
+    app.state.access_store = AccessStore(tmp_path / "access.json")
+    admin = authed_client()
+    token = admin.post("/api/access/seats", json={"name": "Alice", "slug": "alice"}).json()["token"]
+    app.state.citadel = PartialSessionTraceWriteCitadel()
+    client = TestClient(app, base_url="https://testserver")
+    root = str(tmp_path)
+    register_seat_capture_roots(admin, "alice", [root])
+    data = (
+        "# Shared Session Trace\nAuthor-Seat: alice\nCreated-At: 2026-07-20T12:00:00Z\n\n"
+        "Task: partial dual-write failure\nApproach: session-traces ingest rejected"
+    )
+
+    response = client.post(
+        "/api/share-session",
+        json={"data": data, "cwd": root, "capture_roots": [root], "has_tool_errors": False},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert response.status_code == 500
+    detail = response.json()["detail"]
+    assert detail["error_type"] == "partial_write_failure"
+    assert detail["retried"] is True
+    assert SESSION_TRACES_DATASET in detail["failed_targets"]
+    assert [call["dataset"] for call in app.state.citadel.ingest_calls] == [
+        "seat:alice",
+        SESSION_TRACES_DATASET,
+        SESSION_TRACES_DATASET,
+    ]
+    assert app.state.citadel.cognee.scheduled == []
+    events = app.state.access_store.snapshot()["audit_events"]
+    failed = [event for event in events if event["action"] == "share_session" and not event["success"]]
+    assert failed
+    assert failed[-1]["detail"]["error_type"] == "partial_write_failure"
+    assert failed[-1]["detail"]["retried"] is True
+
+
+def test_search_marks_session_trace_hits_reference_only(tmp_path: Any) -> None:
+    app.state.access_store = AccessStore(tmp_path / "access.json")
+    admin = authed_client()
+    token = admin.post("/api/access/seats", json={"name": "Bob", "slug": "bob"}).json()["token"]
+    app.state.citadel = MultiSearchCitadel()
+    client = TestClient(app, base_url="https://testserver")
+
+    response = client.post(
+        "/search",
+        json={"query": "dead end"},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    trace_hits = [
+        item
+        for item in response.json()["results"]
+        if item.get("_citadel", {}).get("dataset") == SESSION_TRACES_DATASET
+    ]
+    assert trace_hits
+    assert trace_hits[0]["_citadel"]["trust"] == "reference-only"

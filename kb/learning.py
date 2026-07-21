@@ -82,7 +82,7 @@ class LearningProcess:
         operation: str = "ingest",
         run_improve: bool = False,
         detect_conflicts: bool = True,
-        tier: Literal["full", "light"] = "full",
+        tier: Literal["full", "light", "shared"] = "full",
         defer_cognify: bool = False,
     ) -> LearningOutcome:
         """Filter, optionally enrich/chunk, ingest, record mesh activity,
@@ -95,6 +95,8 @@ class LearningProcess:
         mesh projection (when attached) and re-raised for the caller.
 
         ``tier="light"`` skips enrichment and improvement for seat-node memory.
+        ``tier="shared"`` skips full-document enrichment and improvement for
+        volunteered Shared Session Traces (dead-end refinement happens upstream).
         """
         target_dataset = dataset or self.config.default_dataset
         # ADR-0005 step 1: scan the WHOLE document up front — before enrichment
@@ -113,7 +115,7 @@ class LearningProcess:
                     block_severity=self.config.content_scan_block_severity,
                     findings=scan.get("findings", []),
                 )
-        if tier == "light":
+        if tier in {"light", "shared"}:
             enrichment = None
             effective_run_improve = False
         else:

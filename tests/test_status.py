@@ -226,7 +226,7 @@ def test_render_text_search_failure_warns_not_fails() -> None:
         identity={},
         checks=[
             Check("node", ok=True, detail="healthy"),
-            Check("search", ok=False, detail="timed out after 15s — node warming up", data={"timed_out": True}),
+            Check("search", ok=False, detail="timed out after 20s — node warming up", data={"timed_out": True}),
         ],
         recent=[],
     )
@@ -234,6 +234,36 @@ def test_render_text_search_failure_warns_not_fails() -> None:
     search_row = next(line for line in out.splitlines() if "Search" in line)
     assert "!" in search_row
     assert "✗" not in search_row
+
+
+def test_render_text_warns_seatless_token() -> None:
+    report = StatusReport(
+        node_url="https://node.example",
+        healthy=True,
+        identity={"seat_slug": None, "role": "writer", "capabilities": {"write": True}},
+        checks=[Check("node", ok=True, detail="healthy")],
+        recent=[],
+    )
+    out = render_text(report, verdict=False)
+    assert "no seat" in out
+    assert "citadel_share_session" in out
+
+
+def test_seatless_token_hint() -> None:
+    assert status_mod.seatless_token_hint({"seat_slug": "alice"}) is None
+    hint = status_mod.seatless_token_hint({"role": "writer"})
+    assert hint and "403" in hint and "seat-bound" in hint
+
+
+def test_search_node_returns_full_payload(monkeypatch) -> None:
+    payload = {
+        "results": [{"id": "1"}],
+        "sections": {"central": [{"id": "1"}], "session_traces": [], "node": []},
+    }
+    monkeypatch.setattr(status_mod._OPENER, "open", _route({"/search": payload}))
+    out = status_mod.search_node("https://node.example", "ctdl_tok", "q")
+    assert out["sections"]["central"][0]["id"] == "1"
+    assert out["results"][0]["id"] == "1"
 
 
 def test_humanize_net_error_translates_dns_noise() -> None:

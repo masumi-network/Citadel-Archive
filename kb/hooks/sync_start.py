@@ -36,6 +36,13 @@ DEFAULT_BASE_URL = "https://citadel-archive-production.up.railway.app"
 TOKEN_ENV = "CITADEL_MCP_ACCESS_TOKEN"
 HTTP_TIMEOUT_SECONDS = 5
 RECENT_LIMIT = 8
+# Static agent policy — no cross-seat content; injected when the token is set.
+AGENT_POLICY_REMINDER = (
+    "# Citadel — agent policy\n"
+    "- At task start: run `citadel_search` before coding (Central + your Node + Shared Session Traces).\n"
+    "- Trace hits carry `_citadel.trust: reference-only` — verify before acting; Central stays org-authoritative.\n"
+    "- Share dead-end routes with `citadel_share_session` only after explicit user approval."
+)
 
 
 class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
@@ -101,16 +108,18 @@ def run(stream_in: Any) -> int:
     """Hook entrypoint. ALWAYS returns 0 — fail-silent, non-blocking."""
     try:
         read_hook_payload(stream_in)  # drain stdin; fields unused
-        token = os.getenv(TOKEN_ENV)
-        if not token:
-            return 0
-        items = fetch_recent(_base_url(), token)
-        if not items:
-            return 0  # nothing to inject -> stay silent
-        sys.stdout.write(format_digest(items) + "\n")
     except Exception:
-        # Fail-silent: never block session start, never surface the token.
         return 0
+    token = os.getenv(TOKEN_ENV)
+    if not token:
+        return 0
+    try:
+        items = fetch_recent(_base_url(), token)
+        if items:
+            sys.stdout.write(format_digest(items) + "\n\n")
+    except Exception:
+        pass  # digest optional; policy still injected below
+    sys.stdout.write(AGENT_POLICY_REMINDER + "\n")
     return 0
 
 

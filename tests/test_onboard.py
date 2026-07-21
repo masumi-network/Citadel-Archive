@@ -4,22 +4,33 @@ import argparse
 import asyncio
 import json
 from pathlib import Path
+from typing import Any
 
 import pytest
 
 from kb.cli import _onboard
 from kb.onboard import (
     TOKEN_ENV,
+    POLICY_MARKER_END,
+    POLICY_MARKER_START,
+    agent_policy_section,
     claude_user_settings_path,
+    cursor_agent_policy_rule_text,
     detect_shell_rc,
     ensure_token_in_rc,
+    install_agent_policies,
+    install_cursor_agent_policy_rule,
+    install_markdown_policy_file,
     install_pre_push_hook,
+    install_windsurf_agent_policy_rule,
     mask_token,
     mcp_server_block,
     merge_claude_settings,
     merge_mcp_config,
     read_token_from_rc,
+    windsurf_agent_policy_rule_text,
 )
+from kb.hooks.sync_start import AGENT_POLICY_REMINDER
 from kb.status import Check
 
 
@@ -165,6 +176,110 @@ def test_install_pre_push_hook_not_git(tmp_path: Path) -> None:
     assert install_pre_push_hook(tmp_path) == "skipped:not-git"
 
 
+def test_agent_policy_section_matches_session_start() -> None:
+    section = agent_policy_section()
+    assert POLICY_MARKER_START in section
+    assert POLICY_MARKER_END in section
+    assert AGENT_POLICY_REMINDER.strip() in section
+    assert "citadel_search" in section
+    assert "reference-only" in section
+    assert "citadel_share_session" in section
+
+
+def test_cursor_agent_policy_rule_matches_session_start() -> None:
+    text = cursor_agent_policy_rule_text()
+    assert "alwaysApply: true" in text
+    assert "citadel_search" in text
+    assert "reference-only" in text
+    assert "citadel_share_session" in text
+
+
+def test_windsurf_agent_policy_rule_matches_session_start() -> None:
+    text = windsurf_agent_policy_rule_text()
+    assert "trigger: always_on" in text
+    assert "citadel_search" in text
+    assert "reference-only" in text
+    assert "citadel_share_session" in text
+
+
+def test_install_markdown_policy_file_idempotent(tmp_path: Path) -> None:
+    path = tmp_path / "AGENTS.md"
+    assert install_markdown_policy_file(path) == "added"
+    first = path.read_text()
+    assert POLICY_MARKER_START in first
+    assert install_markdown_policy_file(path) == "unchanged"
+    assert path.read_text() == first
+
+
+def test_install_markdown_policy_file_merges_existing(tmp_path: Path) -> None:
+    path = tmp_path / "AGENTS.md"
+    path.write_text("# Team rules\n\nRun tests before pushing.\n")
+    assert install_markdown_policy_file(path) == "updated"
+    body = path.read_text()
+    assert "# Team rules" in body
+    assert "Run tests before pushing." in body
+    assert POLICY_MARKER_START in body
+    assert install_markdown_policy_file(path) == "unchanged"
+
+
+def test_install_markdown_policy_file_replaces_marked_section(tmp_path: Path) -> None:
+    path = tmp_path / "AGENTS.md"
+    path.write_text("# Team rules\n\n" + agent_policy_section())
+    old = path.read_text()
+    assert install_markdown_policy_file(path) == "unchanged"
+    assert path.read_text() == old
+
+
+def test_install_cursor_agent_policy_rule_idempotent(tmp_path: Path) -> None:
+    assert install_cursor_agent_policy_rule(tmp_path) == "added"
+    rule = tmp_path / ".cursor" / "rules" / "citadel-agent-policy.mdc"
+    assert rule.exists()
+    first = rule.read_text()
+    assert install_cursor_agent_policy_rule(tmp_path) == "unchanged"
+    assert rule.read_text() == first
+
+
+def test_install_windsurf_agent_policy_rule_idempotent(tmp_path: Path) -> None:
+    assert install_windsurf_agent_policy_rule(tmp_path) == "added"
+    rule = tmp_path / ".windsurf" / "rules" / "citadel-agent-policy.md"
+    assert rule.exists()
+    first = rule.read_text()
+    assert install_windsurf_agent_policy_rule(tmp_path) == "unchanged"
+    assert rule.read_text() == first
+
+
+def test_install_agent_policies_always_writes_agents_md(tmp_path: Path) -> None:
+    steps = install_agent_policies(tmp_path, detected=[])
+    labels = [label for label, _ in steps]
+    assert "Agent policy (AGENTS.md)" in labels
+    assert (tmp_path / "AGENTS.md").exists()
+    assert "citadel_search" in (tmp_path / "AGENTS.md").read_text()
+
+
+def test_install_agent_policies_native_formats_when_detected(tmp_path: Path) -> None:
+    steps = install_agent_policies(
+        tmp_path,
+        detected=["cursor", "windsurf", "gemini", "codex", "claude", "pi"],
+    )
+    labels = [label for label, _ in steps]
+    assert "Agent policy (AGENTS.md)" in labels
+    assert "Cursor agent policy (.cursor/rules)" in labels
+    assert "Windsurf agent policy (.windsurf/rules)" in labels
+    assert "Gemini agent policy (GEMINI.md)" in labels
+    assert (tmp_path / ".cursor" / "rules" / "citadel-agent-policy.mdc").exists()
+    assert (tmp_path / ".windsurf" / "rules" / "citadel-agent-policy.md").exists()
+    assert (tmp_path / "GEMINI.md").exists()
+
+
+def test_install_agent_policies_skips_native_formats_without_detection(tmp_path: Path) -> None:
+    steps = install_agent_policies(tmp_path, detected=["codex"])
+    labels = [label for label, _ in steps]
+    assert labels == ["Agent policy (AGENTS.md)"]
+    assert not (tmp_path / ".cursor" / "rules" / "citadel-agent-policy.mdc").exists()
+    assert not (tmp_path / ".windsurf" / "rules" / "citadel-agent-policy.md").exists()
+    assert not (tmp_path / "GEMINI.md").exists()
+
+
 def test_bundled_hooks_are_importable_modules() -> None:
     # The published CLI installs hooks as `python -m kb.hooks.*`; the modules
     # must import and expose a runnable main() with no server deps.
@@ -210,6 +325,9 @@ def test_onboard_non_interactive_full_run(tmp_path: Path, monkeypatch) -> None:
     )
     mcp = json.loads((repo / ".mcp.json").read_text())
     assert mcp["mcpServers"]["citadel"]["url"].endswith("/mcp/")
+    agents_md = repo / "AGENTS.md"
+    assert agents_md.exists()
+    assert "citadel_search" in agents_md.read_text()
 
 
 def test_onboard_no_mcp_flag_skips_mcp(tmp_path: Path) -> None:
@@ -416,3 +534,40 @@ def test_onboard_kept_rejected_token_warns_in_summary(tmp_path: Path, monkeypatc
     out = capsys.readouterr().out
     assert "Node rejected this token" in out  # on the token step line + closing warning
     assert "citadel token set" in out
+
+
+def test_onboard_syncs_capture_roots_to_node(tmp_path: Path, monkeypatch) -> None:
+    repo = _make_repo(tmp_path)
+    rc = tmp_path / ".zshrc"
+    cfg_path = tmp_path / "capture.json"
+    monkeypatch.setenv("CITADEL_CAPTURE_CONFIG_PATH", str(cfg_path))
+    calls: list[Any] = []
+
+    def fake_sync(config, **kwargs):
+        calls.append((config, kwargs))
+        from kb.capture_roots_sync import CaptureRootsSyncResult
+
+        return CaptureRootsSyncResult(
+            ok=True,
+            status="synced",
+            detail="synced 1 approved capture root(s) to Node",
+            seat_slug="alice",
+            merged_count=1,
+        )
+
+    monkeypatch.setattr("kb.cli.sync_local_capture_roots_to_server", fake_sync)
+    args = argparse.Namespace(
+        token="ctdl_test_seat_token",
+        repo=str(repo),
+        shell_rc=str(rc),
+        no_mcp=True,
+        no_capture=False,
+        non_interactive=True,
+        node_url=None,
+        json=False,
+        no_tools=True,
+    )
+    assert asyncio.run(_onboard(args)) == 0
+    assert len(calls) == 1
+    assert calls[0][1]["token"] == "ctdl_test_seat_token"
+    assert cfg_path.exists()

@@ -149,3 +149,25 @@ def save_capture_config(
     os.chmod(tmp, 0o600)
     os.replace(tmp, config_path)
     return config_path
+
+
+def normalize_capture_root_paths(values: tuple[str, ...] | list[str]) -> tuple[str, ...]:
+    """Normalize and dedupe approved capture root paths (order-preserving)."""
+    seen: dict[str, None] = {}
+    for value in values:
+        stripped = str(value).strip()
+        if not stripped:
+            continue
+        seen.setdefault(normalize_path(stripped), None)
+    return tuple(seen)
+
+
+def matched_capture_root(target_path: str, root_paths: tuple[str, ...] | list[str]) -> str | None:
+    """Return the approved root path containing ``target_path``, if any."""
+    target = normalize_path(target_path)
+    for raw in root_paths:
+        base = normalize_path(str(raw))
+        prefix = base.rstrip(os.sep) + os.sep
+        if target == base or target.startswith(prefix):
+            return base
+    return None

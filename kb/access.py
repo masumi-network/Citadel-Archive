@@ -11,6 +11,7 @@ import secrets
 from typing import Any
 from uuid import uuid4
 
+from kb.capture_config import normalize_capture_root_paths
 from kb.capture_policy import SeatCapturePolicy, normalize_deny_globs
 from kb.promotion_queue import (
     APPROVED_STATUS,
@@ -22,6 +23,7 @@ from kb.promotion_queue import (
 logger = logging.getLogger(__name__)
 
 CENTRAL_DATASET = "masumi-network"
+SESSION_TRACES_DATASET = "session-traces"
 SEAT_DATASET_PREFIX = "seat:"
 SEAT_SLUG_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$")
 
@@ -124,6 +126,20 @@ class SeatCreation:
 class TokenSession:
     identity: AccessIdentity
     token_hash: str
+
+
+@dataclass(frozen=True)
+class SeatApprovedCaptureRoots:
+    paths: tuple[str, ...] = ()
+    updated_at: str | None = None
+    updated_by: str | None = None
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "paths": list(self.paths),
+            "updated_at": self.updated_at,
+            "updated_by": self.updated_by,
+        }
 
 
 @dataclass(frozen=True)
@@ -363,7 +379,7 @@ class AccessStore:
         # Derive Central from the caller-supplied dataset (resolved from config at
         # the API layer) so the seat's allowlist can never drift from the value the
         # write/search router actually targets.
-        allowed = (node_dataset, central_dataset)
+        allowed = (node_dataset, central_dataset, SESSION_TRACES_DATASET)
         principal = self.create_principal(
             name=name,
             kind="user",
@@ -415,7 +431,7 @@ class AccessStore:
             role=principal.role,
             default_dataset=node_dataset,
             default_session=session_id,
-            allowed_datasets=[node_dataset, central_dataset],
+            allowed_datasets=[node_dataset, central_dataset, SESSION_TRACES_DATASET],
         )
 
     def create_token(
@@ -640,6 +656,38 @@ class AccessStore:
         self._save(data)
         return policy
 
+    def get_approved_capture_roots(self, slug: str) -> SeatApprovedCaptureRoots:
+        normalized = validate_seat_slug(slug)
+        data = self._load()
+        stored = data.get("approved_capture_roots", {}).get(normalized, {})
+        return SeatApprovedCaptureRoots(
+            paths=normalize_capture_root_paths(tuple(stored.get("paths") or ())),
+            updated_at=stored.get("updated_at"),
+            updated_by=stored.get("updated_by"),
+        )
+
+    def set_approved_capture_roots(
+        self,
+        slug: str,
+        *,
+        paths: tuple[str, ...] | list[str],
+        actor_id: str | None = None,
+    ) -> SeatApprovedCaptureRoots:
+        normalized = validate_seat_slug(slug)
+        if not self.find_seat_by_slug(normalized):
+            raise ValueError(f"Seat not found: {normalized}")
+        roots = SeatApprovedCaptureRoots(
+            paths=normalize_capture_root_paths(paths),
+            updated_at=now_iso(),
+            updated_by=actor_id,
+        )
+        data = self._load()
+        approved_capture_roots = dict(data.get("approved_capture_roots", {}))
+        approved_capture_roots[normalized] = roots.to_dict()
+        data["approved_capture_roots"] = approved_capture_roots
+        self._save(data)
+        return roots
+
     def list_promotion_pending(
         self,
         *,
@@ -838,6 +886,7 @@ class AccessStore:
                 "tokens": [],
                 "audit_events": [],
                 "capture_policies": {},
+                "approved_capture_roots": {},
                 "promotion_pending": [],
             }
         with self.path.open("r", encoding="utf-8") as handle:
@@ -848,6 +897,7 @@ class AccessStore:
             "tokens": data.get("tokens", []),
             "audit_events": data.get("audit_events", []),
             "capture_policies": data.get("capture_policies", {}),
+            "approved_capture_roots": data.get("approved_capture_roots", {}),
             "promotion_pending": data.get("promotion_pending", []),
         }
 

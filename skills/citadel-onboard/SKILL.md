@@ -26,8 +26,9 @@ existing config (never clobbering) and safe to re-run:
 |---|---|---|
 | **Token** | Prompts for your `ctdl_…` seat token, writes `export CITADEL_MCP_ACCESS_TOKEN=…` to your shell rc (once) | yes |
 | **Git pre-push hook** | Installs `.git/hooks/pre-push` → commit snapshots to your **Node** | yes |
-| **Session hooks** | Merges the Claude Code `SessionEnd` + `SessionStart` hooks into `.claude/settings.json` | yes |
-| **MCP server** | Adds the `citadel` HTTP MCP server to `.mcp.json` (in-session `citadel_search` + `citadel_ingest`) | optional, default on (`--no-mcp` to skip) |
+| **Session hooks** | Merges the Claude Code `SessionEnd` + `SessionStart` hooks into user-scope `.claude/settings.json` (SessionEnd → private Node trace; SessionStart → proactive policy reminder) | yes |
+| **Agent policy** | Same three-rule proactive policy for every coding agent you use — see [Proactive agent policy](#proactive-agent-policy-after-onboard) | yes |
+| **MCP server** | Adds the `citadel` HTTP MCP server to `.mcp.json` (in-session `citadel_search`, `citadel_ingest`, `citadel_share_session`) | optional, default on (`--no-mcp` to skip) |
 | **Capture roots** | Optional `citadel setup` wizard → `~/.citadel/capture.json` | optional, prompted |
 
 ## Where to get the token
@@ -53,8 +54,9 @@ private channel only.
 - **Autonomous background sync** (git push, session close) is plain HTTPS +
   token — it does **not** need MCP.
 - **In-session vault search and proactive ingest** (`citadel_search`,
-  `citadel_ingest`) are MCP tools. Enable MCP (default) if you want your IDE
-  agent to ground answers in the vault; skip with `--no-mcp` for capture-only.
+  `citadel_ingest`, `citadel_share_session`) are MCP tools. Enable MCP (default)
+  if you want your IDE agent to ground answers in the vault and volunteer Shared
+  Session Traces after user approval; skip with `--no-mcp` for capture-only.
 - Manual ingest/search always works via the CLI (`citadel ingest`,
   `citadel search`, `citadel capture`) — both HTTP-backed against the Node by
   default (`--local` runs the in-process server stack instead).
@@ -104,6 +106,32 @@ in `argv`/process lists.
 `citadel status` additionally sees **local** hook/config state the server can't
 (the MCP `citadel_session` tool is the in-session whoami). For in-session reads
 and writes, prefer the `citadel_search` / `citadel_ingest` MCP tools.
+
+## Proactive agent policy (after onboard)
+
+Onboard installs the **same three-rule policy** for every supported coding agent
+(idempotent; safe to re-run):
+
+| Agent / tool | Where onboard writes it |
+|---|---|
+| **Codex, Pi, Cline, Zed**, and other AGENTS.md-aware clients | `AGENTS.md` (repo root, always) |
+| **Cursor** | `.cursor/rules/citadel-agent-policy.mdc` (`alwaysApply`) when Cursor is detected |
+| **Windsurf** | `.windsurf/rules/citadel-agent-policy.md` (`always_on`) when detected |
+| **Gemini CLI** | `GEMINI.md` when detected |
+| **Claude Code** | SessionStart hook in user-scope `.claude/settings.json` (`kb.hooks.sync_start`) |
+
+The policy itself — agents should use Citadel **without waiting to be asked**:
+
+1. **Search at task start** — `citadel_search` before coding (Central + your Node
+   + Shared Session Traces). Trace hits are `reference-only`; Central is
+   org-authoritative.
+2. **Share dead-end routes with consent** — after a costly wrong turn, ask the
+   user, then `citadel_share_session` (Approved Capture Root required).
+3. **Never auto-share** — SessionEnd hooks write private Node traces only;
+   Railway cron syncs org sources, not per-agent search or share decisions.
+
+Load the hosted proactive-ingest skill for hook/sync detail:
+`https://citadel-archive-production.up.railway.app/skills/proactive-ingest`
 
 ## Verify
 

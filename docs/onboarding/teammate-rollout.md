@@ -60,9 +60,11 @@ citadel onboard
 ```
 
 This runs all of the steps below for you — pastes your token into your shell rc
-(once, masked), installs the bundled git-push + SessionEnd hooks (`kb.hooks.*`,
-no vendoring), adds the Citadel MCP server, and offers to set up Approved
-Capture Roots. Idempotent; safe to re-run. `--no-mcp` for capture-only;
+(once, masked), installs the bundled git-push + SessionEnd/SessionStart hooks
+(`kb.hooks.*`, no vendoring), writes the proactive agent policy for your coding
+tools (`AGENTS.md` always; Cursor / Windsurf / Gemini native rules when detected;
+Claude Code via SessionStart), adds the Citadel MCP server, and offers to set up
+Approved Capture Roots. Idempotent; safe to re-run. `--no-mcp` for capture-only;
 `--non-interactive --json --token …` for agents/CI. See the
 [`citadel-onboard`](../../skills/citadel-onboard/SKILL.md) skill.
 
