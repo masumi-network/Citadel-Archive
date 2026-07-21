@@ -3238,6 +3238,58 @@ def test_seat_session_reports_own_seat_slug_and_node(tmp_path: Any) -> None:
     ]
 
 
+def test_me_summary_for_seat_reports_node_scope(tmp_path: Any) -> None:
+    app.state.access_store = AccessStore(tmp_path / "access.json")
+    admin = authed_client()
+    token = admin.post(
+        "/api/access/seats",
+        json={"name": "Nora", "slug": "nora"},
+    ).json()["token"]
+    api_client = TestClient(app, base_url="https://testserver")
+
+    summary = api_client.get(
+        "/api/me/summary", headers={"Authorization": f"Bearer {token}"}
+    )
+
+    assert summary.status_code == 200
+    payload = summary.json()
+    assert payload["ok"] is True
+    assert payload["seat_slug"] == "nora"
+    assert payload["node_dataset"] == "seat:nora"
+    assert payload["node_label"] == "nora's private Node"
+    assert payload["document_count"] == 0
+    assert payload["pending_promotions"] == 0
+    assert payload["empty"] is True
+    assert payload["search_datasets"][0] == "seat:nora"
+    assert any(item["id"] == "capture" for item in payload["checklist"])
+
+
+def test_me_summary_non_seat_has_null_seat(tmp_path: Any) -> None:
+    app.state.access_store = AccessStore(tmp_path / "access.json")
+    client = authed_client()
+    token = client.post(
+        "/api/access/tokens",
+        json={
+            "name": "plain-reader",
+            "role": "reader",
+            "kind": "service_account",
+            "default_dataset": "personal",
+        },
+    ).json()["token"]
+    api_client = TestClient(app, base_url="https://testserver")
+
+    summary = api_client.get(
+        "/api/me/summary", headers={"Authorization": f"Bearer {token}"}
+    )
+
+    assert summary.status_code == 200
+    payload = summary.json()
+    assert payload["seat_slug"] is None
+    assert payload["node_dataset"] is None
+    assert payload["checklist"] == []
+    assert payload["empty"] is False
+
+
 def test_non_seat_token_session_nulls_seat_slug(tmp_path: Any) -> None:
     # A plain (non-seat) token carries no seat marker; the self-describing scope
     # must null seat_slug and node_label rather than invent one.

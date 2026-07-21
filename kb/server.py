@@ -421,7 +421,7 @@ LOGIN_HTML = """<!doctype html>
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Citadel Admin</title>
+    <title>Citadel</title>
     <link rel="stylesheet" href="/static/styles.css" />
   </head>
   <body>
@@ -430,13 +430,13 @@ LOGIN_HTML = """<!doctype html>
         <div class="brand compact">
           <div class="brand-mark" aria-hidden="true">CA</div>
           <div>
-            <h1>Citadel Archive</h1>
-            <p>Workspace access</p>
+            <h1>Citadel</h1>
+            <p>Seat access</p>
           </div>
         </div>
         <form id="loginForm" class="form">
           <div class="field">
-            <label for="adminKey">Access key</label>
+            <label for="adminKey">Seat token or access key</label>
             <input
               id="adminKey"
               name="accessKey"
@@ -444,8 +444,13 @@ LOGIN_HTML = """<!doctype html>
               autocomplete="current-password"
               required
               autofocus
+              placeholder="ctdl_…"
             />
           </div>
+          <p class="form-hint">
+            Members: paste the seat token from your admin (or
+            <code>citadel seat token</code>). Operators: env admin key still works.
+          </p>
           <p id="loginError" class="form-error" role="alert"></p>
           <button id="loginSubmit" class="primary-button" type="submit">Open workspace</button>
         </form>
@@ -2097,6 +2102,120 @@ async def current_session(request: Request) -> dict[str, Any]:
         detail={"role": identity.role},
     )
     return {"ok": True, **role_payload(identity.role, identity)}
+
+
+@app.get("/api/me/summary")
+async def me_summary(request: Request) -> dict[str, Any]:
+    """Seat-home aggregates for the authenticated caller (Phase 1 portal).
+
+    Reflects only the caller's seat Node — never another seat's content.
+    Non-seat callers get ``seat_slug: null`` and empty Node stats.
+    """
+    identity = require_access(request, "reader", "kb:read")
+    config = get_citadel().config
+    scope = resolved_memory_scope(identity, config)
+    node = seat_node_dataset(identity)
+    seat_slug = identity.seat_slug
+
+    pending_count = 0
+    if seat_slug:
+        pending_count = len(
+            get_access_store().list_promotion_pending(
+                seat_slug=seat_slug,
+                status="pending",
+            )
+        )
+
+    document_count = 0
+    recent_activity: list[dict[str, Any]] = []
+    last_ingest_at: str | None = None
+    if node:
+        try:
+            snapshot = await get_mesh().snapshot(config)
+            scoped = scope_mesh_snapshot(snapshot, identity)
+            for mesh_node in scoped.get("nodes") or []:
+                if not isinstance(mesh_node, dict):
+                    continue
+                if mesh_node.get("type") != "document":
+                    continue
+                meta = mesh_node.get("metadata") if isinstance(mesh_node.get("metadata"), dict) else {}
+                if meta.get("dataset") == node:
+                    document_count += 1
+        except Exception:
+            logger.exception("me/summary mesh document count failed")
+
+        visible_cache: dict[str, bool] = {}
+
+        def _visible(dataset: str | None) -> bool:
+            if dataset is None:
+                return False
+            return _mesh_dataset_visible(identity, dataset, visible_cache)
+
+        try:
+            timeline = await get_mesh().timeline(limit=12, visible=_visible)
+            for event in timeline.get("events") or []:
+                if not isinstance(event, dict):
+                    continue
+                details = event.get("details") if isinstance(event.get("details"), dict) else {}
+                if details.get("dataset") != node:
+                    continue
+                recent_activity.append(
+                    {
+                        "id": event.get("id"),
+                        "type": event.get("type"),
+                        "message": event.get("message"),
+                        "created_at": event.get("created_at") or event.get("at"),
+                        "dataset": details.get("dataset"),
+                    }
+                )
+                if last_ingest_at is None and event.get("type") == "ingest":
+                    last_ingest_at = event.get("created_at") or event.get("at")
+        except Exception:
+            logger.exception("me/summary timeline failed")
+
+        if last_ingest_at is None:
+            for audit_event in reversed(get_access_store().snapshot().get("audit_events") or []):
+                if not isinstance(audit_event, dict):
+                    continue
+                if audit_event.get("dataset") != node or not audit_event.get("success"):
+                    continue
+                action = str(audit_event.get("action") or "")
+                if action == "ingest" or action.endswith("citadel_ingest"):
+                    last_ingest_at = audit_event.get("created_at")
+                    break
+
+    empty = bool(seat_slug) and document_count == 0
+    return {
+        "ok": True,
+        "seat_slug": seat_slug,
+        "node_label": scope.get("node_label"),
+        "node_dataset": node,
+        "search_datasets": scope.get("search_datasets") or [scope.get("default_dataset")],
+        "document_count": document_count,
+        "pending_promotions": pending_count,
+        "last_ingest_at": last_ingest_at,
+        "recent_activity": recent_activity[:8],
+        "empty": empty,
+        "checklist": [
+            {
+                "id": "capture",
+                "label": "Run capture or MCP ingest into your Node",
+                "done": document_count > 0,
+            },
+            {
+                "id": "search",
+                "label": "Search — Central is available even while your Node is empty",
+                "done": False,
+            },
+            {
+                "id": "promote",
+                "label": "Approve promotions when you want Node work in Central",
+                "done": pending_count == 0 and document_count > 0,
+            },
+        ]
+        if seat_slug
+        else [],
+    }
 
 
 @app.get("/api/access")

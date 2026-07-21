@@ -12,6 +12,11 @@ const state = {
   paused: false,
   eventSource: null,
   role: null,
+  seatSlug: null,
+  nodeLabel: null,
+  defaultDataset: null,
+  searchDatasets: null,
+  capabilities: null,
   githubSync: null,
   obsidianSources: null,
   accessSnapshot: null,
@@ -36,6 +41,7 @@ const systemStatus = document.querySelector(".system-status");
 const connectionLabel = document.getElementById("connectionLabel");
 const runtimeStatus = document.getElementById("runtimeStatus");
 const sessionRole = document.getElementById("sessionRole");
+const sessionSeat = document.getElementById("sessionSeat");
 const roleSummary = document.getElementById("roleSummary");
 const accessMode = document.getElementById("accessMode");
 const graphMeta = document.getElementById("graphMeta");
@@ -540,12 +546,44 @@ function roleLabel(role) {
   return "Read only";
 }
 
+function datasetSourceBadge(dataset) {
+  const name = String(dataset || "").trim();
+  if (!name) return { label: "Unknown source", kind: "unknown" };
+  if (name === CENTRAL_DATASET || name === "masumi-network") {
+    return { label: "Central", kind: "central" };
+  }
+  if (name.startsWith(SEAT_DATASET_PREFIX)) {
+    const slug = name.slice(SEAT_DATASET_PREFIX.length);
+    if (state.seatSlug && slug === state.seatSlug) {
+      return { label: "My Node", kind: "mine" };
+    }
+    return { label: `Seat ${slug}`, kind: "seat" };
+  }
+  if (name === "session-traces") {
+    return { label: "Shared traces", kind: "traces" };
+  }
+  return { label: name, kind: "other" };
+}
+
 function applyAccessControls() {
   const label = state.role ? roleLabel(state.role) : "Locked";
   sessionRole.textContent = label;
   sessionRole.className = `status-chip ${state.role ? "status-enabled" : "status-error"}`;
+  if (sessionSeat) {
+    if (state.seatSlug) {
+      sessionSeat.hidden = false;
+      sessionSeat.textContent = `Seat ${state.seatSlug}`;
+      sessionSeat.title = state.nodeLabel || `seat:${state.seatSlug}`;
+      sessionSeat.className = "status-chip status-enabled";
+    } else {
+      sessionSeat.hidden = true;
+      sessionSeat.textContent = "—";
+    }
+  }
   roleSummary.textContent = state.role
-    ? `${label} vault access`
+    ? state.seatSlug
+      ? `${label} · seat ${state.seatSlug}`
+      : `${label} vault access`
     : "No vault session";
   accessMode.textContent = label;
   accessMode.className = sessionRole.className;
@@ -584,11 +622,14 @@ function renderDashboardMcpSession() {
     dashboardMcpClients.textContent = state.role ? label : "Locked";
     dashboardMcpMeta.textContent = state.role ? "current session" : "login required";
   }
+  const seatLine = state.seatSlug
+    ? ` · seat ${escapeHtml(state.seatSlug)} (${escapeHtml(state.nodeLabel || `seat:${state.seatSlug}`)})`
+    : "";
   dashboardMcpList.innerHTML = `
     <div class="entity-item">
       <div>
         <strong>Current session</strong>
-        <p>${escapeHtml(label)} vault access${state.role ? " through cookie or bearer token" : ""}</p>
+        <p>${escapeHtml(label)} vault access${seatLine}${state.role ? " through cookie or bearer token" : ""}</p>
       </div>
       <span class="status-chip ${state.role ? "status-enabled" : "status-error"}">${escapeHtml(state.role || "none")}</span>
     </div>
@@ -599,6 +640,11 @@ async function loadSession() {
   try {
     const session = await api("/api/session");
     state.role = session.role;
+    state.seatSlug = session.seat_slug || null;
+    state.nodeLabel = session.node_label || null;
+    state.defaultDataset = session.default_dataset || null;
+    state.searchDatasets = session.search_datasets || null;
+    state.capabilities = session.capabilities || null;
     applyAccessControls();
   } catch {
     window.location.assign("/login");
@@ -609,6 +655,7 @@ async function loadSession() {
 function initialPage() {
   const hash = window.location.hash.replace("#", "");
   if (pages.some((page) => page.dataset.page === hash)) return hash;
+  if (state.seatSlug) return "home";
   return state.role === "admin" ? "overview" : "search";
 }
 
@@ -643,6 +690,9 @@ function setPage(name) {
   resizeCanvas();
   if (resolvedName === "access") {
     loadAccess();
+  }
+  if (resolvedName === "home") {
+    loadSeatHome();
   }
   if (resolvedName === "agents" || resolvedName === "audit") {
     loadAccess();
@@ -2584,6 +2634,97 @@ function renderKnowledgeSources(error = null) {
   });
 }
 
+async function loadSeatHome() {
+  const status = document.getElementById("homeStatus");
+  const seatEl = document.getElementById("homeSeatSlug");
+  const nodeLabelEl = document.getElementById("homeNodeLabel");
+  const docEl = document.getElementById("homeDocCount");
+  const pendingEl = document.getElementById("homePendingPromotions");
+  const lastEl = document.getElementById("homeLastIngest");
+  const emptyHint = document.getElementById("homeEmptyHint");
+  const checklist = document.getElementById("homeChecklist");
+  const activityList = document.getElementById("homeActivityList");
+  const title = document.getElementById("homeTitle");
+  if (!status || !checklist || !activityList) return;
+
+  if (!state.seatSlug) {
+    status.textContent = "No seat";
+    status.className = "status-chip status-standby";
+    if (title) title.textContent = "Workspace home";
+    if (seatEl) seatEl.textContent = "—";
+    if (nodeLabelEl) nodeLabelEl.textContent = "service account / no private Node";
+    if (docEl) docEl.textContent = "—";
+    if (pendingEl) pendingEl.textContent = "—";
+    if (lastEl) lastEl.textContent = "—";
+    if (emptyHint) emptyHint.hidden = true;
+    checklist.innerHTML = "";
+    activityList.innerHTML = "";
+    activityList.append(
+      emptyState(
+        "No seat on this token",
+        "Ask an admin for a seat-bound token to get a private Node home.",
+      ),
+    );
+    return;
+  }
+
+  status.textContent = "Loading";
+  status.className = "status-chip status-standby";
+  try {
+    const summary = await api("/api/me/summary");
+    if (title) title.textContent = summary.node_label || `Seat ${summary.seat_slug}`;
+    if (seatEl) seatEl.textContent = summary.seat_slug || state.seatSlug;
+    if (nodeLabelEl) {
+      nodeLabelEl.textContent = summary.node_dataset || `seat:${summary.seat_slug}`;
+    }
+    if (docEl) docEl.textContent = String(summary.document_count ?? 0);
+    if (pendingEl) pendingEl.textContent = String(summary.pending_promotions ?? 0);
+    if (lastEl) {
+      lastEl.textContent = summary.last_ingest_at
+        ? formatDate(summary.last_ingest_at)
+        : "Never";
+    }
+    if (emptyHint) emptyHint.hidden = !summary.empty;
+    checklist.innerHTML = "";
+    (summary.checklist || []).forEach((item) => {
+      const li = document.createElement("li");
+      li.className = item.done ? "seat-check done" : "seat-check";
+      li.innerHTML = `<span class="seat-check-mark" aria-hidden="true">${item.done ? "✓" : "○"}</span><span>${escapeHtml(item.label)}</span>`;
+      checklist.append(li);
+    });
+    activityList.innerHTML = "";
+    const events = summary.recent_activity || [];
+    if (!events.length) {
+      activityList.append(
+        emptyState(
+          "No Node activity yet",
+          "Capture from your IDE hooks or paste a note — writes land on your Node only.",
+        ),
+      );
+    } else {
+      events.forEach((event) => {
+        const row = document.createElement("div");
+        row.className = "entity-item";
+        row.innerHTML = `
+          <div>
+            <strong>${escapeHtml(event.type || "event")}</strong>
+            <p>${escapeHtml(event.message || event.dataset || "")}</p>
+          </div>
+          <span class="status-chip status-standby">${escapeHtml(formatDate(event.created_at))}</span>
+        `;
+        activityList.append(row);
+      });
+    }
+    status.textContent = summary.empty ? "Empty Node" : "Ready";
+    status.className = `status-chip ${summary.empty ? "status-standby" : "status-enabled"}`;
+  } catch (error) {
+    status.textContent = "Error";
+    status.className = "status-chip status-error";
+    activityList.innerHTML = "";
+    activityList.append(emptyState("Could not load seat home", error.message || "Try refresh."));
+  }
+}
+
 async function loadAccess() {
   if (!canUse("admin")) return;
   accessTokenStatus.textContent = "Loading";
@@ -3740,13 +3881,16 @@ function renderSearchResults(results, response = {}) {
     const sourceUrl = safeExternalUrl(provenance.source_url);
     const drilldown = envelope.retrieval?.document_drilldown_available === true;
     const rank = envelope.rank || index + 1;
+    const datasetName = envelope.dataset || result?.dataset || "";
+    const sourceBadge = datasetSourceBadge(datasetName);
     item.innerHTML = `
       <div class="result-header">
         <div>
-          <div class="result-meta">Citation ${escapeHtml(rank)} · ${escapeHtml(envelope.dataset || result?.dataset || "default dataset")}</div>
+          <div class="result-meta">Citation ${escapeHtml(rank)} · ${escapeHtml(datasetName || "default dataset")}</div>
           <strong>${escapeHtml(resultTitle(result, index))}</strong>
         </div>
         <div class="result-trust-chips" aria-label="Retrieval status">
+          <span class="status-chip source-badge source-badge-${escapeHtml(sourceBadge.kind)}">${escapeHtml(sourceBadge.label)}</span>
           <span class="status-chip status-standby">Untrusted context</span>
           <span class="status-chip ${drilldown ? "status-enabled" : ""}">${drilldown ? "Document" : "Chunk"}</span>
         </div>
