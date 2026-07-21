@@ -44,6 +44,7 @@ boundary rules.
 **Table of contents:**
 
 - [Prerequisites](#prerequisites)
+- [Rules vs skill vs MCP](#rules-vs-skill-vs-mcp)
 - [Claude Code](#claude-code)
 - [Claude Code (local + cloud)](#claude-code-local--cloud)
 - [Claude Desktop](#claude-desktop)
@@ -57,6 +58,23 @@ boundary rules.
 - [Tool Reference](#tool-reference)
 - [Troubleshooting](#troubleshooting)
 - [Architecture Notes](#architecture-notes)
+
+---
+
+## Rules vs skill vs MCP
+
+Citadel splits always-on policy, how-to guidance, and live tools on purpose:
+
+| Layer | What it is | When it runs |
+|---|---|---|
+| **Rules / SessionStart** | Always-on agent policy (search-first; traces are reference-only; share only with approval; CLI fallback when no `citadel_*` tools) | Every session — `AGENTS.md`, Cursor/Windsurf rules, Claude `SessionStart` (`kb.hooks.sync_start`) |
+| **Skill** | How-to: connect MCP, onboard, vault workflows, safety | When the agent loads `citadel-archive` / `/skills/connect` / `/skills/vault` |
+| **MCP** | The actual tools (`citadel_search`, `citadel_ingest`, …) | Only when the client has a live MCP connection + token in **process env** |
+
+PRs and docs never auto-inject secrets. `.mcp.json` may reference
+`${CITADEL_MCP_ACCESS_TOKEN}`, but Claude (local or cloud) only expands it when
+that variable is present in the process that launched the client. See
+[Claude Code (local + cloud)](#claude-code-local--cloud).
 
 ---
 

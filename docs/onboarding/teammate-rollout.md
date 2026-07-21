@@ -71,6 +71,20 @@ Approved Capture Roots. Idempotent; safe to re-run. `--no-mcp` for capture-only;
 The manual steps below are what `onboard` does under the hood (and the path if
 you'd rather do it by hand).
 
+### What onboard installs (rules vs skill vs MCP)
+
+| Layer | Installed by onboard | Purpose |
+|---|---|---|
+| **Rules / SessionStart** | `AGENTS.md` + Cursor/Windsurf rules; Claude `SessionStart` hook | Always-on: search before coding; traces are reference-only; share only with approval; if no `citadel_*` tools, use CLI (`citadel search` / `status` / `doctor`) |
+| **Skill** | Not installed by onboard — load via `npx skills add` or hosted `/skills/*` | How-to: connect, vault usage, onboard workflows |
+| **MCP** | Project `.mcp.json` with `${CITADEL_MCP_ACCESS_TOKEN}` | Live tools — only work when the token is in the **process env** that launched the client |
+
+**Claude MCP root cause (teammates hit this often):** the token must be in
+Claude's process environment. Local: `source ~/.zshrc` then launch `claude`.
+Cloud: set `CITADEL_MCP_ACCESS_TOKEN` in Claude cloud environment settings.
+PRs/docs do **not** inject secrets. Verify with `claude mcp list`, `/mcp`, and
+`citadel doctor`.
+
 ## Teammate — manual (4 steps)
 
 > All four use the **same** `CITADEL_MCP_ACCESS_TOKEN`. Set it once; everything
