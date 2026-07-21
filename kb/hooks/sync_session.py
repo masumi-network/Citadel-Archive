@@ -25,6 +25,9 @@ Design contract (reviewers verify these invariants):
 * **Size cap.** The note is truncated to ``CITADEL_MCP_MAX_INGEST_BYTES``
   (default 200000) before sending.
 * **Stdlib only.** Uses ``urllib`` from the standard library — no extra deps.
+* **Transcript path allowlist.** ``transcript_path`` must resolve under a known
+  agent transcript directory (``~/.claude``, ``~/.cursor``, ``~/.codex``,
+  ``~/.agents``, or ``$CITADEL_HOME``). Arbitrary local paths are refused.
 
 Hook payload (read from STDIN as JSON): ``transcript_path``, ``cwd``,
 ``session_id``, ``hook_event_name``.
@@ -36,6 +39,7 @@ import json
 import os
 import sys
 import urllib.request
+from pathlib import Path
 from typing import Any
 
 from kb.session_trace_distill import distill_node_note as distill_transcript
@@ -46,6 +50,15 @@ DEFAULT_MAX_INGEST_BYTES = 200_000
 DEFAULT_BASE_URL = "https://citadel-archive-production.up.railway.app"
 TOKEN_ENV = "CITADEL_MCP_ACCESS_TOKEN"
 HTTP_TIMEOUT_SECONDS = 10
+
+# Relative to the user home (or CITADEL_HOME). Transcripts outside these trees
+# are never opened — closes the arbitrary-local-file-read concern for Socket.
+_TRANSCRIPT_ALLOWLIST_DIRS = (
+    ".claude",
+    ".cursor",
+    ".codex",
+    ".agents",
+)
 
 
 class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
@@ -110,8 +123,46 @@ def read_hook_payload(stream: Any) -> dict[str, Any]:
     return payload if isinstance(payload, dict) else {}
 
 
+def _allowed_transcript_roots() -> list[Path]:
+    """Filesystem trees that may contain session transcripts."""
+    home = Path.home()
+    roots = [(home / rel).resolve() for rel in _TRANSCRIPT_ALLOWLIST_DIRS]
+    # Test/CI override: a single extra root (never used in production hooks).
+    extra = os.getenv("CITADEL_TRANSCRIPT_ALLOW_ROOT")
+    if extra:
+        try:
+            roots.append(Path(extra).expanduser().resolve())
+        except (OSError, RuntimeError):
+            pass
+    return roots
+
+
+def transcript_path_allowed(transcript_path: str) -> bool:
+    """True when ``transcript_path`` resolves under an allowlisted agent dir.
+
+    Refuses empty paths and anything outside ``~/{.claude,.cursor,.codex,.agents}/``
+    (plus optional ``CITADEL_TRANSCRIPT_ALLOW_ROOT`` for hermetic tests).
+    Symlinks are resolved before the check.
+    """
+    if not isinstance(transcript_path, str) or not transcript_path.strip():
+        return False
+    try:
+        resolved = Path(transcript_path).expanduser().resolve()
+    except (OSError, RuntimeError):
+        return False
+    for root in _allowed_transcript_roots():
+        try:
+            resolved.relative_to(root)
+            return True
+        except ValueError:
+            continue
+    return False
+
+
 def _iter_transcript(transcript_path: str) -> list[dict[str, Any]]:
     """Read a transcript JSONL file, skipping malformed lines. Never raises."""
+    if not transcript_path_allowed(transcript_path):
+        return []
     entries: list[dict[str, Any]] = []
     try:
         with open(transcript_path, encoding="utf-8", errors="replace") as handle:

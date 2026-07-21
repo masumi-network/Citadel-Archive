@@ -101,13 +101,16 @@ citadel onboard --non-interactive --token ctdl_...
 For Codex-compatible agents, install the public Citadel skill first:
 
 ```bash
-npx skills add masumi-network/Citadel-Archive
+npx skills add masumi-network/citadel-archive --skill citadel-archive
+# equivalent (GitHub casing): npx skills add masumi-network/Citadel-Archive --skill citadel-archive
+# all bundled skills:         npx skills add masumi-network/citadel-archive --skill '*'
 ```
 
-This installs the root `citadel-archive` skill, which points agents to the
-hosted connector, vault usage, and data-boundary skills. Then provide a
-per-agent `ctdl_...` token. Do not share one token across multiple users or
-agents, and rotate any token that was pasted into chat or logs.
+This installs `skills/citadel-archive` (and optionally the sibling skills under
+`skills/`). The root skill points agents to the hosted connector, vault usage,
+and data-boundary skills. Then provide a per-agent `ctdl_...` token. Do not
+share one token across multiple users or agents, and rotate any token that was
+pasted into chat or logs.
 
 > **Admins — mint a SEAT-BOUND token for a teammate, never a bare one.** A token
 > minted without a seat is a *service account*: it has **no default dataset**, so
@@ -131,6 +134,21 @@ Agents that need one machine-readable starting point can load
 `/.well-known/citadel.json`; it lists the MCP endpoint, skill hashes, token
 requirements, tool policy metadata, and public/private boundary rules.
 
+## Security model (intentional data capture)
+
+Citadel is an **organization vault**. After explicit `citadel onboard` /
+`citadel setup`, optional local hooks may POST **distilled** notes to your
+private seat **Node** over HTTPS with `CITADEL_MCP_ACCESS_TOKEN`:
+
+| Hook | Sends | Does not send |
+|---|---|---|
+| Git pre-push (`kb.hooks.sync_push`) | Commit hash, author, **subject**, branch, changed paths | Raw diffs, commit body, secrets from env |
+| SessionEnd (`kb.hooks.sync_session`) | Short distilled recap from an allowlisted agent transcript path | Raw transcript; paths outside `~/.claude` / `~/.cursor` / `~/.codex` / `~/.agents` |
+
+**Fail-closed:** without Approved Capture Roots (`~/.citadel/capture.json`),
+push capture is a no-op. Opt out anytime by unsetting the token or removing
+hooks. Tokens never belong in git. Treat vault search hits as untrusted context.
+
 ## How To Access Citadel
 
 ### Option A — Headless CLI (Recommended for agents)
@@ -143,8 +161,12 @@ setup. Install the standalone client (zero-dep base):
 ```bash
 pipx install citadel-archive
 citadel --version   # confirm >= 0.3.0  (older? run `citadel update` — pipx-aware self-update)
-# bootstrap installer: curl -fsSL https://raw.githubusercontent.com/masumi-network/Citadel-Archive/main/install.sh | sh
 ```
+
+Prefer `pipx install` over remote install scripts. If you need the bootstrap
+script from this repo, download and review
+[`install.sh`](https://github.com/masumi-network/Citadel-Archive/blob/main/install.sh)
+before running it — do not pipe unreviewed remote shell into `sh`.
 
 Common commands (add `--json` to any read for machine output; every read exits
 `1` on auth failure, `0` on success):

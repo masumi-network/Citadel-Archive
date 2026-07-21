@@ -160,8 +160,11 @@ Per-client setup: [`docs/mcp/README.md`](docs/mcp/README.md).
 Install agent skills from this repo:
 
 ```bash
-npx skills add masumi-network/Citadel-Archive
+npx skills add masumi-network/citadel-archive --skill citadel-archive
+# all bundled skills: npx skills add masumi-network/citadel-archive --skill '*'
 ```
+
+(`masumi-network/Citadel-Archive` works the same — GitHub is case-insensitive.)
 
 The hosted [`/skills`](https://citadel-archive-production.up.railway.app/skills) index and [discovery manifest](https://citadel-archive-production.up.railway.app/.well-known/citadel.json) publish skill hashes, MCP endpoint, token requirements, and public/private boundaries.
 
@@ -179,7 +182,7 @@ no `citadel_*` tools). Skills are how-to. MCP is the live tool surface — see
 5. **Share dead ends explicitly** — use `citadel_share_session` only after user approval.
 6. **Admin tools need approval** — do not trigger sync, backup, or improve cycles proactively.
 
-Skill reference: [`.claude/skills/citadel-archive/SKILL.md`](.claude/skills/citadel-archive/SKILL.md).
+Skill reference: [`skills/citadel-archive/SKILL.md`](skills/citadel-archive/SKILL.md).
 
 ### CLI for agents
 

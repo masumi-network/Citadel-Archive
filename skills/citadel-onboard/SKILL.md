@@ -48,6 +48,13 @@ private channel only.
   masks it).
 - Every dev-side hook is **fail-silent** — if Citadel is down or the token is
   unset, your `git push` and session close still succeed.
+- **Fail-closed capture:** push snapshots require Approved Capture Roots in
+  `~/.citadel/capture.json`. Onboard seeds the current repo as a root; without
+  roots the pre-push hook captures nothing (never "all repos by default").
+- SessionEnd only reads transcripts under known agent dirs
+  (`~/.claude`, `~/.cursor`, `~/.codex`, `~/.agents`).
+- Opt out: unset `CITADEL_MCP_ACCESS_TOKEN`, remove hooks, or delete capture
+  roots.
 
 ## MCP — needed or not?
 

@@ -169,8 +169,8 @@ command under `hooks.SessionEnd` with `allowedEnvVars: ["CITADEL_MCP_ACCESS_TOKE
 `python -m kb.hooks.sync_push` runs from a git **pre-push** hook. On every push it:
 
 1. reads pre-push ref lines from STDIN (or HEAD when invoked manually);
-2. collects commit hash, message, author, branch, and changed file paths — **no
-   raw diffs**;
+2. collects commit hash, **subject** (not body), author, branch, and changed
+   file paths — **no raw diffs and no commit message body**;
 3. POSTs `{data, tags}` with `tags = ["git-push", <branch>, <repo>]` (NO
    `dataset` → personal **Node**), HTTPS only;
 4. **fails silently** — always exits 0, never blocks `git push`.
@@ -188,10 +188,11 @@ Same `CITADEL_MCP_ACCESS_TOKEN` as SessionEnd and MCP. Works in Cursor, Codex,
 and Claude — any tool that uses git. This is the **only required dev-side sync
 step** for non-Claude IDEs.
 
-### Approved Capture Roots (opt-in allowlist)
+### Approved Capture Roots (required allowlist)
 
-By default the push hook captures from every repo. To scope capture to chosen
-folders, run the setup wizard once — it writes `~/.citadel/capture.json`:
+Push capture is **fail-closed**. Without `~/.citadel/capture.json` (or with an
+empty/corrupt allowlist), the pre-push hook captures nothing. `citadel onboard`
+seeds the current repo as a root; to add more folders:
 
 ```bash
 citadel setup                                   # interactive
@@ -202,11 +203,8 @@ Each root carries **Capture Root Tags**: `personal` (never promoted to Central)
 or `org-work` (eligible for Promotion Agent review). The token is **not** stored
 in the file — it stays in the environment.
 
-Once the config exists, `sync_push.py` only captures pushes from inside an
-Approved Capture Root (others are skipped with a warning), and the matched
-root's tags ride along on the snapshot. A missing/empty/corrupt config **fails
-closed** (captures nothing) — it never silently re-enables global capture.
-Capture on demand with:
+Once roots exist, `sync_push.py` only captures pushes from inside an Approved
+Capture Root (others are skipped with a warning). Capture on demand with:
 
 ```bash
 citadel capture --dry-run   # preview per-root summaries (no network)
@@ -272,8 +270,11 @@ push, session close, or agent work.
 
 - **Token from env only.** Read solely from `CITADEL_MCP_ACCESS_TOKEN`; never
   printed, echoed, or written to a tracked file.
-- **Distilled, not raw.** The hook sends a curated short note, not the
-  transcript.
+- **Distilled, not raw.** The SessionEnd hook sends a curated short note, not
+  the transcript. Push hooks send subject + paths only.
+- **Allowlist-required.** Missing `capture.json` → push capture is a no-op.
+- **Transcript path allowlist.** SessionEnd refuses paths outside
+  `~/.claude` / `~/.cursor` / `~/.codex` / `~/.agents`.
 - **Personal-by-default.** No `dataset` field on auto-sync → your seat node.
 - **HTTPS only.** The POST refuses any non-`https://` base URL.
 - **Non-blocking.** The hook always exits 0; a Citadel outage never delays your

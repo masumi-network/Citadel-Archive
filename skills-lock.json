@@ -4,8 +4,8 @@
     "citadel-archive": {
       "source": "masumi-network/Citadel-Archive",
       "sourceType": "github",
-      "skillPath": "SKILL.md",
-      "computedHash": "519edabf08fe2c621a0bf4c402f0d141bc5bec80beaea55a5e28c3bfc69026ae"
+      "skillPath": "skills/citadel-archive/SKILL.md",
+      "computedHash": "9bf7fd0691c79594467130f168f6297539723698757f97434f83e37f1013c325"
     }
   }
 }

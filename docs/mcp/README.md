@@ -26,11 +26,12 @@ Do not commit tokens or vault content to git. See [public-and-private.md](../pub
 For Codex-compatible agents, share the install command instead:
 
 ```bash
-npx skills add masumi-network/Citadel-Archive
+npx skills add masumi-network/citadel-archive --skill citadel-archive
 ```
 
-The root `citadel-archive` skill points agents to the hosted connector, vault
-usage, and boundary skills. See
+This installs `skills/citadel-archive` (use `--skill '*'` for all bundled
+skills). The skill points agents to the hosted connector, vault usage, and
+boundary skills. See
 [`../team-share-smoke-test.md`](../team-share-smoke-test.md) for the latest
 verified rollout checklist.
 
@@ -240,7 +241,7 @@ bridge rather than a direct `type: "http"` entry). Requires Node.js on PATH:
       "command": "npx",
       "args": [
         "-y",
-        "mcp-remote",
+        "mcp-remote@0.1.38",
         "https://citadel-archive-production.up.railway.app/mcp/",
         "--header",
         "Authorization: Bearer ${CITADEL_MCP_ACCESS_TOKEN}"
@@ -287,10 +288,10 @@ Append this to `~/.codex/config.toml`:
 command = "npx"
 args = [
   "-y",
-  "mcp-remote",
+  "mcp-remote@0.1.38",
   "https://citadel-archive-production.up.railway.app/mcp/",
   "--header",
-  "Authorization: Bearer PASTE_ONCE_IN_LOCAL_CODEX_CONFIG",
+  "Authorization: Bearer ${CITADEL_MCP_ACCESS_TOKEN}",
 ]
 
 [mcp_servers.citadel.tools.citadel_ingest]
@@ -388,10 +389,12 @@ The `plugins/citadel-archive-mcp/` directory contains a Codex-compatible plugin
 with `.codex-plugin/plugin.json`, `.mcp.json`, and bundled skills. Point Pi at
 this plugin directory.
 
-### Using the Root SKILL.md
+### Using `skills/citadel-archive/SKILL.md`
 
-The root `SKILL.md` at the project root is a standalone skill file. Any agent
-that discovers skills can load it to learn how to access Citadel.
+The canonical agent skill lives at `skills/citadel-archive/SKILL.md` (installable
+via `npx skills add masumi-network/citadel-archive --skill citadel-archive`).
+Any agent that can load a skill file can use it. Sibling how-to skills live
+under `skills/citadel-*`.
 
 ### Connecting from Pi
 
@@ -413,9 +416,9 @@ Authorization: Bearer ctdl_<your-token>
 If a client only supports stdio, bridge to the hosted endpoint:
 
 ```bash
-npx -y mcp-remote \
+npx -y mcp-remote@0.1.38 \
   https://citadel-archive-production.up.railway.app/mcp/ \
-  --header "Authorization: Bearer ctdl_..."
+  --header "Authorization: Bearer ${CITADEL_MCP_ACCESS_TOKEN}"
 ```
 
 The server exposes:

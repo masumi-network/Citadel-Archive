@@ -32,7 +32,7 @@ def test_format_commit_snapshot_includes_metadata() -> None:
         email="john@example.com",
         committed_at="2026-06-25 10:00:00 +0000",
         subject="feat: add git push sync",
-        body="Optional body line.",
+        body="Optional body line with secrets=should-not-appear",
         branch="main",
         remote_name="origin",
         remote_ref="refs/heads/main",
@@ -45,6 +45,8 @@ def test_format_commit_snapshot_includes_metadata() -> None:
     assert "feat: add git push sync" in note
     assert "kb/foo.py" in note
     assert "origin (main)" in note
+    assert "Optional body line" not in note
+    assert "should-not-appear" not in note
 
 
 def test_missing_token_no_post(monkeypatch: Any) -> None:
@@ -67,8 +69,10 @@ def test_missing_token_no_post(monkeypatch: Any) -> None:
 def test_post_omits_dataset_field(monkeypatch: Any, tmp_path: Path) -> None:
     monkeypatch.setenv("CITADEL_MCP_ACCESS_TOKEN", "ctdl_test_token")
     monkeypatch.setenv("CITADEL_BASE_URL", "https://example.invalid")
-    # No allowlist config → original always-capture behavior (hermetic).
-    monkeypatch.setenv("CITADEL_CAPTURE_CONFIG_PATH", str(tmp_path / "absent.json"))
+    # Fail-closed allowlist: approve the fake repo root used below.
+    config = tmp_path / "capture.json"
+    _write_capture_config(config, [{"path": "/tmp/repo", "tags": ["personal"]}])
+    monkeypatch.setenv("CITADEL_CAPTURE_CONFIG_PATH", str(config))
 
     captured: dict[str, Any] = {}
 
@@ -105,7 +109,8 @@ def test_post_omits_dataset_field(monkeypatch: Any, tmp_path: Path) -> None:
     assert sync_push.run(stdin, remote_name="origin") == 0
     body = captured["body"]
     assert "dataset" not in body
-    assert body["tags"] == ["git-push"]
+    assert "git-push" in body["tags"]
+    assert "personal" in body["tags"]
     assert captured["headers"].get("Authorization") == "Bearer ctdl_test_token"
 
 
@@ -116,8 +121,10 @@ def test_post_refuses_non_https() -> None:
 
 def test_run_swallows_post_errors(monkeypatch: Any, tmp_path: Path) -> None:
     monkeypatch.setenv("CITADEL_MCP_ACCESS_TOKEN", "ctdl_test_token")
-    # Hermetic: no allowlist config so the gate doesn't short-circuit _sync_one.
-    monkeypatch.setenv("CITADEL_CAPTURE_CONFIG_PATH", str(tmp_path / "absent.json"))
+    config = tmp_path / "capture.json"
+    _write_capture_config(config, [{"path": "/tmp/repo", "tags": ["personal"]}])
+    monkeypatch.setenv("CITADEL_CAPTURE_CONFIG_PATH", str(config))
+    monkeypatch.setattr(sync_push, "git_toplevel", lambda cwd="": "/tmp/repo")
 
     called: list[bool] = []
 
@@ -143,9 +150,27 @@ def _write_capture_config(path: Path, roots: list[dict[str, Any]]) -> None:
     path.write_text(json.dumps({"version": 1, "roots": roots}))
 
 
-def test_load_capture_roots_none_when_absent(monkeypatch: Any, tmp_path: Path) -> None:
+def test_load_capture_roots_empty_when_absent(monkeypatch: Any, tmp_path: Path) -> None:
     monkeypatch.setenv("CITADEL_CAPTURE_CONFIG_PATH", str(tmp_path / "absent.json"))
-    assert sync_push.load_capture_roots() is None
+    assert sync_push.load_capture_roots() == []
+
+
+def test_run_absent_config_fails_closed(monkeypatch: Any, tmp_path: Path, capsys) -> None:
+    monkeypatch.setenv("CITADEL_CAPTURE_CONFIG_PATH", str(tmp_path / "absent.json"))
+    monkeypatch.setenv("CITADEL_MCP_ACCESS_TOKEN", "ctdl_test_token")
+    monkeypatch.setattr(sync_push, "git_toplevel", lambda cwd="": "/tmp/some-repo")
+
+    posted: list[Any] = []
+    monkeypatch.setattr(sync_push, "_sync_one", lambda *a, **k: posted.append(k))
+
+    stdin = io.StringIO(
+        "refs/heads/main abcdef0123456789abcdef0123456789abcdef0 refs/heads/main "
+        + "0" * 40
+        + "\n"
+    )
+    assert sync_push.run(stdin, remote_name="origin") == 0
+    assert posted == []
+    assert "no Approved Capture Roots" in capsys.readouterr().err
 
 
 def test_load_capture_roots_empty_on_corrupt(monkeypatch: Any, tmp_path: Path) -> None:

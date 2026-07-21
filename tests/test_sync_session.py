@@ -42,10 +42,12 @@ def _sample_entries() -> list[dict[str, Any]]:
     ]
 
 
-def _write_transcript(tmp_path: Path, entries: list[Any]) -> Path:
+def _write_transcript(tmp_path: Path, entries: list[Any], monkeypatch: Any | None = None) -> Path:
     path = tmp_path / "transcript.jsonl"
     lines = [json.dumps(e) if not isinstance(e, str) else e for e in entries]
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    if monkeypatch is not None:
+        monkeypatch.setenv("CITADEL_TRANSCRIPT_ALLOW_ROOT", str(tmp_path))
     return path
 
 
@@ -104,7 +106,7 @@ def test_truncate_never_splits_multibyte() -> None:
 # --- defensive transcript parsing -------------------------------------------
 
 
-def test_malformed_lines_skipped_without_crash(tmp_path: Path) -> None:
+def test_malformed_lines_skipped_without_crash(tmp_path: Path, monkeypatch: Any) -> None:
     entries: list[Any] = [
         _user("Real prompt here."),
         "{ this is not valid json",
@@ -113,7 +115,7 @@ def test_malformed_lines_skipped_without_crash(tmp_path: Path) -> None:
         "still : not json :::",
         _assistant_text("We decided to ship it."),
     ]
-    path = _write_transcript(tmp_path, entries)
+    path = _write_transcript(tmp_path, entries, monkeypatch)
     parsed = sync_session._iter_transcript(str(path))
     # 3 valid dict entries; 2 malformed + 1 blank skipped.
     assert len(parsed) == 3
@@ -126,6 +128,14 @@ def test_iter_transcript_missing_file_returns_empty() -> None:
     assert sync_session._iter_transcript("/nonexistent/path/to/transcript.jsonl") == []
 
 
+def test_iter_transcript_refuses_paths_outside_allowlist(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    monkeypatch.delenv("CITADEL_TRANSCRIPT_ALLOW_ROOT", raising=False)
+    path = _write_transcript(tmp_path, _sample_entries())
+    assert sync_session._iter_transcript(str(path)) == []
+
+
 # --- run(): missing token -> no POST + clean exit ---------------------------
 
 
@@ -136,7 +146,7 @@ def test_missing_token_no_post_clean_exit(
     recorder = _RecordingPost()
     monkeypatch.setattr(sync_session, "post_ingest", recorder)
 
-    path = _write_transcript(tmp_path, _sample_entries())
+    path = _write_transcript(tmp_path, _sample_entries(), monkeypatch)
     payload = json.dumps(
         {
             "transcript_path": str(path),
@@ -180,7 +190,7 @@ def test_post_omits_dataset_field(monkeypatch: Any, tmp_path: Path) -> None:
 
     monkeypatch.setattr(sync_session.urllib.request, "urlopen", fake_urlopen)
 
-    path = _write_transcript(tmp_path, _sample_entries())
+    path = _write_transcript(tmp_path, _sample_entries(), monkeypatch)
     payload = json.dumps(
         {
             "transcript_path": str(path),
@@ -236,7 +246,7 @@ def test_run_swallows_post_errors(monkeypatch: Any, tmp_path: Path) -> None:
 
     monkeypatch.setattr(sync_session, "post_ingest", boom)
 
-    path = _write_transcript(tmp_path, _sample_entries())
+    path = _write_transcript(tmp_path, _sample_entries(), monkeypatch)
     payload = json.dumps({"transcript_path": str(path), "cwd": str(tmp_path)})
     assert sync_session.run(io.StringIO(payload)) == 0
 

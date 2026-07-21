@@ -400,7 +400,7 @@ def check_local_setup(repo: Path, config_path: Path | None = None) -> list[Check
         tags = sorted({tag for root in config.roots for tag in root.tags})
         detail = f"{len(config.roots)} root(s): {', '.join(tags)}"
     else:
-        detail = "none (push hook captures every repo)"
+        detail = "none (push hook captures nothing until `citadel setup`)"
     checks.append(Check("capture_roots", ok=True, detail=detail, data={"count": len(config.roots)}))
     return checks
 

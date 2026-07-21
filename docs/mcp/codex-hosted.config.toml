@@ -2,10 +2,11 @@
 command = "npx"
 args = [
   "-y",
-  "mcp-remote",
+  "mcp-remote@0.1.38",
   "https://citadel-archive-production.up.railway.app/mcp/",
   "--header",
-  "Authorization: Bearer PASTE_ONCE_IN_LOCAL_CODEX_CONFIG",
+  # Expand from the environment — never commit a literal ctdl_ token.
+  "Authorization: Bearer ${CITADEL_MCP_ACCESS_TOKEN}",
 ]
 
 [mcp_servers.citadel.tools.citadel_ingest]

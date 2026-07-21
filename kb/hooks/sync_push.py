@@ -17,7 +17,12 @@ Design contract (same invariants as ``sync_session.py``):
 
 * **One-token setup / personal-by-default.** ``CITADEL_MCP_ACCESS_TOKEN`` only;
   POST omits ``dataset`` so the seat-writer token routes to ``seat:{slug}``.
-* **Metadata, not raw diffs.** File paths and commit message only — no patch bodies.
+* **Metadata, not raw diffs.** File paths and commit **subject** only — no
+  patch bodies and no commit message body (keeps snapshots small and avoids
+  shipping long-form text that may contain secrets).
+* **Allowlist-required (fail-closed).** Without ``~/.citadel/capture.json`` (or
+  with an empty/corrupt allowlist), the hook captures nothing. ``citadel
+  onboard`` / ``citadel setup`` must approve roots first.
 * **Fail-silent / non-blocking.** Always exits 0; never blocks ``git push``.
 * **HTTPS only.** Refuses non-``https://`` base URLs.
 * **Size cap.** Truncates to ``CITADEL_MCP_MAX_INGEST_BYTES`` (default 200000).
@@ -45,7 +50,6 @@ DEFAULT_BASE_URL = "https://citadel-archive-production.up.railway.app"
 TOKEN_ENV = "CITADEL_MCP_ACCESS_TOKEN"
 HTTP_TIMEOUT_SECONDS = 10
 MAX_CHANGED_FILES = 80
-MAX_BODY_LINES = 24
 
 
 class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
@@ -129,18 +133,16 @@ def _norm_path(value: str) -> str:
     return os.path.realpath(os.path.abspath(expanded))
 
 
-def load_capture_roots() -> list[dict[str, Any]] | None:
+def load_capture_roots() -> list[dict[str, Any]]:
     """Approved Capture Roots from the local config.
 
-    Returns ``None`` only when no config file exists — the user has not opted
-    into the allowlist, so the hook keeps its original always-capture behavior.
-    A config that exists but is empty/corrupt returns ``[]`` (approve nothing):
-    once a user opts into the allowlist we fail CLOSED, never silently re-enable
-    global capture.
+    Always fail-closed: missing, empty, or corrupt ``capture.json`` returns
+    ``[]`` (approve nothing). Global capture without an explicit allowlist is
+    never enabled — run ``citadel onboard`` or ``citadel setup`` first.
     """
     path = capture_config_path()
     if not path.exists():
-        return None
+        return []
     try:
         data = json.loads(path.read_text())
     except Exception:
@@ -239,7 +241,7 @@ def format_commit_snapshot(
     email: str,
     committed_at: str,
     subject: str,
-    body: str,
+    body: str = "",  # accepted for API compat; never included in the note
     branch: str,
     remote_name: str,
     remote_ref: str,
@@ -265,11 +267,7 @@ def format_commit_snapshot(
 
     lines.append("")
     lines.append(f"**{subject or '(no subject)'}**")
-    if body:
-        trimmed = [ln for ln in body.splitlines() if ln.strip()][:MAX_BODY_LINES]
-        if trimmed:
-            lines.append("")
-            lines.extend(trimmed)
+    # Commit message bodies are intentionally omitted (subject + paths only).
 
     if changed_files:
         lines.append("")
@@ -390,20 +388,24 @@ def run(stdin: Any, remote_name: str = "") -> int:
 
         cwd = git_toplevel()
 
-        # ADR-0007 P4.3: once the user opts into the local allowlist
-        # (~/.citadel/capture.json exists), only push from an Approved Capture
-        # Root captures; other repos are skipped with a warning.
+        # ADR-0007 P4.3 (fail-closed): only push from an Approved Capture Root.
+        # Missing/empty/corrupt ~/.citadel/capture.json → capture nothing.
         roots = load_capture_roots()
         capture_tags: list[str] = []
-        if roots is not None:
-            match = matched_root(cwd, roots)
-            if match is None:
-                sys.stderr.write(
-                    f"citadel: {cwd} is not an Approved Capture Root; skipping "
-                    "capture (run `citadel setup` to approve it).\n"
-                )
-                return 0
-            capture_tags = list(match["tags"])
+        if not roots:
+            sys.stderr.write(
+                "citadel: no Approved Capture Roots configured; skipping "
+                "capture (run `citadel onboard` or `citadel setup`).\n"
+            )
+            return 0
+        match = matched_root(cwd, roots)
+        if match is None:
+            sys.stderr.write(
+                f"citadel: {cwd} is not an Approved Capture Root; skipping "
+                "capture (run `citadel setup` to approve it).\n"
+            )
+            return 0
+        capture_tags = list(match["tags"])
 
         raw = stdin.read() if hasattr(stdin, "read") else ""
         pushes = parse_pre_push_lines(raw)

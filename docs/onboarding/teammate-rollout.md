@@ -141,10 +141,11 @@ Works for Cursor, Codex, and Claude — git hooks are IDE-agnostic. Installs a
 self-contained `.git/hooks/pre-push` that runs `"<python>" -m kb.hooks.sync_push`,
 and wires the SessionEnd hook for Claude Code.
 
-### 5 · (Optional) Approved Capture Roots
+### 5 · Approved Capture Roots (required for push capture)
 
-By default the push hook captures from **every** repo you push. To scope capture
-to specific folders instead, declare **Approved Capture Roots** once:
+Push capture is **fail-closed**. Without Approved Capture Roots the pre-push
+hook captures nothing. `citadel onboard` seeds the current repo; to add more
+folders:
 
 ```bash
 # Interactive wizard — pick folders + Capture Root Tags, writes ~/.citadel/capture.json
@@ -158,10 +159,9 @@ Each root is tagged: `personal` (never promoted to Central) or `org-work`
 (eligible for Promotion Agent review). The seat token stays in your environment
 — it is never written to `capture.json`.
 
-Once the config exists, the push hook **only** captures pushes from inside an
-Approved Capture Root; pushes from other repos are skipped with a warning. A
-corrupt or empty config fails closed (captures nothing) — it never re-enables
-global capture. You can also capture on demand:
+The push hook **only** captures pushes from inside an Approved Capture Root;
+pushes from other repos are skipped with a warning. A missing, corrupt, or empty
+config fails closed (captures nothing). You can also capture on demand:
 
 ```bash
 citadel capture --dry-run   # preview the per-root summaries (no network)
@@ -219,7 +219,7 @@ auth error, your token isn't in the environment of the client that's running
 | Trigger | Captures | Destination |
 |---|---|---|
 | Claude Code `SessionEnd` | 1–2 line recap, decisions, files changed | your **Node** |
-| `git push` | commit hash, message, author, branch, changed paths | your **Node** |
+| `git push` | commit hash, **subject**, author, branch, changed paths | your **Node** |
 | Railway GitHub cron | org repo digest | **Central** |
 | Railway Linear cron | workspace + your assigned issues (**Seat-Scoped Mirror**) | **Central** + your **Node** |
 
@@ -229,8 +229,9 @@ auth error, your token isn't in the environment of the client that's running
   **Node**. **Central** copies come from the **Promotion Agent** (known org work)
   or your **Promotion Approval** when a **New Org Project** is proposed — not
   from ingest tags.
-- **Allowlist-aware (opt-in).** If you ran `citadel setup`, the push hook only
-  captures from Approved Capture Roots; without it, every repo is captured.
+- **Allowlist-required (fail-closed).** Without Approved Capture Roots the push
+  hook captures nothing; `citadel onboard` / `citadel setup` must approve folders
+  first.
 - **No raw content.** Hooks capture metadata + a distilled recap, never raw
   transcripts or diffs.
 

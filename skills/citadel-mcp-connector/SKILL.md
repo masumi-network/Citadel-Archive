@@ -1,6 +1,15 @@
 ---
 name: citadel-mcp-connector
-description: Connects Claude Code, Cursor, Codex, or any MCP-capable agent to the Citadel Archive Organization Vault over its hosted MCP endpoint — no clone, no Python, no local install. Use when the user shares this skill URL, pastes a Citadel token, or says connect/set up/configure Citadel MCP, citadel plugin, organization vault MCP, or "add citadel to my agent". Run the full workflow: detect client, collect only the token, write the remote MCP config (URL + Authorization header), verify, then search the vault. Triggers include "connect citadel", "set up citadel mcp", "citadel mcp connector", "citadel archive mcp", and https://citadel-archive-production.up.railway.app/skills/connect.
+description: >-
+  Connects Claude Code, Cursor, Codex, or any MCP-capable agent to the Citadel
+  Archive Organization Vault over its hosted MCP endpoint (no clone, no Python,
+  no local install). Use when the user shares this skill URL, pastes a Citadel
+  token, or says connect/set up/configure Citadel MCP, citadel plugin,
+  organization vault MCP, or add citadel to my agent. Run the full workflow:
+  detect client, collect only the token, write the remote MCP config
+  (URL + Authorization header), verify, then search the vault. Triggers include
+  connect citadel, set up citadel mcp, citadel mcp connector, citadel archive mcp,
+  and https://citadel-archive-production.up.railway.app/skills/connect.
 ---
 
 # Citadel MCP Connector
@@ -27,10 +36,11 @@ Boundary detail: `https://citadel-archive-production.up.railway.app/skills/bound
 
 - Connect (this skill): `https://citadel-archive-production.up.railway.app/skills/connect`
 - After MCP works: `https://citadel-archive-production.up.railway.app/skills/vault`
-- Full repo skill install: `npx skills add masumi-network/Citadel-Archive`
+- Full repo skill install: `npx skills add masumi-network/citadel-archive --skill citadel-archive`
 
-If the user shares the `npx skills add` command, install the root
-`citadel-archive` skill first, then continue this connector workflow.
+If the user shares the `npx skills add` command, install the `citadel-archive`
+skill first (optionally `--skill '*'` for all bundled skills), then continue
+this connector workflow.
 
 ## Agent workflow (run in order)
 
@@ -134,11 +144,14 @@ For a client that only speaks stdio, bridge to the hosted endpoint with
 [mcp_servers.citadel]
 command = "npx"
 args = [
-  "-y", "mcp-remote",
+  "-y", "mcp-remote@0.1.38",
   "https://citadel-archive-production.up.railway.app/mcp/",
-  "--header", "Authorization: Bearer ctdl_...",
+  "--header", "Authorization: Bearer ${CITADEL_MCP_ACCESS_TOKEN}",
 ]
 ```
+
+Pin `mcp-remote` (do not use floating `mcp-remote` / latest). Prefer env
+substitution for the token — never commit a literal `ctdl_` value.
 
 #### Any other MCP host
 
@@ -248,6 +261,18 @@ write tools. The server also runs a secret/sensitivity scan on every write.
 - Never ingest secrets, API keys, tokens, passwords, private keys, seed phrases, PII,
   or raw logs — the server secret gate blocks many patterns but curation is still required.
 - Approval-gate all write/admin tools when the client supports per-tool approval.
+
+## Security
+
+This connector only configures a **remote MCP URL** plus an Authorization
+header. It does not install background hooks by itself. Trust boundary:
+
+- Hosted endpoint is the org's Citadel Node (default Railway URL above).
+- The token stays in env / client secret store — never in tracked git files.
+- Prefer native HTTP MCP (`type: http`) over `mcp-remote`; when a stdio bridge
+  is required, pin `mcp-remote@0.1.38` and pass the token via env expansion.
+- If no `citadel_*` tools register, fall back to the CLI (`citadel search`,
+  `citadel status`, `citadel doctor`) instead of re-authing MCP forever.
 
 ## Troubleshooting
 
