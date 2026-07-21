@@ -32,17 +32,12 @@ def merge_capture_root_paths(
     return normalize_capture_root_paths((*server_paths, *local_paths))
 
 
-def sync_local_capture_roots_to_server(
+def _sync_local_capture_roots_once(
     config: CaptureConfig,
     *,
     base_url: str | None = None,
     token: str | None = None,
 ) -> CaptureRootsSyncResult:
-    """Merge local roots into the seat's server-approved list (best-effort).
-
-    Non-seat tokens and offline Nodes are skipped with a warning — local setup
-    must still succeed when sync cannot run.
-    """
     local_paths = tuple(root.path for root in config.roots)
     if not local_paths:
         return CaptureRootsSyncResult(
@@ -109,6 +104,32 @@ def sync_local_capture_roots_to_server(
         seat_slug=seat_slug,
         merged_count=len(merged),
     )
+
+
+def sync_local_capture_roots_to_server(
+    config: CaptureConfig,
+    *,
+    base_url: str | None = None,
+    token: str | None = None,
+) -> CaptureRootsSyncResult:
+    """Merge local roots into the seat's server-approved list (best-effort).
+
+    Non-seat tokens and offline Nodes are skipped with a warning — local setup
+    must still succeed when sync cannot run. Transient Node errors are retried
+    once before returning a failed result.
+    """
+    result = _sync_local_capture_roots_once(
+        config,
+        base_url=base_url,
+        token=token,
+    )
+    if result.status == "failed":
+        result = _sync_local_capture_roots_once(
+            config,
+            base_url=base_url,
+            token=token,
+        )
+    return result
 
 
 def sync_warning_message(result: CaptureRootsSyncResult) -> str | None:

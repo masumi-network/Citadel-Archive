@@ -116,14 +116,56 @@ def test_sync_failed_on_node_error(monkeypatch: pytest.MonkeyPatch) -> None:
     config = CaptureConfig(node_url="https://node.example").with_root("/tmp/a", ["personal"])
     monkeypatch.setenv("CITADEL_MCP_ACCESS_TOKEN", "ctdl_tok")
     monkeypatch.setattr("kb.capture_roots_sync.resolve_seat_slug", lambda *a, **k: "alice")
+    attempts = 0
 
     def boom(*args: Any, **kwargs: Any) -> dict[str, Any]:
+        nonlocal attempts
+        attempts += 1
         raise PromotionClientError("offline", status=None)
 
     monkeypatch.setattr("kb.capture_roots_sync.get_seat_capture_roots", boom)
     result = sync_local_capture_roots_to_server(config)
     assert result.status == "failed"
     assert "offline" in result.detail
+    assert attempts == 2
+
+
+def test_sync_retries_once_then_succeeds(monkeypatch: pytest.MonkeyPatch) -> None:
+    from kb.promotion_client import PromotionClientError
+
+    config = CaptureConfig(node_url="https://node.example").with_root("/tmp/new", ["org-work"])
+    calls: dict[str, Any] = {}
+    get_attempts = 0
+
+    monkeypatch.setenv("CITADEL_MCP_ACCESS_TOKEN", "ctdl_tok")
+    monkeypatch.setattr("kb.capture_roots_sync.resolve_seat_slug", lambda *a, **k: "alice")
+
+    def flaky_get(slug: str, *, base_url: str, token: str | None = None) -> dict[str, Any]:
+        nonlocal get_attempts
+        get_attempts += 1
+        if get_attempts == 1:
+            raise PromotionClientError("offline", status=None)
+        calls["get"] = (slug, base_url, token)
+        return {"roots": ["/tmp/existing"]}
+
+    def fake_put(
+        slug: str,
+        roots: list[str],
+        *,
+        base_url: str,
+        token: str | None = None,
+    ) -> dict[str, Any]:
+        calls["put"] = (slug, roots, base_url, token)
+        return {"ok": True, "roots": roots}
+
+    monkeypatch.setattr("kb.capture_roots_sync.get_seat_capture_roots", flaky_get)
+    monkeypatch.setattr("kb.capture_roots_sync.update_seat_capture_roots", fake_put)
+
+    result = sync_local_capture_roots_to_server(config)
+    assert result.status == "synced"
+    assert result.seat_slug == "alice"
+    assert get_attempts == 2
+    assert calls["put"][1] == ["/tmp/existing", "/tmp/new"]
 
 
 def test_sync_warning_message_for_failure() -> None:
