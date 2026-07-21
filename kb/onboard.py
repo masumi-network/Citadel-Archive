@@ -24,7 +24,12 @@ from kb.capture_config import DEFAULT_NODE_URL
 from kb.hooks.sync_start import AGENT_POLICY_REMINDER
 
 TOKEN_ENV = "CITADEL_MCP_ACCESS_TOKEN"
+AGENTS_MD_FILENAME = "AGENTS.md"
+GEMINI_MD_FILENAME = "GEMINI.md"
 CURSOR_POLICY_RULE_FILENAME = "citadel-agent-policy.mdc"
+WINDSURF_POLICY_RULE_FILENAME = "citadel-agent-policy.md"
+POLICY_MARKER_START = "<!-- citadel-agent-policy:start -->"
+POLICY_MARKER_END = "<!-- citadel-agent-policy:end -->"
 MCP_SERVER_NAME = "citadel"
 PUSH_MODULE = "kb.hooks.sync_push"
 SESSION_MODULE = "kb.hooks.sync_session"
@@ -279,6 +284,63 @@ def merge_claude_settings(path: Path, python: str | None = None) -> str:
     return "added"
 
 
+def agent_policy_section() -> str:
+    """Marked policy block for AGENTS.md / GEMINI.md idempotent merge."""
+    body = AGENT_POLICY_REMINDER.strip()
+    return f"{POLICY_MARKER_START}\n{body}\n{POLICY_MARKER_END}\n"
+
+
+def _merge_marked_section(existing: str, section: str) -> tuple[str, bool]:
+    """Insert or replace a marked section; return (content, changed)."""
+    if POLICY_MARKER_START in existing and POLICY_MARKER_END in existing:
+        before, rest = existing.split(POLICY_MARKER_START, 1)
+        _, after = rest.split(POLICY_MARKER_END, 1)
+        merged = f"{before.rstrip()}\n\n{section}{after.lstrip()}"
+        if not before.rstrip():
+            merged = f"{section}{after.lstrip()}"
+        if merged == existing:
+            return existing, False
+        return merged, True
+    if existing.strip():
+        merged = f"{existing.rstrip()}\n\n{section}"
+    else:
+        merged = section
+    if merged == existing:
+        return existing, False
+    return merged, True
+
+
+def _write_text_file_idempotent(path: Path, payload: str) -> str:
+    """Write ``payload`` to ``path`` when missing or different."""
+    if path.exists():
+        try:
+            if path.read_text() == payload:
+                return "unchanged"
+        except OSError:
+            pass
+        status = "updated"
+    else:
+        status = "added"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(payload)
+    return status
+
+
+def install_markdown_policy_file(path: Path) -> str:
+    """Merge Citadel agent policy into a markdown instruction file (idempotent)."""
+    section = agent_policy_section()
+    try:
+        existing = path.read_text() if path.exists() else ""
+    except OSError:
+        existing = ""
+    merged, changed = _merge_marked_section(existing, section)
+    if not changed:
+        return "unchanged"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(merged)
+    return "updated" if existing.strip() else "added"
+
+
 def cursor_agent_policy_rule_text() -> str:
     """Cursor rule mirroring the SessionStart hook's static agent policy."""
     return (
@@ -290,22 +352,63 @@ def cursor_agent_policy_rule_text() -> str:
     )
 
 
+def windsurf_agent_policy_rule_text() -> str:
+    """Windsurf rule with ``always_on`` trigger — same core policy as other agents."""
+    return (
+        "---\n"
+        "description: Citadel agent policy — search before coding, traces are reference-only\n"
+        "trigger: always_on\n"
+        "---\n\n"
+        f"{AGENT_POLICY_REMINDER}\n"
+    )
+
+
 def install_cursor_agent_policy_rule(repo: Path) -> str:
     """Install the Citadel agent policy into ``.cursor/rules/`` (idempotent)."""
     dst = repo / ".cursor" / "rules" / CURSOR_POLICY_RULE_FILENAME
-    payload = cursor_agent_policy_rule_text()
-    if dst.exists():
-        try:
-            if dst.read_text() == payload:
-                return "unchanged"
-        except OSError:
-            pass
-        status = "updated"
-    else:
-        status = "added"
-    dst.parent.mkdir(parents=True, exist_ok=True)
-    dst.write_text(payload)
-    return status
+    return _write_text_file_idempotent(dst, cursor_agent_policy_rule_text())
+
+
+def install_windsurf_agent_policy_rule(repo: Path) -> str:
+    """Install the Citadel agent policy into ``.windsurf/rules/`` (idempotent)."""
+    dst = repo / ".windsurf" / "rules" / WINDSURF_POLICY_RULE_FILENAME
+    return _write_text_file_idempotent(dst, windsurf_agent_policy_rule_text())
+
+
+def install_agent_policies(repo: Path, *, detected: list[str] | None = None) -> list[tuple[str, str]]:
+    """Install Citadel agent policy for every supported coding agent.
+
+    * **AGENTS.md** — Codex (CLI + app), Cursor (fallback), Pi, Cline, Zed, and
+      other AGENTS.md-aware tools (always installed at repo root).
+    * **Cursor** — ``.cursor/rules/*.mdc`` with ``alwaysApply`` when Cursor is
+      detected.
+    * **Windsurf** — ``.windsurf/rules/*.md`` with ``trigger: always_on`` when
+      Windsurf is detected.
+    * **Gemini CLI** — ``GEMINI.md`` when Gemini is detected (native filename).
+    * **Claude Code** — policy is injected by the SessionStart hook installed via
+      ``merge_claude_settings`` (user-scope, cross-repo).
+    """
+    if detected is None:
+        from kb.tool_detect import detect
+
+        detected = detect()
+
+    steps: list[tuple[str, str]] = [
+        (f"Agent policy ({AGENTS_MD_FILENAME})", install_markdown_policy_file(repo / AGENTS_MD_FILENAME)),
+    ]
+    if "cursor" in detected:
+        steps.append(
+            ("Cursor agent policy (.cursor/rules)", install_cursor_agent_policy_rule(repo))
+        )
+    if "windsurf" in detected:
+        steps.append(
+            ("Windsurf agent policy (.windsurf/rules)", install_windsurf_agent_policy_rule(repo))
+        )
+    if "gemini" in detected:
+        steps.append(
+            (f"Gemini agent policy ({GEMINI_MD_FILENAME})", install_markdown_policy_file(repo / GEMINI_MD_FILENAME))
+        )
+    return steps
 
 
 def install_pre_push_hook(repo: Path, python: str | None = None) -> str:
