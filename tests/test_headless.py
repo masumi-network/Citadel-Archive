@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -41,10 +42,12 @@ def test_bare_citadel_shows_home_screen(monkeypatch, capsys) -> None:
         kb.cli.main()
     assert exc.value.code == 0
     out = capsys.readouterr().out
-    assert "the organization vault" in out         # hero tagline
-    assert "____" in out                            # CITADEL wordmark hero
-    assert "onboard" in out and "status" in out     # curated command menu
-    assert "Get started" in out                     # grouped menu
+    # Strip ANSI so per-glyph color on the figlet hero still matches.
+    plain = re.sub(r"\x1b\[[0-9;]*m", "", out)
+    assert "the organization vault" in plain         # hero tagline
+    assert "____" in plain                            # CITADEL wordmark hero
+    assert "onboard" in plain and "status" in plain     # curated command menu
+    assert "Get started" in plain                     # grouped menu
 
 
 def test_unknown_command_suggests_closest(capsys) -> None:

@@ -4,34 +4,71 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Citadel Archive</title>
-    <link rel="stylesheet" href="/static/styles.css" />
+    <link rel="icon" href="/static/favicon.svg" type="image/svg+xml" />
+    <link rel="stylesheet" href="/static/styles.css?v=pixel-bastion-4" />
   </head>
   <body>
     <div class="app-frame">
-      <header class="topbar">
-        <div class="brand compact">
-          <div class="brand-mark" aria-hidden="true">CA</div>
-          <div>
-            <h1>Citadel Vault</h1>
-            <p>Organization Vault</p>
-          </div>
-        </div>
-        <div class="system-status">
-          <span class="status-dot" aria-hidden="true"></span>
-          <span id="connectionLabel">Connecting</span>
-          <span id="sessionSeat" class="status-chip" hidden>—</span>
-          <span id="sessionRole" class="status-chip">Checking</span>
-          <button id="refreshButton" class="secondary-button compact-button" type="button">
-            Refresh
-          </button>
-          <button id="logoutButton" class="secondary-button compact-button" type="button">
-            Log out
-          </button>
-        </div>
-      </header>
-
       <div class="shell">
         <aside class="sidebar" aria-label="Workspace navigation">
+          <div class="sidebar-brand">
+            <div class="brand-pixel-grid" aria-hidden="true">
+              <span class="brand-pixel brand-pixel--c0 brand-pixel--lit"></span>
+              <span class="brand-pixel brand-pixel--c1"></span>
+              <span class="brand-pixel brand-pixel--c2 brand-pixel--lit"></span>
+              <span class="brand-pixel brand-pixel--c3"></span>
+              <span class="brand-pixel brand-pixel--c4 brand-pixel--lit"></span>
+              <span class="brand-pixel brand-pixel--c5"></span>
+              <span class="brand-pixel brand-pixel--c6 brand-pixel--lit"></span>
+              <span class="brand-pixel brand-pixel--c0 brand-pixel--lit"></span>
+              <span class="brand-pixel brand-pixel--c1 brand-pixel--lit"></span>
+              <span class="brand-pixel brand-pixel--c2 brand-pixel--lit"></span>
+              <span class="brand-pixel brand-pixel--c3 brand-pixel--lit"></span>
+              <span class="brand-pixel brand-pixel--c4 brand-pixel--lit"></span>
+              <span class="brand-pixel brand-pixel--c5 brand-pixel--lit"></span>
+              <span class="brand-pixel brand-pixel--c6 brand-pixel--lit"></span>
+              <span class="brand-pixel brand-pixel--c0 brand-pixel--lit"></span>
+              <span class="brand-pixel brand-pixel--c1 brand-pixel--lit"></span>
+              <span class="brand-pixel brand-pixel--c2 brand-pixel--lit brand-pixel--window"></span>
+              <span class="brand-pixel brand-pixel--c3 brand-pixel--lit"></span>
+              <span class="brand-pixel brand-pixel--c4 brand-pixel--lit brand-pixel--window"></span>
+              <span class="brand-pixel brand-pixel--c5 brand-pixel--lit"></span>
+              <span class="brand-pixel brand-pixel--c6 brand-pixel--lit"></span>
+              <span class="brand-pixel brand-pixel--c0 brand-pixel--lit"></span>
+              <span class="brand-pixel brand-pixel--c1 brand-pixel--lit"></span>
+              <span class="brand-pixel brand-pixel--c2 brand-pixel--lit brand-pixel--window"></span>
+              <span class="brand-pixel brand-pixel--c3 brand-pixel--lit"></span>
+              <span class="brand-pixel brand-pixel--c4 brand-pixel--lit brand-pixel--window"></span>
+              <span class="brand-pixel brand-pixel--c5 brand-pixel--lit"></span>
+              <span class="brand-pixel brand-pixel--c6 brand-pixel--lit"></span>
+              <span class="brand-pixel brand-pixel--c0 brand-pixel--lit"></span>
+              <span class="brand-pixel brand-pixel--c1 brand-pixel--lit"></span>
+              <span class="brand-pixel brand-pixel--c2 brand-pixel--lit"></span>
+              <span class="brand-pixel brand-pixel--c3 brand-pixel--lit"></span>
+              <span class="brand-pixel brand-pixel--c4 brand-pixel--lit"></span>
+              <span class="brand-pixel brand-pixel--c5 brand-pixel--lit"></span>
+              <span class="brand-pixel brand-pixel--c6 brand-pixel--lit"></span>
+              <span class="brand-pixel brand-pixel--c0 brand-pixel--lit"></span>
+              <span class="brand-pixel brand-pixel--c1 brand-pixel--lit"></span>
+              <span class="brand-pixel brand-pixel--c2"></span>
+              <span class="brand-pixel brand-pixel--c3"></span>
+              <span class="brand-pixel brand-pixel--c4"></span>
+              <span class="brand-pixel brand-pixel--c5 brand-pixel--lit"></span>
+              <span class="brand-pixel brand-pixel--c6 brand-pixel--lit"></span>
+              <span class="brand-pixel brand-pixel--c0 brand-pixel--lit"></span>
+              <span class="brand-pixel brand-pixel--c1 brand-pixel--lit"></span>
+              <span class="brand-pixel brand-pixel--c2"></span>
+              <span class="brand-pixel brand-pixel--c3"></span>
+              <span class="brand-pixel brand-pixel--c4"></span>
+              <span class="brand-pixel brand-pixel--c5 brand-pixel--lit"></span>
+              <span class="brand-pixel brand-pixel--c6 brand-pixel--lit"></span>
+            </div>
+            <div class="sidebar-brand-text">
+              <div class="brand-wordmark">CITADEL</div>
+              <div class="brand-chip">ARCHIVE</div>
+            </div>
+          </div>
+
           <nav class="side-nav" aria-label="Workspace pages">
             <button class="nav-link" data-page-target="home" aria-label="Home" type="button">
               <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 10.5 12 3l9 7.5"/><path d="M5 10v10h14V10"/></svg>
@@ -62,14 +99,37 @@
               <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="4" width="16" height="16" rx="2"/><rect x="9" y="9" width="6" height="6"/><line x1="9" y1="1" x2="9" y2="4"/><line x1="15" y1="1" x2="15" y2="4"/><line x1="9" y1="20" x2="9" y2="23"/><line x1="15" y1="20" x2="15" y2="23"/><line x1="20" y1="9" x2="23" y2="9"/><line x1="20" y1="14" x2="23" y2="14"/><line x1="1" y1="9" x2="4" y2="9"/><line x1="1" y1="14" x2="4" y2="14"/></svg>
               <span class="nav-label">Admin</span>
             </button>
+
           </nav>
 
-          <section class="side-status" aria-label="Vault status">
-            <div class="side-status-row">
-              <span class="side-status-label">Session</span>
-              <span id="accessMode" class="status-chip">Locked</span>
+          <div class="sidebar-spacer"></div>
+
+          <div class="seat-footer system-status" aria-label="Seat session">
+            <div id="seatAvatar" class="seat-avatar" aria-hidden="true">·</div>
+            <div class="seat-footer-meta">
+              <div id="sessionSeat" class="seat-slug" hidden>—</div>
+              <div class="seat-connection">
+                <span class="status-dot" aria-hidden="true"></span>
+                <span id="connectionLabel">Connecting</span>
+              </div>
+              <div class="seat-role-row">
+                <span id="sessionRole" class="status-chip">Checking</span>
+                <span id="accessMode" class="status-chip" hidden>Locked</span>
+              </div>
+              <p id="roleSummary" class="seat-role-note">Resolving access</p>
             </div>
-            <p id="roleSummary" class="side-status-note">Resolving access</p>
+          </div>
+
+          <div class="sidebar-actions">
+            <button id="refreshButton" class="secondary-button compact-button" type="button">
+              Refresh
+            </button>
+            <button id="logoutButton" class="secondary-button compact-button" type="button">
+              Log out
+            </button>
+          </div>
+
+          <section class="side-status" aria-label="Vault status" hidden>
             <div class="side-status-row">
               <span class="side-status-label">Shared Source</span>
               <span id="githubSyncStatus" class="status-chip">Loading</span>
@@ -100,11 +160,9 @@
           <section class="page" data-page="home" aria-labelledby="homeTitle" hidden>
             <div class="page-heading hero-heading">
               <div>
-                <p class="eyebrow">Your seat</p>
-                <h2 id="homeTitle" class="hero-title">My Node</h2>
-                <p id="homeCopy" class="dashboard-copy">
-                  Your private Node and org Central in one place. Writes stay on your Node;
-                  Central stays searchable.
+                <h2 id="homeTitle" class="page-title hero-title">Home</h2>
+                <p id="homeCopy" class="page-subtitle">
+                  Your Node · private by default, Central still searchable
                 </p>
               </div>
               <div class="hero-actions">
@@ -154,11 +212,9 @@
           <section class="page page-active" data-page="overview" data-min-role="admin" aria-labelledby="overviewTitle">
             <div class="page-heading hero-heading">
               <div>
-                <p class="eyebrow">Vault overview</p>
-                <h2 id="overviewTitle" class="hero-title">Current vault state</h2>
-                <p class="dashboard-copy">
-                  Monitor source freshness, retrieval health, and agent access before searching
-                  or syncing the Organization Vault.
+                <h2 id="overviewTitle" class="page-title hero-title">Overview</h2>
+                <p class="page-subtitle">
+                  Central · Knowledge Mesh, sync health, and seat access
                 </p>
               </div>
               <div class="hero-actions">
@@ -188,6 +244,39 @@
                 <span id="statUpgrades">0</span>
                 <span id="statErrors">0</span>
               </div>
+            </section>
+
+            <section class="analytics-strip" aria-label="Overview analytics">
+              <article class="window analytics-card">
+                <div class="window-titlebar">
+                  <div>
+                    <p class="panel-kicker">Volume</p>
+                    <h3>Activity over time</h3>
+                  </div>
+                  <span id="overviewAnalyticsVolumeMeta" class="status-chip status-standby">Waiting</span>
+                </div>
+                <div id="overviewChartVolume" class="analytics-chart" aria-live="polite"></div>
+              </article>
+              <article class="window analytics-card">
+                <div class="window-titlebar">
+                  <div>
+                    <p class="panel-kicker">Counters</p>
+                    <h3>Ops mix</h3>
+                  </div>
+                  <span id="overviewAnalyticsOpsMeta" class="status-chip status-standby">Waiting</span>
+                </div>
+                <div id="overviewChartOps" class="analytics-chart" aria-live="polite"></div>
+              </article>
+              <article class="window analytics-card">
+                <div class="window-titlebar">
+                  <div>
+                    <p class="panel-kicker">Outcomes</p>
+                    <h3>Status mix</h3>
+                  </div>
+                  <span id="overviewAnalyticsStatusMeta" class="status-chip status-standby">Waiting</span>
+                </div>
+                <div id="overviewChartStatus" class="analytics-chart" aria-live="polite"></div>
+              </article>
             </section>
 
             <div class="dashboard-grid">
@@ -443,11 +532,9 @@
           <section class="page search-page" data-page="search" aria-labelledby="searchTitle" hidden>
             <div class="page-heading search-heading">
               <div>
-                <p class="eyebrow">Organization recall</p>
-                <h2 id="searchTitle" class="search-title">Ask Citadel</h2>
-                <p class="dashboard-copy">
-                  Search shared source material, inspect citations, and open the supporting
-                  document before using an answer.
+                <h2 id="searchTitle" class="page-title search-title">Search</h2>
+                <p class="page-subtitle">
+                  Central + your Node · citadel_search
                 </p>
               </div>
               <div class="hero-actions">
@@ -1309,6 +1396,38 @@ args = [
                 <strong data-timeline-stat="lastIndexed">waiting</strong>
               </div>
             </div>
+            <section class="analytics-strip activity-analytics" aria-label="Activity analytics">
+              <article class="window analytics-card">
+                <div class="window-titlebar">
+                  <div>
+                    <p class="panel-kicker">Volume</p>
+                    <h3>Events over time</h3>
+                  </div>
+                  <span id="activityAnalyticsVolumeMeta" class="status-chip status-standby">Waiting</span>
+                </div>
+                <div id="activityChartVolume" class="analytics-chart" aria-live="polite"></div>
+              </article>
+              <article class="window analytics-card">
+                <div class="window-titlebar">
+                  <div>
+                    <p class="panel-kicker">Breakdown</p>
+                    <h3>By event type</h3>
+                  </div>
+                  <span id="activityAnalyticsTypeMeta" class="status-chip status-standby">Waiting</span>
+                </div>
+                <div id="activityChartTypes" class="analytics-chart" aria-live="polite"></div>
+              </article>
+              <article class="window analytics-card">
+                <div class="window-titlebar">
+                  <div>
+                    <p class="panel-kicker">Health</p>
+                    <h3>Success vs fail</h3>
+                  </div>
+                  <span id="activityAnalyticsOutcomeMeta" class="status-chip status-standby">Waiting</span>
+                </div>
+                <div id="activityChartOutcome" class="analytics-chart" aria-live="polite"></div>
+              </article>
+            </section>
             <div class="activity-workspace">
               <section class="window event-window timeline-window">
                 <div class="window-titlebar">
@@ -1347,18 +1466,12 @@ args = [
         </main>
       </div>
 
-      <footer class="status-bar" aria-label="Console status">
-        <span>Citadel Vault</span>
-        <span>Organization Vault</span>
-        <span>Railway: production</span>
-        <span>Graph: Kuzu</span>
-        <span>Vector: pgvector</span>
-      </footer>
+
     </div>
 
     <div id="toastStack" class="toast-stack" role="status" aria-live="polite"></div>
 
     <script src="/static/vendor/force-graph.min.js"></script>
-    <script src="/static/app.js"></script>
+    <script src="/static/app.js?v=pixel-bastion-4"></script>
   </body>
 </html>

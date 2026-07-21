@@ -62,6 +62,8 @@ from kb.banner import (
     banner_large,
     mark,
     paint,
+    print_banner_animated,
+    print_banner_cascade,
     supports_color,
     tagline,
 )
@@ -1281,8 +1283,8 @@ async def _status(args: argparse.Namespace) -> int:
             )
         use_color = supports_color()
         if sys.stdout.isatty():
-            # Piped output is for parsing/paging — skip the castle art.
-            print(banner(color=use_color))
+            # Piped output is for parsing/paging — skip the mark.
+            print_banner_cascade(color=use_color)
             print()
         # Verdict last — the bottom line belongs at the bottom, not buried
         # above the mesh block.
@@ -1594,7 +1596,7 @@ async def _doctor(args: argparse.Namespace) -> int:
         return rc
 
     if sys.stdout.isatty():
-        print(banner(color=color))
+        print_banner_cascade(color=color)
         print()
     # Several checks are repo-relative — name the repo so a miss from the
     # wrong directory reads as "wrong directory", not "broken setup".
@@ -1632,7 +1634,11 @@ def _humanize_status(status: str) -> tuple[str, bool, bool]:
 
 
 def _print_banner_animated(text: str, color: bool) -> None:
-    """Reveal the banner line-by-line for a little ceremony (TTY + color only)."""
+    """Reveal the banner line-by-line for a little ceremony (TTY + color only).
+
+    Prefer ``print_banner_animated`` from ``kb.banner`` for new call sites;
+    this wrapper keeps older call patterns working when ``text`` is pre-rendered.
+    """
     if not (color and sys.stdout.isatty()):
         print(text)
         return
@@ -1783,7 +1789,7 @@ async def _onboard(args: argparse.Namespace) -> int:
     rc_path = Path(args.shell_rc).expanduser() if args.shell_rc else detect_shell_rc()
 
     if interactive:
-        _print_banner_animated(banner(color=color), color)
+        print_banner_animated(color=color)
 
     token, token_rejected = await _resolve_onboard_token(
         args, rc_path, node_url, interactive=interactive, color=color
@@ -2078,7 +2084,7 @@ def _print_home() -> None:
         print()
         print("  " + tagline(color=color))
     else:
-        # Narrow terminal: the compact castle (wordmark + tagline inline)
+        # Narrow terminal: compact Pixel Bastion (wordmark + tagline inline)
         # instead of a wrapped, mangled hero.
         print(banner(color=color))
     if _already_onboarded():

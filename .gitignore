@@ -25,3 +25,4 @@ logs/
 scripts/ingest_masumi_workspace.py
 .pip-audit-cache/
 .superstack/
+.local-review/

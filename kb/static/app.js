@@ -572,12 +572,20 @@ function applyAccessControls() {
   if (sessionSeat) {
     if (state.seatSlug) {
       sessionSeat.hidden = false;
-      sessionSeat.textContent = `Seat ${state.seatSlug}`;
+      sessionSeat.textContent = `seat:${state.seatSlug}`;
       sessionSeat.title = state.nodeLabel || `seat:${state.seatSlug}`;
-      sessionSeat.className = "status-chip status-enabled";
+      sessionSeat.className = "seat-slug";
+      const avatar = document.getElementById("seatAvatar");
+      if (avatar) {
+        avatar.textContent = state.seatSlug.slice(0, 1).toUpperCase();
+      }
     } else {
       sessionSeat.hidden = true;
       sessionSeat.textContent = "—";
+      const avatar = document.getElementById("seatAvatar");
+      if (avatar) {
+        avatar.textContent = state.role ? roleLabel(state.role).slice(0, 1) : "·";
+      }
     }
   }
   roleSummary.textContent = state.role
@@ -775,6 +783,8 @@ function renderSnapshot(snapshot) {
   renderDashboardOpenIssue(snapshot);
   renderTimelineStats(snapshot);
   renderTimeline(snapshot);
+  renderOverviewAnalytics(snapshot);
+  renderActivityAnalytics(snapshot);
 
   indexList.innerHTML = "";
   if (!snapshot.indexes.length) {
@@ -996,6 +1006,258 @@ function humanizeToken(value) {
   return String(value || "")
     .replace(/[_-]+/g, " ")
     .replace(/\b\w/g, (letter) => letter.toUpperCase());
+}
+
+function analyticsOutcomeBucket(event) {
+  const timeline = timelineEnvelope(event);
+  const status = String(timeline.status || event.type || "").toLowerCase();
+  if (event.type === "error" || status === "failed") return "failed";
+  if (["rejected", "detected", "pending"].includes(status)) return "attention";
+  return "ok";
+}
+
+function analyticsTimeSeries(events, slots = 10) {
+  const parsed = (events || [])
+    .map((event) => ({ event, t: new Date(event.created_at).getTime() }))
+    .filter((row) => Number.isFinite(row.t));
+  if (!parsed.length) return [];
+  const newest = Math.max(...parsed.map((row) => row.t));
+  const oldest = Math.min(...parsed.map((row) => row.t));
+  const span = Math.max(newest - oldest, 60 * 60 * 1000);
+  const slotMs = Math.max(Math.ceil(span / slots), 15 * 60 * 1000);
+  const start = newest - slotMs * (slots - 1);
+  const buckets = Array.from({ length: slots }, (_, index) => ({
+    start: start + index * slotMs,
+    count: 0,
+  }));
+  for (const row of parsed) {
+    let index = Math.floor((row.t - start) / slotMs);
+    if (index < 0) index = 0;
+    if (index >= slots) index = slots - 1;
+    buckets[index].count += 1;
+  }
+  const useDays = slotMs >= 20 * 60 * 60 * 1000;
+  return buckets.map((bucket) => ({
+    label: new Intl.DateTimeFormat(undefined, useDays
+      ? { month: "short", day: "numeric" }
+      : { hour: "2-digit", minute: "2-digit" }).format(new Date(bucket.start)),
+    value: bucket.count,
+  }));
+}
+
+function analyticsTypeSeries(events, limit = 6) {
+  const counts = new Map();
+  for (const event of events || []) {
+    const key = String(event.type || timelineEnvelope(event).kind || "event");
+    counts.set(key, (counts.get(key) || 0) + 1);
+  }
+  return Array.from(counts.entries())
+    .sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0]))
+    .slice(0, limit)
+    .map(([key, value]) => ({ label: humanizeToken(key), value, key }));
+}
+
+function analyticsStatusSeries(events) {
+  const counts = { ok: 0, attention: 0, failed: 0 };
+  for (const event of events || []) {
+    counts[analyticsOutcomeBucket(event)] += 1;
+  }
+  return [
+    { label: "Ok", value: counts.ok, tone: "ok" },
+    { label: "Attention", value: counts.attention, tone: "attention" },
+    { label: "Failed", value: counts.failed, tone: "failed" },
+  ];
+}
+
+function analyticsOpsSeries(stats = {}) {
+  return [
+    { label: "Notes", value: Number(stats.documents || 0), tone: "primary" },
+    { label: "Nodes", value: Number(stats.nodes || 0), tone: "info" },
+    { label: "Searches", value: Number(stats.searches || 0), tone: "ok" },
+    { label: "Feedback", value: Number(stats.feedback || 0), tone: "attention" },
+    { label: "Errors", value: Number(stats.errors || 0), tone: "failed" },
+  ];
+}
+
+function setAnalyticsMeta(element, label, tone = "standby") {
+  if (!element) return;
+  element.textContent = label;
+  element.className = `status-chip status-${tone}`;
+}
+
+function analyticsEmptyMarkup(title, body) {
+  return `
+    <div class="empty-state compact-empty">
+      <strong>${escapeHtml(title)}</strong>
+      <p>${escapeHtml(body)}</p>
+    </div>
+  `;
+}
+
+function analyticsToneClass(tone) {
+  if (tone === "failed") return "analytics-bar-failed";
+  if (tone === "attention") return "analytics-bar-attention";
+  if (tone === "ok") return "analytics-bar-ok";
+  if (tone === "info") return "analytics-bar-info";
+  return "analytics-bar-primary";
+}
+
+function renderVerticalBarChart(container, series, { emptyTitle, emptyBody } = {}) {
+  if (!container) return;
+  const values = series || [];
+  const hasData = values.some((row) => Number(row.value) > 0);
+  if (!hasData) {
+    container.className = "analytics-chart is-empty";
+    container.innerHTML = analyticsEmptyMarkup(
+      emptyTitle || "No activity yet",
+      emptyBody || "Charts fill once the vault records events.",
+    );
+    return;
+  }
+  const max = Math.max(...values.map((row) => Number(row.value) || 0), 1);
+  const width = 320;
+  const height = 108;
+  const padX = 10;
+  const padTop = 8;
+  const padBottom = 22;
+  const gap = 5;
+  const chartHeight = height - padTop - padBottom;
+  const barWidth = (width - padX * 2 - gap * (values.length - 1)) / values.length;
+  const bars = values.map((row, index) => {
+    const value = Number(row.value) || 0;
+    const barHeight = Math.max((value / max) * chartHeight, value > 0 ? 3 : 0);
+    const x = padX + index * (barWidth + gap);
+    const y = padTop + (chartHeight - barHeight);
+    const tone = analyticsToneClass(row.tone);
+    const label = escapeHtml(row.label);
+    return `
+      <g class="analytics-bar-group">
+        <rect class="analytics-bar ${tone}" x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${barWidth.toFixed(1)}" height="${barHeight.toFixed(1)}" rx="2" />
+        <title>${label}: ${value}</title>
+        <text class="analytics-axis-label" x="${(x + barWidth / 2).toFixed(1)}" y="${height - 6}" text-anchor="middle">${label}</text>
+      </g>
+    `;
+  }).join("");
+  container.className = "analytics-chart";
+  container.innerHTML = `
+    <svg class="analytics-svg" viewBox="0 0 ${width} ${height}" role="img" aria-label="Bar chart">
+      <line class="analytics-baseline" x1="${padX}" y1="${padTop + chartHeight}" x2="${width - padX}" y2="${padTop + chartHeight}" />
+      ${bars}
+    </svg>
+  `;
+}
+
+function renderHorizontalBarChart(container, series, { emptyTitle, emptyBody } = {}) {
+  if (!container) return;
+  const values = series || [];
+  const hasData = values.some((row) => Number(row.value) > 0);
+  if (!hasData) {
+    container.className = "analytics-chart is-empty";
+    container.innerHTML = analyticsEmptyMarkup(
+      emptyTitle || "No activity yet",
+      emptyBody || "Charts fill once the vault records events.",
+    );
+    return;
+  }
+  const max = Math.max(...values.map((row) => Number(row.value) || 0), 1);
+  // SVG rect widths stay CSP-safe (style-src 'self' blocks inline style="width:…").
+  const rows = values.map((row) => {
+    const value = Number(row.value) || 0;
+    const widthPct = Math.max((value / max) * 100, value > 0 ? 4 : 0);
+    const tone = analyticsToneClass(row.tone);
+    return `
+      <div class="analytics-hrow">
+        <span class="analytics-hlabel">${escapeHtml(row.label)}</span>
+        <div class="analytics-htrack" aria-hidden="true">
+          <svg class="analytics-hbar-svg" viewBox="0 0 100 10" preserveAspectRatio="none" focusable="false">
+            <rect class="analytics-bar ${tone}" x="0" y="1" width="${widthPct.toFixed(1)}" height="8" rx="1" />
+          </svg>
+        </div>
+        <span class="analytics-hvalue">${escapeHtml(String(value))}</span>
+      </div>
+    `;
+  }).join("");
+  container.className = "analytics-chart";
+  container.innerHTML = `<div class="analytics-hbar-list">${rows}</div>`;
+}
+
+function renderOverviewAnalytics(snapshot) {
+  const events = snapshot?.events || [];
+  const stats = snapshot?.stats || {};
+  const volume = analyticsTimeSeries(events, 8);
+  const ops = analyticsOpsSeries(stats);
+  const status = analyticsStatusSeries(events);
+
+  renderVerticalBarChart(document.getElementById("overviewChartVolume"), volume, {
+    emptyTitle: "No events yet",
+    emptyBody: "Sync, ingest, or search to build the activity series.",
+  });
+  renderHorizontalBarChart(document.getElementById("overviewChartOps"), ops, {
+    emptyTitle: "No counters yet",
+    emptyBody: "Ops counters appear after vault traffic.",
+  });
+  renderHorizontalBarChart(document.getElementById("overviewChartStatus"), status, {
+    emptyTitle: "No outcomes yet",
+    emptyBody: "Status mix appears once events are recorded.",
+  });
+
+  setAnalyticsMeta(
+    document.getElementById("overviewAnalyticsVolumeMeta"),
+    events.length ? `${events.length} events` : "Empty",
+    events.length ? "enabled" : "standby",
+  );
+  const opsTotal = ops.reduce((sum, row) => sum + row.value, 0);
+  setAnalyticsMeta(
+    document.getElementById("overviewAnalyticsOpsMeta"),
+    opsTotal ? `${opsTotal} total` : "Empty",
+    opsTotal ? "enabled" : "standby",
+  );
+  const failed = status.find((row) => row.tone === "failed")?.value || 0;
+  setAnalyticsMeta(
+    document.getElementById("overviewAnalyticsStatusMeta"),
+    events.length ? (failed ? `${failed} failed` : "Healthy") : "Empty",
+    events.length ? (failed ? "error" : "enabled") : "standby",
+  );
+}
+
+function renderActivityAnalytics(snapshot) {
+  const events = snapshot?.events || [];
+  const volume = analyticsTimeSeries(events, 10);
+  const types = analyticsTypeSeries(events, 6);
+  const outcomes = analyticsStatusSeries(events).map((row) => ({
+    ...row,
+    label: row.tone === "ok" ? "Success" : row.label,
+  }));
+
+  renderVerticalBarChart(document.getElementById("activityChartVolume"), volume, {
+    emptyTitle: "Timeline is quiet",
+    emptyBody: "Event volume charts appear after sync or note activity.",
+  });
+  renderHorizontalBarChart(document.getElementById("activityChartTypes"), types, {
+    emptyTitle: "No types yet",
+    emptyBody: "Type mix fills from ingest, search, sync, and errors.",
+  });
+  renderHorizontalBarChart(document.getElementById("activityChartOutcome"), outcomes, {
+    emptyTitle: "No outcomes yet",
+    emptyBody: "Success vs fail appears once events are recorded.",
+  });
+
+  setAnalyticsMeta(
+    document.getElementById("activityAnalyticsVolumeMeta"),
+    events.length ? `${events.length} events` : "Empty",
+    events.length ? "enabled" : "standby",
+  );
+  setAnalyticsMeta(
+    document.getElementById("activityAnalyticsTypeMeta"),
+    types.length ? `${types.length} types` : "Empty",
+    types.length ? "enabled" : "standby",
+  );
+  const failed = outcomes.find((row) => row.tone === "failed")?.value || 0;
+  setAnalyticsMeta(
+    document.getElementById("activityAnalyticsOutcomeMeta"),
+    events.length ? (failed ? `${failed} failed` : "All clear") : "Empty",
+    events.length ? (failed ? "error" : "enabled") : "standby",
+  );
 }
 
 function renderDashboardIndexes(indexes = []) {

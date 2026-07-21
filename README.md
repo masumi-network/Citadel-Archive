@@ -1,14 +1,6 @@
-```text
-     ▛▜   ▛▜   ▛▜   ▛▜   ▛▜   ▛▜   ▛▜
-    ▕══════════════════════════════════▏
-    ▕   ____  _ _____ _   ___  ___ _    ▏
-    ▕  / ___|| |_   _/ \ |   \| __| |   ▏
-    ▕ | |__  | | | |/ _ \| |) | _|| |__ ▏
-    ▕  \___| |_| |_/_/ \_\___/|___|____|▏
-    ▕══════════════════════════════════▏
-    ▕    ▟▀▙       ▟▀▙       ▟▀▙        ▏
-    ▕▄▄▄▄█ █▄▄▄▄▄▄▄█ █▄▄▄▄▄▄▄█ █▄▄▄▄▄▄▄▄▏
-```
+<p align="center">
+  <img src="docs/brand/readme-banner.svg" alt="Citadel Archive — the organization vault" width="860" />
+</p>
 
 # Citadel
 
@@ -96,12 +88,16 @@ citadel activity                      # what your Node is doing — captures, sy
 > Add `-s -- -y` to skip prompts, `--dry-run` to preview.
 
 ```
-  ▙ ▟ ▙ ▟ ▙ ▟ ▙ ▟
-  ███████████████   CITADEL
-  ██ ▟▀▙   ▟▀▙ ██   the organization vault
-  ██ █ █   █ █ ██
-  ███████████████
+  ■ · ■ · ■ · ■
+  ■■■■■■■         CITADEL
+  ■■·■·■■         the organization vault
+  ■■·■·■■
+  ■■■■■■■
+  ■■···■■
+  ■■···■■
 ```
+
+Pixel Bastion (magenta→cyan) — CLI cascade, web lockup, and favicon. See [`brand.md`](brand.md).
 
 `citadel onboard` installs autosync hooks (`kb.hooks.*`), writes the seat token to your shell rc (masked), configures hosted HTTP MCP in `.mcp.json`, installs proactive agent policy (`AGENTS.md` + tool-native rules when detected), and offers Approved Capture Roots. When setup finishes it prints Claude Code MCP next steps.
 

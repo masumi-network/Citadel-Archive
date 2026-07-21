@@ -688,7 +688,9 @@ def test_ui_shell_is_served_after_login() -> None:
 
     assert response.status_code == 200
     assert "Citadel Archive" in response.text
-    assert "Citadel Vault" in response.text
+    assert "CITADEL" in response.text
+    assert "Knowledge Mesh" in response.text
+    assert 'id="graphCanvas"' in response.text
     assert "Source Sync" in response.text
     assert "Run learning agent" in response.text
     assert "Send Google Chat test" in response.text
