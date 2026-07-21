@@ -59,13 +59,11 @@ from kb.banner import (
     SKIP,
     WARN,
     banner,
-    banner_large,
     mark,
     paint,
     print_banner_animated,
     print_banner_cascade,
     supports_color,
-    tagline,
 )
 from kb.access_client import (
     AccessClientError,
@@ -2080,9 +2078,9 @@ def _print_home() -> None:
     color = supports_color()
     cols = shutil.get_terminal_size((80, 24)).columns
     if cols >= HERO_WIDTH + 2:
-        print(banner_large(color=color))
-        print()
-        print("  " + tagline(color=color))
+        # Pixel Bastion only (cascade on TTY+color). banner()/cascade already
+        # include CITADEL + tagline beside the mark — no figlet wordmark.
+        print_banner_cascade(color=color)
     else:
         # Narrow terminal: compact Pixel Bastion (wordmark + tagline inline)
         # instead of a wrapped, mangled hero.

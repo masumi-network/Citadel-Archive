@@ -42,10 +42,12 @@ def test_bare_citadel_shows_home_screen(monkeypatch, capsys) -> None:
         kb.cli.main()
     assert exc.value.code == 0
     out = capsys.readouterr().out
-    # Strip ANSI so per-glyph color on the figlet hero still matches.
+    # Strip ANSI so colored Pixel Bastion / labels still match.
     plain = re.sub(r"\x1b\[[0-9;]*m", "", out)
-    assert "the organization vault" in plain         # hero tagline
-    assert "____" in plain                            # CITADEL wordmark hero
+    assert "the organization vault" in plain         # tagline beside the mark
+    assert "██" in plain                              # Pixel Bastion mark
+    assert "CITADEL" in plain                         # wordmark label beside mark
+    assert "____" not in plain                        # no figlet hero on home
     assert "onboard" in plain and "status" in plain     # curated command menu
     assert "Get started" in plain                     # grouped menu
 

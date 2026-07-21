@@ -4,8 +4,9 @@ Stdlib only. The banner and color are shown only on a real terminal (and never
 in `--json` output), so piped/headless usage stays clean and parseable.
 
 The mark is Pixel Bastion (brand.md): a 7×7 crenellated fortress painted in the
-magenta→cyan brand gradient. The bare `citadel` home screen keeps the figlet
-CITADEL wordmark hero; compact `banner()` is the in-command header.
+magenta→cyan brand gradient. The bare `citadel` home shows Pixel Bastion
+(cascade on wide TTY+color) with CITADEL + tagline beside the mark; compact
+`banner()` is also the in-command header and the narrow-terminal home.
 """
 
 from __future__ import annotations
@@ -45,8 +46,9 @@ _LABELS: dict[int, tuple[str, tuple[str, ...]]] = {
     3: ("the organization vault", ("dim",)),
 }
 
-# Large hero — figlet "CITADEL" wordmark in brand colors. Shown on the bare
-# `citadel` home screen; compact `banner()` stays the in-command header.
+# Large hero — figlet "CITADEL" wordmark in brand colors. Available via
+# `banner_large()` for callers that want the ASCII wordmark; bare `citadel`
+# home uses Pixel Bastion only (compact `banner()` / cascade).
 _WORDMARK = (
     "  ____  ___  _____     _     ____   _____  _     ",
     " / ___||_ _||_   _|   / \\   |  _ \\ | ____|| |    ",
