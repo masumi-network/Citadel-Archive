@@ -98,6 +98,19 @@ claude mcp add --transport http citadel \
 
 Export the token first: `export CITADEL_MCP_ACCESS_TOKEN='ctdl_...'`.
 
+**Zero tools / missing env (Claude Code):** `.mcp.json` uses
+`Bearer ${CITADEL_MCP_ACCESS_TOKEN}`. Claude expands that only when the variable
+is in the **process environment** that launched Claude — PRs and docs never
+inject secrets.
+
+| Where | Fix |
+|---|---|
+| **Local CLI** | `source ~/.zshrc` (or open a new terminal), then start `claude` from that shell |
+| **Claude cloud** | Set `CITADEL_MCP_ACCESS_TOKEN` in cloud **environment settings** |
+
+Verify: `claude mcp list` (no missing-env warning), `/mcp` inside Claude (citadel
+tools listed, not "connected with zero tools"), and `citadel doctor`.
+
 #### Cursor — `.cursor/mcp.json`
 
 ```json
@@ -242,9 +255,11 @@ write tools. The server also runs a secret/sensitivity scan on every write.
 |---|---|
 | 401 on session/search | Set the token; check it is not revoked |
 | 403 on ingest | Token is reader-only; create a writer token |
+| MCP connected, **zero tools** (Claude) | Token not in Claude's process env — see zero-tools table above; run `claude mcp list` + `citadel doctor` |
 | Tools missing after config | Restart the MCP host |
 | Client can't send headers | Use the `mcp-remote` stdio bridge above |
 | Endpoint unreachable | Check `…/healthz`; confirm the `…/mcp/` URL |
+| No `citadel_*` tools at all | Use CLI fallback: `citadel search`, `citadel status`, `citadel doctor` |
 
 ## Reference
 
