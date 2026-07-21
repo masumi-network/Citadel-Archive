@@ -8,6 +8,23 @@ All notable changes to `citadel-archive` are documented here. Format follows
 
 ### Added
 
+- **Shared Session Traces v1 (ADR-0011).** Explicit in-session share via MCP
+  `citadel_share_session` and `POST /api/share-session`: **Compact Session
+  Context** (client distill + redaction, server LLM dead-end refinement only when
+  tool-error pairs exist) dual-writes to the seat **Node** (light tier) and the
+  `session-traces` dataset (shared tier), with deferred + coalesced cognify
+  (~5–15 min). Share requires an **Approved Capture Root** (server-side `cwd`
+  check). Default **`citadel_search`** includes `session-traces` with split
+  results and **`reference-only` trust demotion**; traces never promote to
+  **Central** and never feed the daily improve loop.
+- **Multi-agent proactive policy on `citadel onboard`.** `install_agent_policies`
+  writes the same three-rule policy everywhere teammates work: **`AGENTS.md`**
+  (always — Codex, Pi, Cline, Zed, and other AGENTS.md-aware tools), **Cursor**
+  `.cursor/rules/citadel-agent-policy.mdc` and **Windsurf**
+  `.windsurf/rules/citadel-agent-policy.md` when those tools are detected,
+  **`GEMINI.md`** when Gemini CLI is detected, and **Claude Code** via the
+  existing **SessionStart** hook (`kb.hooks.sync_start`). Idempotent merge;
+  re-run safe.
 - **`citadel activity` now appears on the home-screen menu** (bare `citadel`),
   under Knowledge alongside `search` and `ingest`.
 
@@ -64,6 +81,11 @@ All notable changes to `citadel-archive` are documented here. Format follows
 
 ### Fixed
 
+- **CI dependency audit.** GitHub Actions runs `pip-audit` on every PR/push;
+  `[tool.uv] override-dependencies` pins transitive packages with known CVEs
+  (`pillow`, `pypdf`, `python-multipart`) until upstream (cognee/FastAPI stack)
+  catches up; `PYSEC-2026-2447` is ignored where no fix exists yet.
+- **`sync_session.py` lint** — ruff clean on the SessionEnd distiller.
 - **`--json` error paths are now valid JSON across the read/write CLI.**
   `citadel onboard` (no-token + hook-install), `citadel search`, `citadel ingest`,
   and `citadel capture` previously printed a plain-text line on the no-token

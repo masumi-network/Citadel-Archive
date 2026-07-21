@@ -1,6 +1,68 @@
 # Citadel Progress
 
-Last updated: 2026-07-16.
+Last updated: 2026-07-20.
+
+## 2026-07-20 — Shared Session Traces v1 + multi-agent policy onboard — SHIPPED (PR #93)
+
+**PR #93** (`design/shared-session-index`) ships **Shared Session Traces v1**
+(ADR-0011), closes **PR #91 as superseded** (three cross-seat auth fixes landed
+here instead), and extends **`citadel onboard`** with multi-agent proactive
+policy install. CI gains a **`pip-audit` gate** with uv dependency overrides.
+
+**Shared Session Traces v1 (ADR-0011):**
+
+- **`POST /api/share-session` + MCP `citadel_share_session`** — explicit
+  in-session share only; SessionEnd still writes private **Node** traces (light
+  tier). Share requires an **Approved Capture Root** (`cwd` server-side check).
+- **Compact Session Context** — client `distill_trace()` + redaction, server
+  LLM dead-end refinement only when tool-error pairs exist, then **dual-write**
+  to the seat **Node** (deterministic) and `session-traces` (shared tier).
+- **Deferred + coalesced cognify** (~5–15 min) on share — not inline before MCP
+  returns; private **Node** memory is never enriched.
+- **Default `citadel_search`** includes `session-traces` with split results and
+  **`reference-only` trust demotion** (`_citadel.trust`); Central stays
+  org-authoritative. Traces never promote to **Central** and never feed the
+  daily improve loop.
+- **Glossary + CONTEXT** updated for **Session Trace**, **Shared Session
+  Trace**, **Compact Session Context**, amended **Seat Presence** and **Tiered
+  Ingestion**.
+
+**PR #91 superseded — cross-seat auth fixes (now in #93):**
+
+- **Obsidian vault ownership (ADR-0009)** — five Obsidian routes fail closed
+  with 404 (not 403) when the vault is not the caller's.
+- **`GET /api/knowledge/events` caller-scoped** — `citadel activity` no longer
+  leaks other seats' event text under a reader token.
+- **`POST /feedback` write-scope parity** — resolves dataset/session like
+  `/ingest`; feedback text byte-capped.
+
+**Multi-agent policy onboard (`install_agent_policies`):**
+
+- **`AGENTS.md`** at repo root — universal policy for Codex (CLI + app), Pi,
+  Cline, Zed, and other AGENTS.md-aware tools (always installed).
+- **Cursor** — `.cursor/rules/citadel-agent-policy.mdc` (`alwaysApply`) when
+  Cursor is detected.
+- **Windsurf** — `.windsurf/rules/citadel-agent-policy.md` (`always_on`) when
+  detected.
+- **Gemini CLI** — `GEMINI.md` when detected.
+- **Claude Code** — same policy injected via the **SessionStart** hook
+  (`kb.hooks.sync_start`); SessionEnd hook unchanged (private Node traces).
+- Policy: search at task start; trace hits are reference-only; share dead ends
+  with `citadel_share_session` only after explicit user approval.
+
+**CI / hygiene:**
+
+- **`pip-audit` in GitHub Actions** — uv `[tool.uv] override-dependencies` pins
+  transitive CVEs (`pillow`, `pypdf`, `python-multipart`) until the cognee/FastAPI
+  stack catches up; `PYSEC-2026-2447` ignored where no fix exists yet.
+- **`sync_session.py` lint fix** — ruff clean.
+
+**v1.1 deferred (ADR-0011 open):** `citadel_prior_work` overlap-ranked retrieval;
+**`citadel unshare`**, ~90-day TTL, admin hard-delete; automatic
+`CaptureRoot.share_traces` standing consent (blocked until unshare ships).
+
+**Follow-ups:** production deploy + seat-token smoke of share/search demotion;
+retraction controls and prior-work lookup remain v1.1.
 
 ## 2026-07-16 — Agent-onboarding hardening: seat-bound tokens, headless skill, `--json` error parity
 
