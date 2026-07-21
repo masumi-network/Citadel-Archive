@@ -43,7 +43,9 @@ class Citadel:
             min_chars=self.config.min_chars,
             exclude_patterns=self.config.exclude_patterns,
         )
-        self._seen_hashes: set[str] = set()
+        # Keyed by (dataset, content_hash) so dual-writes (e.g. share_session to
+        # seat Node + session-traces) are not rejected as duplicate_in_process.
+        self._seen_ingest_keys: set[tuple[str, str]] = set()
 
     def _default_session_for_dataset(self, dataset: str) -> str:
         if dataset == self.config.github_sync_dataset:
@@ -75,12 +77,13 @@ class Citadel:
         self._guard_content(data, target_dataset)
 
         content_hash = sha256(data.encode("utf-8")).hexdigest()
-        if content_hash in self._seen_hashes:
+        ingest_key = (target_dataset, content_hash)
+        if ingest_key in self._seen_ingest_keys:
             logger.info(
                 "Ingest rejected for dataset %s: duplicate_in_process", target_dataset
             )
             return IngestResult(False, "duplicate_in_process", target_dataset, merged_tags)
-        self._seen_hashes.add(content_hash)
+        self._seen_ingest_keys.add(ingest_key)
 
         result = await self.cognee.remember(
             data,

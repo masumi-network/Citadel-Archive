@@ -125,6 +125,21 @@ async def test_ingest_rejects_duplicate_in_process() -> None:
 
 
 @pytest.mark.asyncio
+async def test_ingest_allows_same_content_to_different_datasets() -> None:
+    fake = FakeCognee()
+    kb = Citadel(CitadelConfig(), cognee=fake)
+
+    node = await kb.ingest("shared trace body", dataset="seat:alice")
+    shared = await kb.ingest("shared trace body", dataset="session-traces")
+
+    assert node.accepted
+    assert shared.accepted
+    assert len(fake.remember_calls) == 2
+    assert fake.remember_calls[0]["dataset_name"] == "seat:alice"
+    assert fake.remember_calls[1]["dataset_name"] == "session-traces"
+
+
+@pytest.mark.asyncio
 async def test_search_uses_github_sync_session_for_github_dataset() -> None:
     fake = FakeCognee()
     kb = Citadel(
