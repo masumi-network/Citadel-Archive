@@ -1160,7 +1160,7 @@ function renderHorizontalBarChart(container, series, { emptyTitle, emptyBody } =
     return;
   }
   const max = Math.max(...values.map((row) => Number(row.value) || 0), 1);
-  // SVG rect widths stay CSP-safe (style-src 'self' blocks inline style="width:…").
+  // SVG rect widths stay CSP-safe (style-src 'self' blocks HTML style attributes).
   const rows = values.map((row) => {
     const value = Number(row.value) || 0;
     const widthPct = Math.max((value / max) * 100, value > 0 ? 4 : 0);
