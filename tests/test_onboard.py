@@ -17,16 +17,21 @@ from kb.onboard import (
     claude_user_settings_path,
     cursor_agent_policy_rule_text,
     detect_shell_rc,
+    diagnose_mcp_config,
     ensure_token_in_rc,
+    format_claude_mcp_next_steps,
     install_agent_policies,
     install_cursor_agent_policy_rule,
     install_markdown_policy_file,
     install_pre_push_hook,
     install_windsurf_agent_policy_rule,
+    is_http_citadel_mcp_block,
+    is_legacy_stdio_mcp_block,
     mask_token,
     mcp_server_block,
     merge_claude_settings,
     merge_mcp_config,
+    read_citadel_mcp_block,
     read_token_from_rc,
     windsurf_agent_policy_rule_text,
 )
@@ -122,6 +127,41 @@ def test_merge_mcp_config_preserves_other_servers(tmp_path: Path) -> None:
     assert data["mcpServers"]["citadel"]["type"] == "http"
 
     assert merge_mcp_config(path) == "unchanged"
+
+
+def test_legacy_stdio_mcp_detection() -> None:
+    assert is_legacy_stdio_mcp_block({"command": "uv", "args": ["run"]})
+    assert is_legacy_stdio_mcp_block({"type": "stdio", "command": "npx"})
+    assert not is_legacy_stdio_mcp_block(mcp_server_block("https://node.example"))
+    assert is_http_citadel_mcp_block(mcp_server_block("https://node.example"))
+
+
+def test_diagnose_mcp_config_flags_legacy_stdio(tmp_path: Path) -> None:
+    mcp = tmp_path / ".mcp.json"
+    mcp.write_text(
+        json.dumps(
+            {
+                "mcpServers": {
+                    "citadel": {
+                        "command": "uv",
+                        "args": ["run", "python", "-m", "kb.mcp_server"],
+                    }
+                }
+            }
+        )
+    )
+    issues = diagnose_mcp_config(tmp_path)
+    assert any("legacy stdio" in i["problem"] for i in issues)
+    assert issues[0]["kind"] == "mcp"
+
+
+def test_format_claude_mcp_next_steps_mentions_env_and_verify(tmp_path: Path) -> None:
+    rc = tmp_path / ".zshrc"
+    text = format_claude_mcp_next_steps(rc)
+    assert TOKEN_ENV in text
+    assert "claude mcp list" in text
+    assert "cloud environment" in text
+    assert str(rc) in text
 
 
 def test_merge_mcp_config_corrupt_raises(tmp_path: Path) -> None:

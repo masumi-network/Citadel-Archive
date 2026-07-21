@@ -45,6 +45,7 @@ boundary rules.
 
 - [Prerequisites](#prerequisites)
 - [Claude Code](#claude-code)
+- [Claude Code (local + cloud)](#claude-code-local--cloud)
 - [Claude Desktop](#claude-desktop)
 - [Codex (OpenAI)](#codex-openai)
 - [Connector-Style Apps (ChatGPT / Codex desktop, etc.)](#connector-style-apps-chatgpt--codex-desktop-etc)
@@ -129,6 +130,35 @@ Use the citadel_discovery tool, then use the citadel_session tool.
 If discovery returns the safe manifest and session returns your role and actor
 info, the connection works.
 
+### Local CLI + cloud environment
+
+`citadel onboard` writes your seat token to the shell rc and adds a project
+`.mcp.json` that references `${CITADEL_MCP_ACCESS_TOKEN}` — the secret is
+**never** stored in git. Claude Code only expands that header when the variable
+is present in the **process environment** that launched Claude:
+
+| Where you run Claude | What you need |
+|---|---|
+| **Local CLI** (`claude` in a terminal) | `source ~/.zshrc` (or open a new terminal) **before** starting Claude, or `export CITADEL_MCP_ACCESS_TOKEN=…` in the same shell |
+| **Claude cloud** | Add `CITADEL_MCP_ACCESS_TOKEN` in your cloud **environment settings** — project `.mcp.json` and `~/.claude.json` do not inject secrets into cloud sessions |
+
+`citadel mcp add claude` updates user-scope `~/.claude.json`; that helps local
+CLI but **does not** replace the cloud env var above.
+
+**Verify (local or cloud):**
+
+```bash
+claude mcp list          # citadel should show no "missing env" warning
+```
+
+In Claude, run `/mcp` — the **citadel** server should list tools (not "connected
+with zero tools"). If auth fails, run `citadel doctor` and confirm the token is
+in your shell rc **and** exported in the session that launched Claude.
+
+Early installs may still have a legacy **stdio** citadel entry (`command` +
+`kb.mcp_server`) in `.mcp.json` or `~/.claude.json`. Re-run `citadel onboard`
+or `citadel doctor --fix` to replace it with hosted HTTP.
+
 ### Step 3 — Try a search
 
 ```
@@ -140,6 +170,24 @@ Search Citadel for "architecture decisions"
 A ready-to-copy template is at `docs/mcp/claude-code-hosted.mcp.json`. Replace
 `PASTE_CITADEL_TOKEN_HERE` with your token or use `${CITADEL_MCP_ACCESS_TOKEN}`
 for environment variable substitution.
+
+---
+
+## Claude Code (local + cloud)
+
+Quick reference when MCP shows **connected but zero tools**:
+
+1. **Env var is mandatory.** `.mcp.json` uses `Bearer ${CITADEL_MCP_ACCESS_TOKEN}`.
+   Claude does not read your shell rc automatically.
+2. **Local CLI:** `source ~/.zshrc` (or restart the terminal), then start
+   `claude` from that shell — or export the token in the same shell first.
+3. **Cloud:** set `CITADEL_MCP_ACCESS_TOKEN` in Claude cloud environment
+   settings (not just in repo config).
+4. **Verify:** `claude mcp list` (no missing-env warning) and `/mcp` inside
+   Claude (citadel tools visible). `citadel doctor` warns when the token is in
+   rc but missing from the current env.
+
+See [Claude Code](#claude-code) for the full `.mcp.json` template.
 
 ---
 

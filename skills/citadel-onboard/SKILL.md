@@ -137,6 +137,12 @@ Load the hosted proactive-ingest skill for hook/sync detail:
 
 Restart the shell (or `source ~/.zshrc`), then run `citadel status` (expect all
 `●`), or in your agent ask: *"use citadel_search to find what we decided about
-the vault."* A grounded answer means the token + MCP work. See
-[`docs/onboarding/teammate-rollout.md`](../../docs/onboarding/teammate-rollout.md)
+the vault."* A grounded answer means the token + MCP work.
+
+**Claude Code (local CLI or cloud):** the token must be in the environment that
+launched Claude — not only in your shell rc. Local: `source ~/.zshrc` before
+`claude`. Cloud: add `CITADEL_MCP_ACCESS_TOKEN` in cloud env settings. Verify
+with `claude mcp list` and `/mcp` (citadel tools, not zero tools).
+
+See [`docs/onboarding/teammate-rollout.md`](../../docs/onboarding/teammate-rollout.md)
 for the manual step-by-step and what auto-syncs.

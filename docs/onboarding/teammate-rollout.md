@@ -226,6 +226,7 @@ auth error, your token isn't in the environment of the client that's running
 
 | Symptom | Fix |
 |---|---|
+| MCP connected, **zero tools** in Claude | Token not in Claude's process env: local → `source ~/.zshrc && claude`; cloud → add `CITADEL_MCP_ACCESS_TOKEN` in cloud env settings. Run `claude mcp list` and `citadel doctor`. Check `.mcp.json` for legacy stdio (`command`/`kb.mcp_server`) — re-run `citadel doctor --fix`. |
 | `citadel_search` auth error | Restart the MCP client so it re-reads `CITADEL_MCP_ACCESS_TOKEN`. |
 | Nothing lands in my node after a session | Confirm `.claude/settings.json` exists and the token env var is exported in the shell that *launched* Claude Code (not a later shell). |
 | Push still works but no node entry | Re-run `citadel onboard` from the repo root to reinstall the `.git/hooks/pre-push` hook. |

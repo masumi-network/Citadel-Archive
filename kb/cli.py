@@ -42,8 +42,10 @@ from kb.onboard import (
     TOKEN_ENV,
     claude_user_settings_path,
     detect_shell_rc,
+    diagnose_mcp_config,
     ensure_env_in_rc,
     ensure_token_in_rc,
+    format_claude_mcp_next_steps,
     git_root_or_cwd,
     install_agent_policies,
     install_pre_push_hook,
@@ -1504,8 +1506,18 @@ async def _doctor(args: argparse.Namespace) -> int:
     except OSError:
         rc_has = False
     if not env_token and rc_has:
-        issues.append({"problem": f"token is in {rc_path} but not this shell's env",
-                       "fix": f"source {rc_path}  (or open a new shell)"})
+        issues.append(
+            {
+                "problem": (
+                    f"token is in {rc_path} but not this shell's env — "
+                    f"Claude Code cannot expand ${{{TOKEN_ENV}}} in .mcp.json headers"
+                ),
+                "fix": (
+                    f"source {rc_path} && claude  (local CLI), or add {TOKEN_ENV} "
+                    "in Claude cloud environment settings"
+                ),
+            }
+        )
     elif not env_token and not rc_has:
         issues.append({"problem": "no seat token configured", "fix": "citadel onboard"})
 
@@ -1541,6 +1553,9 @@ async def _doctor(args: argparse.Namespace) -> int:
         issues.append({"problem": "Claude SessionEnd/SessionStart hooks missing", "fix": "citadel doctor --fix", "kind": "session"})
     if checks.get("mcp") and not checks["mcp"].ok:
         issues.append({"problem": ".mcp.json missing the citadel MCP server", "fix": "citadel doctor --fix", "kind": "mcp"})
+    for mcp_issue in diagnose_mcp_config(repo):
+        if not any(i.get("problem") == mcp_issue["problem"] for i in issues):
+            issues.append(mcp_issue)
 
     fixed: list[str] = []
     fixed_kinds: set[str] = set()
@@ -1926,6 +1941,8 @@ async def _onboard(args: argparse.Namespace) -> int:
         "(Shared Session Traces are reference-only, not org truth)\n"
         '  • smoke test — "use citadel_search to find what we decided about the vault"'
     )
+    if not args.no_mcp:
+        print(format_claude_mcp_next_steps(rc_path))
     return 0
 
 

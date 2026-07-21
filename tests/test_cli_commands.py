@@ -54,6 +54,39 @@ def test_doctor_clean_reports_ok(tmp_path: Path, monkeypatch, capsys) -> None:
     assert out["ok"] is True and out["issues"] == []
 
 
+def test_doctor_warns_when_token_in_rc_not_env(tmp_path: Path, monkeypatch, capsys) -> None:
+    rc = tmp_path / ".zshrc"
+    rc.write_text("export CITADEL_MCP_ACCESS_TOKEN='ctdl_x'\n")
+    monkeypatch.delenv("CITADEL_MCP_ACCESS_TOKEN", raising=False)
+    monkeypatch.setattr("kb.cli.detect_shell_rc", lambda: rc)
+    monkeypatch.setattr("kb.cli.gather_status", lambda *a, **k: _report(_all_ok()))
+    args = argparse.Namespace(
+        repo=str(tmp_path), config=str(tmp_path / "cap.json"),
+        node_url=None, json=True, fix=False,
+    )
+    rc = asyncio.run(_doctor(args))
+    assert rc == 1
+    out = json.loads(capsys.readouterr().out)
+    assert any("not this shell's env" in i["problem"] for i in out["issues"])
+    assert any("claude" in i["fix"].lower() for i in out["issues"])
+
+
+def test_doctor_flags_legacy_stdio_mcp(tmp_path: Path, monkeypatch, capsys) -> None:
+    monkeypatch.setenv("CITADEL_MCP_ACCESS_TOKEN", "ctdl_x")
+    (tmp_path / ".mcp.json").write_text(
+        json.dumps({"mcpServers": {"citadel": {"command": "uv", "args": ["run"]}}})
+    )
+    monkeypatch.setattr("kb.cli.gather_status", lambda *a, **k: _report(_all_ok()))
+    args = argparse.Namespace(
+        repo=str(tmp_path), config=str(tmp_path / "cap.json"),
+        node_url=None, json=True, fix=False,
+    )
+    rc = asyncio.run(_doctor(args))
+    assert rc == 1
+    out = json.loads(capsys.readouterr().out)
+    assert any("legacy stdio" in i["problem"] for i in out["issues"])
+
+
 def test_doctor_fix_installs_missing_local_setup(tmp_path: Path, monkeypatch, capsys) -> None:
     (tmp_path / ".git" / "hooks").mkdir(parents=True)
     monkeypatch.setenv("CITADEL_MCP_ACCESS_TOKEN", "ctdl_x")

@@ -433,3 +433,98 @@ def install_pre_push_hook(repo: Path, python: str | None = None) -> str:
     dst.write_text(payload)
     dst.chmod(dst.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
     return result
+
+
+def is_legacy_stdio_mcp_block(block: Any) -> bool:
+    """True when a citadel MCP block uses stdio/command instead of hosted HTTP."""
+    if not isinstance(block, dict):
+        return False
+    if block.get("command"):
+        return True
+    mcp_type = str(block.get("type") or "").lower()
+    if mcp_type in ("stdio", "sse"):
+        return True
+    return bool(mcp_type and mcp_type != "http")
+
+
+def is_http_citadel_mcp_block(block: Any) -> bool:
+    """True when the citadel block is the supported hosted HTTP shape."""
+    if not isinstance(block, dict) or is_legacy_stdio_mcp_block(block):
+        return False
+    return block.get("type") == "http" and bool(block.get("url"))
+
+
+def read_citadel_mcp_block(path: Path) -> dict[str, Any] | None:
+    """Return the citadel server block from a JSON MCP config, or None."""
+    if not path.exists():
+        return None
+    try:
+        servers = (_load_json_object(path).get("mcpServers") or {})
+    except ValueError:
+        return None
+    if not isinstance(servers, dict):
+        return None
+    block = servers.get(MCP_SERVER_NAME)
+    return block if isinstance(block, dict) else None
+
+
+def claude_user_mcp_path() -> Path:
+    """User-scope Claude MCP config (``claude mcp add --scope user``)."""
+    return claude_home() / ".claude.json"
+
+
+def format_claude_mcp_next_steps(rc_path: Path) -> str:
+    """Post-onboard hints for Claude Code local CLI + cloud MCP auth."""
+    return (
+        f"\nClaude Code MCP ({TOKEN_ENV}):\n"
+        f"  • Local CLI — reload your shell before starting Claude:\n"
+        f"      source {rc_path}   (or open a new terminal)\n"
+        f"    Or export {TOKEN_ENV} in the same shell before running `claude`.\n"
+        f"  • Claude cloud — add {TOKEN_ENV} in your cloud environment settings;\n"
+        f"    project `.mcp.json` alone does not inject secrets into cloud sessions.\n"
+        f"  • Verify — run `claude mcp list` (no missing-env warning on citadel).\n"
+        f"    In Claude, `/mcp` should list citadel tools (not zero tools)."
+    )
+
+
+def diagnose_mcp_config(repo: Path) -> list[dict[str, str]]:
+    """Doctor-style MCP issues: missing HTTP block, legacy stdio, user-scope drift."""
+    issues: list[dict[str, str]] = []
+    mcp_path = repo / ".mcp.json"
+    block = read_citadel_mcp_block(mcp_path)
+    if mcp_path.exists() and block is None:
+        issues.append(
+            {
+                "problem": ".mcp.json has no citadel server entry",
+                "fix": "citadel doctor --fix",
+                "kind": "mcp",
+            }
+        )
+    elif block is not None:
+        if is_legacy_stdio_mcp_block(block):
+            issues.append(
+                {
+                    "problem": ".mcp.json citadel entry uses legacy stdio/command transport",
+                    "fix": "citadel doctor --fix  (replaces with hosted HTTP)",
+                    "kind": "mcp",
+                }
+            )
+        elif not is_http_citadel_mcp_block(block):
+            issues.append(
+                {
+                    "problem": ".mcp.json citadel entry is not hosted HTTP (type:http + url)",
+                    "fix": "citadel doctor --fix",
+                    "kind": "mcp",
+                }
+            )
+
+    claude_path = claude_user_mcp_path()
+    claude_block = read_citadel_mcp_block(claude_path)
+    if claude_block is not None and is_legacy_stdio_mcp_block(claude_block):
+        issues.append(
+            {
+                "problem": f"{claude_path} has a legacy stdio citadel MCP entry",
+                "fix": f"citadel mcp add claude  (or remove citadel from {claude_path})",
+            }
+        )
+    return issues
