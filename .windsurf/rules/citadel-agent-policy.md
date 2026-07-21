@@ -1,6 +1,6 @@
 ---
 description: Citadel agent policy — search before coding, traces are reference-only
-alwaysApply: true
+trigger: always_on
 ---
 
 # Citadel — agent policy
