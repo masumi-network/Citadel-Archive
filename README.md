@@ -56,7 +56,10 @@ pipx install citadel-archive          # the `citadel` command (zero-dep client)
 # upgrade: pipx install --force citadel-archive --pip-args=--no-cache-dir
 
 citadel onboard                       # token + hooks + MCP + capture roots (idempotent)
+source ~/.zshrc                       # load CITADEL_MCP_ACCESS_TOKEN into this shell
+claude                                # Claude Code — token must be in the process env
 citadel status                        # connection · identity · local setup  (--json for agents)
+citadel doctor                        # diagnose setup; --fix repairs hooks + .mcp.json
 citadel activity                      # what your Node is doing — captures, syncs, promotions
 ```
 
@@ -77,10 +80,13 @@ citadel activity                      # what your Node is doing — captures, sy
 ```
 
 `citadel onboard` installs the bundled autosync hooks (`kb.hooks.*` — no vendored
-skill), writes the seat token to your shell rc (masked), adds the MCP server, and
-offers Approved Capture Roots. Get a `ctdl_…` seat token from a vault admin (the
-Access page or `POST /api/access/tokens`). One token per person or agent; rotate
-anything that lands in chat or logs.
+skill), writes the seat token to your shell rc (masked), writes hosted HTTP MCP
+to the project `.mcp.json`, and offers Approved Capture Roots. When setup
+finishes it prints Claude Code MCP next steps (reload shell before `claude`;
+cloud sessions need the token in cloud env settings — not only in repo config).
+Get a `ctdl_…` seat token from a vault admin (the Access page or
+`POST /api/access/tokens`). One token per person or agent; rotate anything that
+lands in chat or logs.
 
 > **Admins: mint a seat-bound token, not a bare service account.** On the Access
 > page pick a seat under *Assign to seat* (or run `citadel seat token <slug>`) so
@@ -128,14 +134,17 @@ citadel activity [--watch] [--global] # your Node's vault activity (--watch live
 citadel capture [--dry-run] [--json]  # push summaries of Approved Capture Roots
 citadel search "what did we decide about the vault?"   # HTTP-backed via your seat (--json)
 citadel ingest "A durable note" --tag decision         # → your seat Node, cognified inline
+citadel mcp add claude                # ~/.claude.json (user scope) + project .mcp.json
 citadel mcp add cursor                # wire another coding tool to the hosted MCP
 citadel seat create "Jane Dev" jane   # admin: mint a seat + its seat-scoped writer token
 ```
 
 ### MCP (hosted)
 
-Agents connect with a URL and a token — no clone, no local Python. Add to a
-project `.mcp.json`:
+Agents connect with a URL and a token — no clone, no local Python. `citadel
+onboard` and `citadel mcp add claude` write this to the project `.mcp.json`
+(the legacy stdio/`kb.mcp_server` plugin path is deprecated — run `citadel
+doctor --fix` if you still have a `command`-based entry):
 
 ```json
 {
@@ -148,6 +157,15 @@ project `.mcp.json`:
   }
 }
 ```
+
+**Claude Code:** `${CITADEL_MCP_ACCESS_TOKEN}` is expanded only when the variable
+is in the **process environment** that launched Claude — local CLI: `source
+~/.zshrc` (or open a new terminal) before `claude`; **cloud:** add
+`CITADEL_MCP_ACCESS_TOKEN` in Claude cloud environment settings. Verify with
+`claude mcp list` (no missing-env warning) and `/mcp` (citadel tools, not "zero
+tools"). `citadel doctor` flags token-in-rc-but-not-env and legacy stdio MCP.
+
+Per-client setup: [`docs/mcp/README.md`](docs/mcp/README.md).
 
 ### HTTP API
 
@@ -200,6 +218,7 @@ requirements, and public/private boundary — without exposing vault content.
 |---|---|
 | Operations & self-hosting | [`docs/operations.md`](docs/operations.md) |
 | Teammate rollout (5 min) | [`docs/onboarding/teammate-rollout.md`](docs/onboarding/teammate-rollout.md) |
+| MCP integration (Claude, Cursor, …) | [`docs/mcp/README.md`](docs/mcp/README.md) |
 | Autonomous sync | [`docs/onboarding/citadel-autosync.md`](docs/onboarding/citadel-autosync.md) |
 | Domain glossary | [`CONTEXT.md`](CONTEXT.md) |
 | Architecture decisions | [`docs/adr/`](docs/adr/) |
@@ -208,7 +227,7 @@ requirements, and public/private boundary — without exposing vault content.
 
 | Repo | Visibility | Role |
 |---|---|---|
-| [Citadel Archive](https://github.com/masumi-network/Citadel-Archive) (this) | **Public** | app, MCP plugin, docs, agent skills (no vault content) |
+| [Citadel Archive](https://github.com/masumi-network/Citadel-Archive) (this) | **Public** | app, hosted MCP, docs, agent skills (no vault content) |
 | Vault Backup Mirror | Private | manifest-only backup of vault evidence |
 | [Railway deployment](https://citadel-archive-production.up.railway.app) | Private | live Organization Vault |
 

@@ -31,7 +31,6 @@ from kb.onboard import (
     mcp_server_block,
     merge_claude_settings,
     merge_mcp_config,
-    read_citadel_mcp_block,
     read_token_from_rc,
     windsurf_agent_policy_rule_text,
 )
