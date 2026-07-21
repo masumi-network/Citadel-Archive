@@ -51,7 +51,7 @@ from kb.github_sync import GitHubOrgSyncer
 from kb.linear_sync import LinearSyncer
 from kb.knowledge_mesh import KnowledgeMesh
 from kb.learning import LearningOutcome, LearningProcess
-from kb.session_trace import enrich_shared_trace
+from kb.session_trace import enrich_shared_trace, force_shared_trace_author_seat
 from kb.learning_agent import LearningAgent
 from kb.logging_utils import configure_logging
 from kb.mcp_server import TOOL_POLICIES, _max_ingest_bytes, create_mcp_server
@@ -3992,7 +3992,9 @@ async def share_session(body: ShareSessionBody, request: Request) -> Any:
                 },
             )
             raise HTTPException(status_code=422, detail=exc.public_message) from exc
-    data = enrich_shared_trace(body.data, has_tool_errors=body.has_tool_errors)
+    data = force_shared_trace_author_seat(body.data, actor.seat_slug)
+    data = enrich_shared_trace(data, has_tool_errors=body.has_tool_errors)
+    data = force_shared_trace_author_seat(data, actor.seat_slug)
     tags = share_session_tags_from_body(actor.seat_slug, body)
     session_id = resolve_session_id(actor, None)
     try:
@@ -4028,6 +4030,43 @@ async def share_session(body: ShareSessionBody, request: Request) -> Any:
             detail={"operation": "share_session", "error_type": exc.__class__.__name__},
         )
         raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    failed_targets = [
+        target.dataset
+        for target, item in zip(write_targets, all_outcomes, strict=True)
+        if not item.ingest.accepted
+    ]
+    if failed_targets:
+        failure_detail = {
+            "operation": "share_session",
+            "error_type": "partial_write_failure",
+            "failed_targets": failed_targets,
+            "write_targets": [target.dataset for target in write_targets],
+        }
+        record_mcp_audit(
+            request,
+            actor=actor,
+            success=False,
+            dataset=SESSION_TRACES_DATASET,
+            detail=failure_detail,
+        )
+        get_access_store().record_event(
+            action="share_session",
+            actor=actor,
+            success=False,
+            dataset=SESSION_TRACES_DATASET,
+            detail={
+                **failure_detail,
+                "author_seat": actor.seat_slug,
+            },
+        )
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "message": "Shared Session Trace could not be fully written.",
+                **failure_detail,
+            },
+        )
 
     cognify_datasets = [
         target.dataset

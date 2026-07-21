@@ -37,6 +37,7 @@ from kb.capture_config import (
     save_capture_config,
 )
 from kb.capture import build_capture_payload, capture_token, post_capture
+from kb.capture_roots_sync import sync_local_capture_roots_to_server, sync_warning_message
 from kb.onboard import (
     TOKEN_ENV,
     claude_user_settings_path,
@@ -44,14 +45,13 @@ from kb.onboard import (
     ensure_env_in_rc,
     ensure_token_in_rc,
     git_root_or_cwd,
-    install_cursor_agent_policy_rule,
+    install_agent_policies,
     install_pre_push_hook,
     mask_token,
     merge_claude_settings,
     merge_mcp_config,
     read_token_from_rc,
 )
-from kb.tool_detect import detect
 from kb.banner import (
     HERO_WIDTH,
     SKIP,
@@ -630,10 +630,21 @@ async def _setup(args: argparse.Namespace) -> int:
     written = save_capture_config(
         config, path=config_path, updated_at=datetime.now(timezone.utc).isoformat()
     )
+    sync_result = sync_local_capture_roots_to_server(config) if config.roots else None
+    warning = sync_warning_message(sync_result) if sync_result else None
     if getattr(args, "json", False):
-        _print_json(load_capture_config(config_path).to_dict())
+        payload = load_capture_config(config_path).to_dict()
+        if sync_result is not None:
+            payload["capture_roots_sync"] = {
+                "status": sync_result.status,
+                "detail": sync_result.detail,
+                "seat_slug": sync_result.seat_slug,
+            }
+        _print_json(payload)
     else:
         print(f"\nSaved {len(config.roots)} approved root(s) to {written}")
+        if warning:
+            print(f"Warning: {warning}", file=sys.stderr)
     return 0
 
 
@@ -1777,10 +1788,7 @@ async def _onboard(args: argparse.Namespace) -> int:
         # Session hooks go to the USER-scope settings so they fire across every
         # repo, not only the onboard repo (#38).
         steps.append(("SessionEnd hook", merge_claude_settings(claude_user_settings_path())))
-        if "cursor" in detect():
-            steps.append(
-                ("Cursor agent policy (.cursor/rules)", install_cursor_agent_policy_rule(repo))
-            )
+        steps.extend(install_agent_policies(repo))
         if not args.no_mcp:
             steps.append(("MCP server (.mcp.json)", merge_mcp_config(repo / ".mcp.json", node_url)))
     except ValueError as exc:
@@ -1848,6 +1856,25 @@ async def _onboard(args: argparse.Namespace) -> int:
             cfg, path=cfg_path, updated_at=datetime.now(timezone.utc).isoformat()
         )
         steps.append((f"capture roots → {cfg_path}", f"{len(cfg.roots)} root(s)"))
+        sync_result = sync_local_capture_roots_to_server(
+            cfg,
+            base_url=node_url,
+            token=token,
+        )
+        warning = sync_warning_message(sync_result)
+        if warning:
+            steps.append(("capture roots → Node", f"warning: {warning}"))
+        elif sync_result.status == "synced":
+            steps.append(
+                (
+                    "capture roots → Node",
+                    f"synced {sync_result.merged_count} root(s) to seat {sync_result.seat_slug}",
+                )
+            )
+        elif sync_result.status == "unchanged":
+            steps.append(("capture roots → Node", "unchanged on Node"))
+        else:
+            steps.append(("capture roots → Node", sync_result.detail))
 
     if interactive and not getattr(args, "no_tools", False):
         _wire_detected_tools(node_url, color=color)

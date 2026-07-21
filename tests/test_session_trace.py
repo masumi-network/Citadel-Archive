@@ -7,7 +7,7 @@ from typing import Any
 import pytest
 
 from kb.capture_config import matched_capture_root
-from kb.session_trace import enrich_shared_trace
+from kb.session_trace import enrich_shared_trace, force_shared_trace_author_seat
 from kb.session_trace_distill import (
     distill_trace,
     format_compact_context,
@@ -127,3 +127,31 @@ def test_enrich_shared_trace_skips_llm_without_tool_errors(monkeypatch: pytest.M
     original = "Task: fix lock\nDead ends: database locked"
     assert enrich_shared_trace(original, has_tool_errors=False) == original
     assert called["chat"] is False
+
+
+def test_force_shared_trace_author_seat_replaces_spoofed_line() -> None:
+    data = "# Shared Session Trace\nAuthor-Seat: bob\n\nTask: x"
+    forced = force_shared_trace_author_seat(data, "alice")
+    assert "Author-Seat: alice" in forced
+    assert "Author-Seat: bob" not in forced
+
+
+def test_force_shared_trace_author_seat_inserts_after_header() -> None:
+    forced = force_shared_trace_author_seat("# Shared Session Trace\n\nTask: x", "alice")
+    assert forced.splitlines()[1] == "Author-Seat: alice"
+
+
+def test_enrich_shared_trace_preserves_forced_author(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("kb.session_trace.enrichment_enabled", lambda: True)
+    monkeypatch.setattr(
+        "kb.session_trace.openrouter_chat",
+        lambda *a, **k: "# Shared Session Trace\nAuthor-Seat: eve\n\nTask: refined",
+    )
+    data = force_shared_trace_author_seat(
+        "# Shared Session Trace\nAuthor-Seat: alice\n\nTask: x",
+        "alice",
+    )
+    enriched = enrich_shared_trace(data, has_tool_errors=True)
+    forced = force_shared_trace_author_seat(enriched, "alice")
+    assert "Author-Seat: alice" in forced
+    assert "Author-Seat: eve" not in forced

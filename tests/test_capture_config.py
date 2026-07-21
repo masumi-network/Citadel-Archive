@@ -4,6 +4,7 @@ import argparse
 import asyncio
 import os
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -165,3 +166,60 @@ def test_setup_non_interactive_writes_roots(tmp_path: Path) -> None:
     assert by_path["/tmp/work"] == ("org-work",)
     assert by_path["/tmp/notes"] == ("personal",)
     assert loaded.updated_at is not None
+
+
+def test_setup_syncs_capture_roots_to_node(tmp_path: Path, monkeypatch) -> None:
+    path = tmp_path / "capture.json"
+    calls: list[Any] = []
+
+    def fake_sync(config: CaptureConfig, **kwargs: Any) -> Any:
+        calls.append((config, kwargs))
+        from kb.capture_roots_sync import CaptureRootsSyncResult
+
+        return CaptureRootsSyncResult(
+            ok=True,
+            status="synced",
+            detail="synced 1 approved capture root(s) to Node",
+            seat_slug="alice",
+            merged_count=1,
+        )
+
+    monkeypatch.setattr("kb.cli.sync_local_capture_roots_to_server", fake_sync)
+    args = argparse.Namespace(
+        config=str(path),
+        node_url="https://my-node.example",
+        root=["/tmp/work=org-work"],
+        non_interactive=True,
+        show=False,
+        json=False,
+    )
+    asyncio.run(_setup(args))
+    assert len(calls) == 1
+    assert calls[0][0].node_url == "https://my-node.example"
+
+
+def test_setup_sync_failure_still_succeeds(tmp_path: Path, monkeypatch, capsys) -> None:
+    path = tmp_path / "capture.json"
+
+    def fake_sync(config: CaptureConfig, **kwargs: Any) -> Any:
+        from kb.capture_roots_sync import CaptureRootsSyncResult
+
+        return CaptureRootsSyncResult(
+            ok=False,
+            status="failed",
+            detail="timeout",
+            seat_slug="alice",
+        )
+
+    monkeypatch.setattr("kb.cli.sync_local_capture_roots_to_server", fake_sync)
+    args = argparse.Namespace(
+        config=str(path),
+        node_url="https://my-node.example",
+        root=["/tmp/work=org-work"],
+        non_interactive=True,
+        show=False,
+        json=False,
+    )
+    rc = asyncio.run(_setup(args))
+    assert rc == 0
+    assert "timeout" in capsys.readouterr().err

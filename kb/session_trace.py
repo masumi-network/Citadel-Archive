@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 
 from kb.llm_enrichment import (
     content_flagged_by_security_scan,
@@ -33,8 +34,22 @@ __all__ = [
     "iter_transcript_entries",
     "redact_commands",
     "enrich_shared_trace",
+    "force_shared_trace_author_seat",
     "share_session_tags",
 ]
+
+_AUTHOR_SEAT_LINE = re.compile(r"^Author-Seat:\s*.+$", re.MULTILINE)
+
+
+def force_shared_trace_author_seat(data: str, seat_slug: str) -> str:
+    """Pin Author-Seat metadata to the authenticated seat (never caller-supplied)."""
+    line = f"Author-Seat: {seat_slug.strip()}"
+    if _AUTHOR_SEAT_LINE.search(data):
+        return _AUTHOR_SEAT_LINE.sub(line, data, count=1)
+    lines = data.splitlines()
+    if lines and lines[0].strip() == "# Shared Session Trace":
+        return "\n".join([lines[0], line, *lines[1:]])
+    return f"{line}\n{data}"
 
 
 def enrich_shared_trace(data: str, *, has_tool_errors: bool) -> str:

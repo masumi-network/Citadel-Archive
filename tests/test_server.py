@@ -4287,6 +4287,78 @@ def test_share_session_blocks_secret_before_llm(tmp_path: Any, monkeypatch: Any)
     assert blocked[-1]["action"] == "share_session"
 
 
+def test_share_session_overwrites_spoofed_author_seat(tmp_path: Any) -> None:
+    app.state.access_store = AccessStore(tmp_path / "access.json")
+    admin = authed_client()
+    token = admin.post("/api/access/seats", json={"name": "Alice", "slug": "alice"}).json()["token"]
+    app.state.citadel = ShareCitadel()
+    client = TestClient(app, base_url="https://testserver")
+    root = str(tmp_path)
+    register_seat_capture_roots(admin, "alice", [root])
+    data = (
+        "# Shared Session Trace\nAuthor-Seat: bob\nCreated-At: 2026-07-20T12:00:00Z\n\n"
+        "Task: spoof author attribution\nApproach: claim bob wrote this"
+    )
+
+    response = client.post(
+        "/api/share-session",
+        json={"data": data, "cwd": root, "capture_roots": [root], "has_tool_errors": False},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert response.status_code == 200
+    ingested = app.state.citadel.ingest_calls[-1]["data"]
+    assert "Author-Seat: alice" in ingested
+    assert "Author-Seat: bob" not in ingested
+
+
+class PartialSessionTraceWriteCitadel(FakeCitadel):
+    """Accepts seat-node writes but rejects session-traces ingest."""
+
+    def __init__(self) -> None:
+        self.ingest_calls: list[dict[str, Any]] = []
+        self.cognee = type("_FakeCognee", (), {})()
+        self.cognee.scheduled: list[list[str]] = []
+        self.cognee.schedule_cognify = lambda datasets: self.cognee.scheduled.append(list(datasets))
+
+    async def ingest(self, data: str, **kwargs: Any) -> IngestResult:
+        self.ingest_calls.append({"data": data, **kwargs})
+        dataset = kwargs.get("dataset") or "notes"
+        if dataset == SESSION_TRACES_DATASET:
+            return IngestResult(False, "rejected", dataset, tuple(kwargs.get("tags") or ()))
+        return IngestResult(True, "accepted", dataset, tuple(kwargs.get("tags") or ()))
+
+
+def test_share_session_fails_when_session_traces_write_rejected(tmp_path: Any) -> None:
+    app.state.access_store = AccessStore(tmp_path / "access.json")
+    admin = authed_client()
+    token = admin.post("/api/access/seats", json={"name": "Alice", "slug": "alice"}).json()["token"]
+    app.state.citadel = PartialSessionTraceWriteCitadel()
+    client = TestClient(app, base_url="https://testserver")
+    root = str(tmp_path)
+    register_seat_capture_roots(admin, "alice", [root])
+    data = (
+        "# Shared Session Trace\nAuthor-Seat: alice\nCreated-At: 2026-07-20T12:00:00Z\n\n"
+        "Task: partial dual-write failure\nApproach: session-traces ingest rejected"
+    )
+
+    response = client.post(
+        "/api/share-session",
+        json={"data": data, "cwd": root, "capture_roots": [root], "has_tool_errors": False},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert response.status_code == 500
+    detail = response.json()["detail"]
+    assert detail["error_type"] == "partial_write_failure"
+    assert SESSION_TRACES_DATASET in detail["failed_targets"]
+    assert app.state.citadel.cognee.scheduled == []
+    events = app.state.access_store.snapshot()["audit_events"]
+    failed = [event for event in events if event["action"] == "share_session" and not event["success"]]
+    assert failed
+    assert failed[-1]["detail"]["error_type"] == "partial_write_failure"
+
+
 def test_search_marks_session_trace_hits_reference_only(tmp_path: Any) -> None:
     app.state.access_store = AccessStore(tmp_path / "access.json")
     admin = authed_client()
