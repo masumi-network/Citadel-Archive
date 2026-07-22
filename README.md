@@ -15,6 +15,10 @@ Your team already produces the knowledge — commits, docs, decisions, sessions,
 
 The result is organizational memory that behaves like a company vault: private working memory per seat, shared Central knowledge for the org, and clear rules for what gets promoted, what stays private, and what agents can trust.
 
+<p align="center">
+  <img src="docs/brand/readme-dashboard.jpg" alt="Citadel Archive dashboard — Overview analytics, Knowledge Mesh, and vault workflow" width="860" />
+</p>
+
 ## What Citadel does
 
 - **Organization Vault** — Central (`masumi-network`) holds org-wide structured knowledge; each seat has a private **Node** (`seat:{slug}`) for working memory. You read your Node + Central; you never read another seat's Node.
@@ -24,6 +28,7 @@ The result is organizational memory that behaves like a company vault: private w
 - **Source learning** — scheduled GitHub org digest, repo content sync, and Linear workspace sync keep Central fresh. Assignee issues mirror into your Node as a Seat-Scoped Mirror.
 - **Hosted MCP + headless CLI** — agents connect with a URL + token; every teammate command speaks `--json`. Zero-dependency client (`pip install citadel-archive`); server stack is an opt-in extra.
 - **Knowledge Mesh & Vault Activity** — web UI canvases for source-linked documents/concepts and live sync/search/ingest timelines. Seat presence is visible; content stays caller-scoped (ADR-0009).
+- **Seat portal (Phase 1)** — paste your seat `ctdl_…` token on `/login` to open **My Node** (Seat home): Node stats, checklist, and links into search / graph / activity. MCP + hooks remain the primary write path.
 - **Tiered ingestion** — light indexing for private Node memory; full Learning Process (security review, enrichment, structuring) for org-bound content. Secrets blocked on every write path.
 - **Vault Backup Mirror** — manifest-only export of vault evidence for recovery and audit.
 - **Access control & audit** — seat-bound tokens, role-scoped MCP tools, per-call audit. Admins provision seats before issuing tokens.
@@ -76,7 +81,7 @@ pipx install citadel-archive          # the `citadel` command (zero-dep client)
 citadel onboard                       # token + hooks + MCP + capture roots (idempotent)
 source ~/.zshrc                       # load CITADEL_MCP_ACCESS_TOKEN into this shell
 claude                                # Claude Code — token must be in the process env
-citadel status                        # connection · identity · local setup  (--json for agents)
+citadel status                        # connection · identity · local setup  (--json for agents; add --check-search to smoke /search)
 citadel doctor                        # diagnose setup; --fix repairs hooks + .mcp.json
 citadel activity                      # what your Node is doing — captures, syncs, promotions
 ```
@@ -194,7 +199,7 @@ citadel doctor [--fix]                 # diagnose and repair local setup
 ```bash
 citadel onboard                       # one-command setup
 citadel doctor [--fix]                # diagnose (and repair) your local setup
-citadel status [--json]               # health + identity + knowledge mesh
+citadel status [--json] [--check-search]  # health + identity + mesh (search smoke is opt-in)
 citadel activity [--watch] [--global] # your Node's activity; --global = team presence (counts only)
 citadel mcp add claude                # wire Claude Code to hosted MCP
 citadel mcp add cursor                # wire Cursor
@@ -221,6 +226,7 @@ Full endpoint reference: [`docs/operations.md`](docs/operations.md#http-api-refe
 | Topic | Doc |
 |---|---|
 | Teammate rollout (5 min) | [`docs/onboarding/teammate-rollout.md`](docs/onboarding/teammate-rollout.md) |
+| Seat-scoped portal plan | [`docs/plans/seat-scoped-portal.md`](docs/plans/seat-scoped-portal.md) |
 | Autonomous sync | [`docs/onboarding/citadel-autosync.md`](docs/onboarding/citadel-autosync.md) |
 | MCP integration (Claude, Cursor, …) | [`docs/mcp/README.md`](docs/mcp/README.md) |
 | Operations & self-hosting | [`docs/operations.md`](docs/operations.md) |
