@@ -186,6 +186,7 @@ in scripts/CI.
 
 ```bash
 citadel status        # connection + identity + local setup + knowledge mesh (expect all ●); --json for agents
+# optional: citadel status --check-search   # smoke /search (off by default; never gates health)
 # or:  citadel doctor # diagnose setup issues; --fix repairs the safe ones
 
 # Token works + MCP search returns results:
@@ -196,6 +197,7 @@ citadel status        # connection + identity + local setup + knowledge mesh (ex
 
 `citadel status` is the teammate's dashboard replacement — it shows the Node
 health, your seat + role, and whether your hooks/MCP/capture roots are wired up.
+It does **not** smoke-test `/search` unless you pass `--check-search`.
 Agents run `citadel status --json` to check connectivity programmatically.
 
 ### See what Citadel is doing

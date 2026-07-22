@@ -2,7 +2,11 @@
 
 Last updated: 2026-07-21.
 
-## 2026-07-21 — Seat-scoped portal Phase 1 — SHIPPED (PR #95)
+## 2026-07-21 — Merges: portal Phase 1, Pixel Bastion, fast `citadel status`
+
+Three PRs landed on `main` the same day:
+
+### Seat-scoped portal Phase 1 — SHIPPED (PR #95)
 
 **PR #95** (`cursor/seat-scoped-portal-phase1`) ships Phase 1 of the
 [seat-scoped portal plan](plans/seat-scoped-portal.md): members paste a seat
@@ -25,6 +29,24 @@ admin-only token rotation in Phase 1.
 
 **Phase 2 remaining:** seat activity analytics table, Access inventory
 deep-links, graph “you” highlight / hub context panel, Vault Activity seat POV.
+
+### Pixel Bastion brand — SHIPPED (PR #96)
+
+**PR #96** ships the canonical **Pixel Bastion** 7×7 mark across CLI home
+(cascade + idle blink), README banner (`docs/brand/readme-banner.svg`), favicon,
+login/sidebar lockup, and self-hosted Inter / JetBrains Mono. Dashboard chrome
+moves sidebar-first to match the Interface design canvas. Overview / Activity
+gain CSP-safe SVG analytics bars (Knowledge Mesh canvas unchanged).
+
+Portal UX note: brand polish only — seat login / Node isolation unchanged.
+
+### CLI `citadel status` latency — SHIPPED (PR #97)
+
+**PR #97** makes search smoke **opt-in**. Default `citadel status` no longer
+calls `/search` (that check never gated `healthy` but often dominated wall time
+on Railway/cognee). Use `--check-search` for a short (3s) smoke; full
+`citadel search` still uses the longer timeout. `--no-search` remains a no-op
+alias for existing scripts.
 
 ## 2026-07-20 — Shared Session Traces v1 + multi-agent policy onboard — SHIPPED (PR #93)
 

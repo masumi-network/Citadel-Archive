@@ -23,13 +23,13 @@ The first successful run creates the project; no token is ever needed.
 
 ```bash
 # 1. bump the version + update the changelog
-#    edit pyproject.toml  ->  version = "0.1.1"
-#    add a [0.1.1] section to CHANGELOG.md
+#    edit kb/__init__.py  ->  __version__ = "0.4.0"
+#    move [Unreleased] notes into a [0.4.0] section in CHANGELOG.md
 
 # 2. commit + tag + push the tag
-git add pyproject.toml
-git commit -m "release: v0.1.1"
-git tag v0.1.1
+git add kb/__init__.py CHANGELOG.md
+git commit -m "release: v0.4.0"
+git tag v0.4.0
 git push origin main --tags
 ```
 
@@ -55,8 +55,9 @@ uv pip install --system twine && python -m twine check dist/*
 
 ## Notes
 
-- **Version is the source of truth in `pyproject.toml`** — the tag must match
-  (`v0.1.1` → `version = "0.1.1"`). PyPI rejects re-uploading an existing
+- **Version is the source of truth in `kb/__init__.py`** (`__version__`; hatch
+  reads it via `[tool.hatch.version]`). The tag must match
+  (`v0.4.0` → `__version__ = "0.4.0"`). PyPI rejects re-uploading an existing
   version, so always bump before tagging.
 - The base package has zero third-party dependencies (pure stdlib); the
   `[server]` extra pulls the heavy stack on demand. Keep that split when adding

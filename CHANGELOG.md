@@ -6,14 +6,26 @@ All notable changes to `citadel-archive` are documented here. Format follows
 
 ## [Unreleased]
 
+## [0.4.0] — 2026-07-22
+
 ### Added
 
+- **Seat-scoped portal Phase 1.** Members log in with a seat `ctdl_…` token and
+  land on **My Node** (Seat home): session chrome shows `seat_slug` + Node label;
+  `GET /api/me/summary` drives doc counts, recent Node activity, empty checklist,
+  and links to search / graph / activity. Admin nav (Access / Audit / Settings /
+  Overview) stays hidden from non-admin; search badges distinguish My Node vs
+  Central. Optional portal path documented in teammate rollout. Phase 2
+  (analytics table, Access deep-links, graph “you” / hub context) remains.
 - **Pixel Bastion brand kit.** Canonical 7×7 mark (`kb/banner.py`) across CLI
   (TTY cascade + idle blink), GitHub README banner (`docs/brand/readme-banner.svg`),
   favicon (`kb/static/favicon.svg`), login/sidebar lockup
   (`kb/static/pixel-bastion.svg` + CSP-safe `.brand-pixel--cN` grid), and self-hosted
   Inter / JetBrains Mono. Dashboard chrome restyled sidebar-first to match the
-  Interface design canvas (14px cards, seat footer).
+  Interface design canvas (14px cards, seat footer). Bare `citadel` home shows
+  Pixel Bastion only (no legacy ASCII wordmark).
+- **README product screenshot.** Dashboard Overview + Knowledge Mesh hero image
+  (`docs/brand/readme-dashboard.jpg`) under the intro pitch.
 - **Overview / Activity analytics panels.** Volume, ops/type, and outcome charts
   on the Overview and Vault Activity pages (SVG bars; horizontal widths are
   CSP-safe — no inline `style=`). Knowledge Mesh `#graphCanvas` unchanged.
@@ -427,6 +439,8 @@ self-hosted Organization Vault server.
   references it as `${CITADEL_MCP_ACCESS_TOKEN}` and it is never echoed.
 - The pre-push allowlist fails **closed** on a corrupt config.
 
+[0.4.0]: https://github.com/masumi-network/Citadel-Archive/releases/tag/v0.4.0
+[0.3.0]: https://github.com/masumi-network/Citadel-Archive/releases/tag/v0.3.0
 [0.2.1]: https://github.com/masumi-network/Citadel-Archive/releases/tag/v0.2.1
 [0.2.0]: https://github.com/masumi-network/Citadel-Archive/releases/tag/v0.2.0
 [0.1.3]: https://github.com/masumi-network/Citadel-Archive/releases/tag/v0.1.3

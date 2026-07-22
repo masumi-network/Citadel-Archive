@@ -1,7 +1,8 @@
 # Seat-Scoped Portal — Product & Architecture Plan
 
-**Status:** Grill closed — Phase 1 implementing on `cursor/seat-scoped-portal-phase1`  
+**Status:** Phase 1 **SHIPPED** (PR [#95](https://github.com/masumi-network/Citadel-Archive/pull/95), 2026-07-21) — Phase 2 remaining  
 **Date:** 2026-07-21  
+**Brand UX:** Login + sidebar use the **Pixel Bastion** mark and Interface chrome (PR [#96](https://github.com/masumi-network/Citadel-Archive/pull/96)); does not change seat auth or Node isolation.  
 **Relates:** [ADR-0003](../adr/0003-seat-node-central-private-memory.md), [ADR-0006](../adr/0006-agent-auth-and-onboarding.md), [ADR-0007](../adr/0007-seat-capture-promotion-write-policy.md), [ADR-0009](../adr/0009-mesh-read-isolation-presence-vs-content.md), [`agent-access-model.md`](../agent-access-model.md), [`organization-vault-plan.md`](../organization-vault-plan.md), [`onboarding/teammate-rollout.md`](../onboarding/teammate-rollout.md)
 
 ## Vision
@@ -14,7 +15,7 @@ Every licensed human has a **Seat**. That person should:
 4. Stop experiencing seats as empty, disconnected “slots” on an admin console.
 5. Trust that **ingest via a seat Token always lands in that Seat’s Node**, and that the portal makes that link readable (Seat ↔ Node/KB ↔ graph ↔ activity).
 
-Today the **data model and API already encode seat → Node + Central**, and **seat-token write routing already forces Node-only ingest** (`resolve_write_targets` → `seat:{slug}`). The gap is mostly **product surface, mental model, and observability**: the Operations Dashboard still reads as an admin console; teammate docs push a headless MCP-only path; chrome ignores `seat_slug`; audit events record `actor_*` + `dataset` but not an explicit `seat_slug` field; there is no per-seat activity analytics panel.
+Today the **data model and API already encode seat → Node + Central**, and **seat-token write routing already forces Node-only ingest** (`resolve_write_targets` → `seat:{slug}`). **Phase 1** productized seat-token browser login, session chrome, and **My Node** (Seat home). Remaining gap is mostly **Phase 2 observability**: Access inventory health deep-links, graph “you” highlight / hub context, and the org-wide **seat activity analytics** table.
 
 ---
 
@@ -58,50 +59,48 @@ User: seat Tokens (own + teammates’) **are** seat-linked; still “don’t see
 
 → **Working hypothesis: B and/or C** (portal/graph/UI does not surface Seat↔KB; and/or empty/disconnected UX). **Not A** (no-seat token). **Not claiming D** without a routing repro.
 
-**What surfaces seat linkage today (code check):**
+**What surfaces seat linkage (post–Phase 1):**
 
-| Surface | What you get | What’s missing for “linked” |
+| Surface | What you get | Still missing (Phase 2+) |
 |---|---|---|
-| **Access → Seats** (admin) | Name, slug, `node_dataset` string, token counts/revoke | No doc/ingest counts; no click-through to graph or search; no “last activity” |
-| **Knowledge Graph** | Synthetic `seat:{slug}` presence hubs + doc counts; inspector says “Seat presence” | Hubs can show **0 docs**; content `belongs_to` only if Cognee attribution works; no “open this seat’s home” |
-| **Session chrome** | Role chip only (`loadSession` stores `role`) | Ignores `seat_slug` / `node_label` from `/api/session` |
-| **Member default page** | Search (not Seat home) | No “you are seat X / Node seat:X” frame |
-| **Audit** | `actor_*` + `dataset` (admin-only) | No seat-centric analytics rollup |
+| **Access → Seats** (admin) | Name, slug, `node_dataset` string, token counts/revoke | Doc/ingest counts; click-through to graph/search; last activity |
+| **Knowledge Graph** | Synthetic `seat:{slug}` presence hubs + doc counts; inspector says “Seat presence” | “You” highlight; hub → seat context panel; empty hubs still possible until capture |
+| **Session chrome** | Seat slug + Node label + role from `/api/session` | — |
+| **Member default page** | **My Node** (Seat home) via `GET /api/me/summary` | Analytics / Access deep-links |
+| **Audit** | `actor_*` + `dataset` (admin-only) | Seat-centric analytics rollup |
 
-Phase 1 still includes a **seat-token smoke ingest** to confirm writes land on `seat:{slug}` (guards against silent D), but product work targets **visibility + interlinking**, not a second write router.
+Attribution remains covered by existing seat write tests + home `node_dataset` / last-ingest fields — product work still targets **visibility + interlinking**, not a second write router.
 
 ### Auth surfaces today
 
-- **Browser login** (`POST /admin/session`): accepts env bootstrap keys **and** AccessStore tokens. A seat `ctdl_` token already mints an HttpOnly cookie session (`token:{role}:{token_id}:{sig}`).
+- **Browser login** (`POST /admin/session`): accepts env bootstrap keys **and** AccessStore tokens. A seat `ctdl_` token mints an HttpOnly cookie session (`token:{role}:{token_id}:{sig}`).
 - **API / MCP**: `Authorization: Bearer` with the same token → `AccessIdentity` with seat fields.
-- **Session payload** (`GET /api/session` → `role_payload`): already returns `seat_slug`, `node_label`, `default_dataset`, `search_datasets`, capabilities.
-- **Login copy**: page title is “Citadel Admin”; label says “Access key” — not “seat token.” Docs (`teammate-rollout.md`) explicitly say teammates need **no dashboard login** after setup.
+- **Session payload** (`GET /api/session` → `role_payload`): returns `seat_slug`, `node_label`, `default_dataset`, `search_datasets`, capabilities.
+- **Login copy (Phase 1):** member-first seat-token framing (Pixel Bastion lockup). Ops still paste admin/bootstrap keys. Optional portal path documented in `teammate-rollout.md` alongside MCP.
 
-So: **seat login is mostly implemented on the server; it is not productized in the UI or onboarding narrative.**
-
-### What UI exists
+### What UI exists (Phase 1 shipped)
 
 Single SPA (`kb/static/index.html` + `app.js`):
 
 | Area | Behavior |
 |---|---|
-| **Login** | One field for any access key / token. No seat framing. |
-| **Default page** | Admin → Overview; others → Search. |
-| **Search / Knowledge Graph** | Scoped by caller identity (Node content + Central; other seats as presence hubs). |
+| **Login** | One field; seat-token copy + Pixel Bastion brand. |
+| **Default page** | Seat holders → **My Node** (`home`); admin → Overview. |
+| **Seat home** | `GET /api/me/summary` — Node stats, last ingest, empty checklist, links to search/graph/activity. |
+| **Search / Knowledge Graph** | Scoped by caller identity (Node content + Central; other seats as presence hubs). Search badges: My Node vs Central. |
 | **Access** | Admin-only (`access:manage`): create seats, issue tokens, connect wizard, capture policy. |
-| **Audit / Settings / Sources sync** | Admin-oriented. |
-| **Promotion queue** | API supports member own-seat + admin all; UI exists but is not framed as a member home. |
-| **Session chrome** | Shows role chip (“Read write”) only — **does not surface `seat_slug` / Node** even when `/api/session` returns them (`loadSession` stores `role` alone). |
-| **Seat activity analytics** | **Does not exist.** Vault Activity + Audit can show events; Seat Presence hubs expose document counts; no per-seat analytics table of calls/counts. |
+| **Audit / Settings / Sources sync** | Admin-oriented; hidden from non-admin nav. |
+| **Promotion queue** | API supports member own-seat + admin all; Phase 3 polish for member workflow framing. |
+| **Session chrome** | Seat slug + Node label + role. |
+| **Seat activity analytics** | **Not shipped** (Phase 2). Vault Activity + Audit exist; no per-seat calls/counts table. |
 
-### Why seats look empty / not interconnected
+### Why seats can still feel empty / not fully interconnected
 
-1. **Empty Node by design until capture.** Creating a seat creates the principal + dataset name; it does not seed documents.
-2. **Product path is headless.** Rollout docs optimize for MCP + hooks, not “open the portal and see your Node.”
-3. **UI ignores seat context.** No “My Node” home, no seat badge, no empty-state that explains fill paths.
-4. **Admin Access inventory ≠ member experience.** Seats on the Access page are provisioning objects.
-5. **Central dominates visually** when the member’s Node is empty.
-6. **Readability / interlinking gap.** Seat slug, Node dataset id, graph hub, and activity stream are not presented as one navigable object graph in the UI.
+1. **Empty Node by design until capture.** Creating a seat creates the principal + dataset name; it does not seed documents (checklist explains fill paths).
+2. **Primary write path remains headless.** MCP + hooks are still the main ingest story; portal is optional visibility.
+3. **Phase 2 interlinking unfinished.** Access inventory health, graph “you” highlight / hub context, analytics table.
+4. **Admin Access inventory ≠ member experience.** Seats on the Access page are still provisioning objects.
+5. **Central can dominate visually** when the member’s Node is empty (search still returns Central).
 
 ---
 
@@ -119,7 +118,7 @@ Single SPA (`kb/static/index.html` + `app.js`):
 | **Token rotation (Phase 1)** | **Admin-only** | Self-service deferred to Phase 3 / Option B. |
 | **Readability / interlinking** | Phase 1 partial; Phase 2 full | Phase 1: chrome + home links to search/graph/activity. |
 
-**Grill status:** **Closed** 2026-07-21 — Phase 1 ready to build.
+**Grill status:** **Closed** 2026-07-21. **Phase 1 shipped** (PR #95). **Phase 2** is next.
 
 ---
 
@@ -215,39 +214,27 @@ Promotion approve ────────────► Central (governed)
 
 ## Phased roadmap
 
-### Phase 1 — Seat login + Node view + attribution proof (MVP)
+### Phase 1 — Seat login + Node view + attribution proof (MVP) — **SHIPPED (PR #95)**
 
-**Scope**
+**Scope (delivered)**
 
 - Relabel login for members (copy, title, helper: “seat token from admin / `citadel seat token`”).
 - Persist and display seat identity in chrome from `/api/session` (`seat_slug`, `node_label`, role).
-- **Seat home** page (default for non-admin): Node stats, recent activity for own Node, pending promotions count, onboarding checklist when empty; **links** to graph focus and activity filtered to this seat.
-- Hide or disable Access / Audit / Settings / org Sources admin actions for non-admin.
-- Empty-state copy: “Your Node fills when you capture or your agent ingests — Central still searchable.”
-- Confirm search defaults use multi-dataset Node + Central for seat tokens.
-- **Ingest attribution verification:** seat-token smoke ingest → assert `dataset == seat:{slug}` on response/audit/mesh; surface that link on Seat home (“Last ingest → this Node”). Fix only if H4/H5 reproduce.
-- Update `teammate-rollout.md`: optional “open the portal with your token” path alongside MCP.
-
-**Dependencies**
-
-- Existing `/admin/session` + `role_payload` (done).
-- Mesh/search isolation (ADR-0009 / allowlists) — verify with seat token smoke tests.
-
-**Risks**
-
-- Writers accidentally retaining admin nav if `data-min-role` incomplete.
-- Empty home still feels broken if checklist is weak.
-- Token-in-browser phishing / XSS impact — mitigate with existing CSP; document revoke via admin.
-- Misdiagnosing H1 (no-seat token) as a product bug.
+- **Seat home** page (default for seat holders): Node stats, recent activity for own Node, pending promotions count, onboarding checklist when empty; **links** to search / graph / activity.
+- Hide Access / Audit / Settings / Overview admin nav for non-admin.
+- Empty-state copy: Node fills via capture/ingest — Central still searchable.
+- Search badges distinguish My Node vs Central; seat tokens keep multi-dataset search.
+- Attribution: existing seat write tests + home `node_dataset` / last-ingest fields.
+- `teammate-rollout.md`: optional “open the portal with your token” path alongside MCP.
 
 **Acceptance criteria**
 
-- [ ] Member logs in with seat-writer token only; lands on seat home showing their slug and Node id.
-- [ ] Admin-only pages unreachable (UI + API 403).
-- [ ] Search returns Central hits even when Node is empty; Node hits appear after a test ingest.
-- [ ] Session chrome shows seat, not only “Read write.”
-- [ ] After seat-token ingest, home/audit/mesh show that write under `seat:{slug}` (not Central / unset).
-- [ ] Docs mention portal login without replacing MCP onboard.
+- [x] Member logs in with seat-writer token only; lands on seat home showing their slug and Node id.
+- [x] Admin-only pages unreachable (UI + API 403).
+- [x] Search returns Central hits even when Node is empty; Node hits appear after a test ingest.
+- [x] Session chrome shows seat, not only “Read write.”
+- [x] After seat-token ingest, home/audit/mesh show that write under `seat:{slug}` (not Central / unset).
+- [x] Docs mention portal login without replacing MCP onboard.
 
 ### Phase 2 — Graphs + readability / interlinking + seat activity analytics
 
@@ -387,3 +374,5 @@ Phase 2 sketch (after metric grill): seat analytics aggregate endpoint + SPA pan
 | 2026-07-21 | Grill Q2: **“Linked” = all surfaces (4)** — Access inventory + Knowledge Graph + session chrome/Seat home. Phase 1 ships chrome/home first; Phase 2 ships Access deep-links + graph focus/legend. |
 | 2026-07-21 | Grill closing pack accepted: Promotion-only Central UI; always presence graph; empty Node + checklist; admin-only token rotation in Phase 1. |
 | 2026-07-21 | **Grill closed.** Phase 1 implementation on `cursor/seat-scoped-portal-phase1`. |
+| 2026-07-21 | **Phase 1 merged** (PR #95). Phase 2 remains: analytics table, Access deep-links, graph “you” / hub context. |
+| 2026-07-21 | **Pixel Bastion** brand (PR #96) lands on login + portal chrome; no auth/isolation change. |

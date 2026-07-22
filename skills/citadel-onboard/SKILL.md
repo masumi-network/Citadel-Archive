@@ -84,17 +84,20 @@ Flags: `--token`, `--node-url`, `--repo`, `--shell-rc`, `--no-mcp`,
 
 ## Check status (the dashboard replacement)
 
-Teammates have no web dashboard — the CLI is the window into Citadel.
+Teammates have no web dashboard requirement — the CLI is the day-to-day window
+into Citadel. Optionally open `/login` with your seat token for **My Node**.
 
 ```bash
 citadel status      # one-shot: connection, identity (seat/role), local setup, recent activity, knowledge-mesh stats
+citadel status --check-search  # also smoke-test /search (opt-in; short timeout; never gates health)
 citadel doctor      # diagnose setup; `citadel doctor --fix` repairs common issues
 ```
 
 `citadel status` checks the Node (`/healthz`), your token (`/api/session` →
-seat + role + capabilities), a search smoke, and local setup (token in env,
-`.mcp.json`, git + SessionEnd hooks, capture roots). It exits non-zero when not
-connected, so it doubles as a doctor.
+seat + role + capabilities), and local setup (token in env, `.mcp.json`, git +
+SessionEnd hooks, capture roots). Search smoke is **off by default** — pass
+`--check-search` when you want it. It exits non-zero when not connected, so it
+doubles as a doctor.
 
 ### Headless — for AI agents (Claude Code / Codex / Cursor) and CI
 

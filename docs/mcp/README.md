@@ -587,6 +587,9 @@ uv run python -m kb.mcp_server
 - Check that the URL uses `https://` for hosted Citadel.
 - Plain `http://` only works for `localhost` unless
   `CITADEL_MCP_ALLOW_INSECURE_HTTP=true` is set.
+- For a fast local check: `citadel status --json` (does **not** smoke
+  `/search` by default). Pass `--check-search` only when you want that
+  opt-in probe.
 
 ### Ingest payload too large
 

@@ -256,23 +256,30 @@ Future scopes:
 Citadel should feel like an operating-system dashboard with separate apps, not
 one crowded page.
 
+**Phase 1 portal (shipped):** seat holders paste a seat `ctdl_…` token on
+`/login` and land on **My Node** (Seat home via `GET /api/me/summary`). Session
+chrome shows `seat_slug` + Node label. Admin-only apps stay hidden from
+non-admin. See [`plans/seat-scoped-portal.md`](plans/seat-scoped-portal.md).
+
 Primary navigation:
 
-- Home: status, recent events, health, shortcuts.
-- Search: the default page for most users (own node + Central in Phase 2).
+- Home / My Node: seat holders see Node stats, empty checklist, recent activity;
+  admin Overview stays org health.
+- Search: own node + Central (My Node vs Central badges).
 - Knowledge: datasets, tags, graph/mesh, indexed material.
-- Sources: GitHub sync, file/upload sources, connectors, ingest jobs.
+- Sources: GitHub sync, file/upload sources, connectors, ingest jobs (admin).
 - Ingest: manual ingest and review queue; hidden from readers.
 - Agents: MCP setup, Claude/Codex skill install snippets, service accounts.
-- Access: seats, users, invites, roles, tokens (Phase 2 seat UI).
-- Audit: searchable log of sensitive activity.
-- Settings: environment, model/provider, retention, backup.
+- Access: seats, users, invites, roles, tokens (admin).
+- Audit: searchable log of sensitive activity (admin).
+- Settings: environment, model/provider, retention, backup (admin).
 
 Role-specific defaults:
 
-- Reader starts on Search and sees no write/admin actions.
-- Writer starts on Search or Sources and can ingest/feedback to own node or Central per tags.
-- Admin starts on Home and sees Access, Agents, Audit, and Settings.
+- Seat holder (reader/writer with `seat_slug`) starts on **My Node**.
+- Reader without a seat starts on Search and sees no write/admin actions.
+- Writer can ingest/feedback to own Node; Central only via Promotion.
+- Admin starts on Overview and sees Access, Agents, Audit, and Settings.
 
 ## Why Search And Ingest Are Separate
 
@@ -281,7 +288,7 @@ important because readers should not be able to mutate the Organization Vault.
 
 We can still make the product feel simple:
 
-- Search remains the main page.
+- Seat holders land on **My Node**; Search remains the primary read workflow.
 - Sources can auto-ingest approved repos/files into Central.
 - Ingest becomes a focused admin/writer workflow for manual notes, uploads, and rejected-source review.
 
