@@ -6,6 +6,29 @@ All notable changes to `citadel-archive` are documented here. Format follows
 
 ## [Unreleased]
 
+### Added
+
+- **Public `/info` "State of the Vault" page + `GET /api/state`.** A node-served
+  report at `/info` (`kb/static/info.html` + `info.css` + `info.js`): current
+  metrics, shipped releases (v0.2 → v0.4), an architecture diagram, a
+  commit-velocity chart, and the roadmap — with progressive `Go deeper`
+  expanders and a light/dark toggle. Live metric tiles hydrate from a new public
+  `GET /api/state` that returns **safe aggregates only** (version, health,
+  per-source doc/repo counts, last-sync, totals), modeled on the
+  `/.well-known/citadel.json` precedent — never vault content, per-seat data,
+  internal source URLs, or tokens, and it degrades to empty rather than 500.
+  CSP-clean (external CSS/JS; chart bars via CSSOM). Linked from the README with
+  a Masumi-magenta badge.
+
+### Changed
+
+- **`/info` aligned to the AGENTIC / Masumi design system**
+  (`masumi-network/sokosumi-landing` → `apps/sokosumi/DESIGN.md`): Inter-only,
+  weight lightens as size grows (Inter Light headings, negative tracking,
+  sentence case), a neutral ramp + a single Iris-magenta `#FF51FF` accent, flat
+  elevation, and the signature segmented-line section headers. The layout widens
+  on large screens while running text stays at a comfortable measure.
+
 ## [0.4.0] — 2026-07-22
 
 ### Added

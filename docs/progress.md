@@ -1,6 +1,32 @@
 # Citadel Progress
 
-Last updated: 2026-07-21.
+Last updated: 2026-07-22.
+
+## 2026-07-22 — Public `/info` state page, `/api/state`, Masumi design alignment
+
+Shipped a public **State of the Vault** report and began aligning the Citadel
+frontend to the AGENTIC / Masumi design system.
+
+- **`/info` + `GET /api/state` — SHIPPED (deployed to prod).** A node-served
+  report at `/info` (current metrics, releases v0.2 → v0.4, architecture diagram,
+  commit-velocity chart, roadmap; progressive `Go deeper` expanders; light/dark
+  toggle). Live tiles hydrate from a new **public, no-secrets** `GET /api/state`
+  (version, health, per-source doc/repo counts, totals — safe aggregates only,
+  modeled on `/.well-known/citadel.json`; best-effort, degrades to empty). Routes
+  in `kb/server.py`; page in `kb/static/info.{html,css,js}`; CSP-clean (external
+  assets, chart bars via CSSOM). Linked from the README (+ Masumi-magenta badge).
+  Verified live: `/info` 200, `/api/state` returns real counts (48 repos, 200
+  Linear issues), tiles hydrate in-browser.
+- **`/info` restyled to Masumi (`apps/sokosumi/DESIGN.md`).** Inter-only, weight
+  lightens as size grows (Inter Light hero + section heads, negative tracking,
+  sentence case), neutral ramp + a single Iris-magenta `#FF51FF` accent, flat
+  elevation, segmented-line section headers; widens on large screens.
+- **Dashboard accent + light mode — PR #99 (open, not merged).** Swaps the
+  dashboard accent `#fa008c → #FF51FF` (solid fills route through the deeper
+  `#c010a0` so white text stays legible) and adds a light theme
+  (`prefers-color-scheme` + a `data-theme` toggle in the sidebar, `theme.js`;
+  applied on `/login` too). Token-level only — the CSS pixel-mark colors and ~9
+  `rgba(255,255,255,…)` spots remain a follow-up. Awaiting review before deploy.
 
 ## 2026-07-21 — Merges: portal Phase 1, Pixel Bastion, fast `citadel status`
 
