@@ -423,7 +423,8 @@ LOGIN_HTML = """<!doctype html>
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Citadel</title>
     <link rel="icon" href="/static/favicon.svg" type="image/svg+xml" />
-    <link rel="stylesheet" href="/static/styles.css?v=pixel-bastion-4" />
+    <link rel="stylesheet" href="/static/styles.css?v=masumi-accent-1" />
+    <script src="/static/theme.js"></script>
   </head>
   <body>
     <main class="login-shell">
