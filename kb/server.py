@@ -2074,6 +2074,13 @@ async def login() -> HTMLResponse:
     return HTMLResponse(LOGIN_HTML)
 
 
+@app.get("/info", include_in_schema=False)
+async def info_page() -> FileResponse:
+    # Public "State of the Vault" report. Static shell; live tiles hydrate from
+    # /api/state so the numbers stay current without redeploying the page.
+    return FileResponse(STATIC_DIR / "info.html")
+
+
 @app.post("/admin/session")
 async def create_admin_session(body: AdminSessionBody, response: Response) -> dict[str, Any]:
     access_key = body.access_key or body.admin_key
@@ -2579,6 +2586,74 @@ async def revoke_access_token(token_id: str, request: Request) -> dict[str, Any]
 @app.get("/healthz")
 async def healthz() -> dict[str, str | bool]:
     return {"ok": True, "service": "citadel"}
+
+
+@app.get("/api/state")
+async def public_state(request: Request, response: Response) -> dict[str, Any]:
+    """Public, no-secrets snapshot for the /info page — safe aggregates only.
+
+    Never exposes vault content, per-seat data, graph node dumps, internal
+    source URLs, or tokens. A syncer hiccup degrades to empty, never a 500.
+    """
+    from datetime import datetime, timezone
+
+    response.headers.update(PUBLIC_CACHE_HEADERS)
+
+    async def _safe(coro: Any) -> dict[str, Any]:
+        try:
+            return await coro
+        except Exception:  # best-effort: the public page must never 500 on a sync blip
+            return {}
+
+    sources: list[dict[str, Any]] = []
+    gh = await _safe(get_github_syncer().status())
+    if gh:
+        sources.append(
+            {
+                "name": gh.get("org"),
+                "type": "github",
+                "documents": gh.get("tracked_repositories", 0),
+                "status": "tracked" if gh.get("last_checked_at") else "ready",
+                "last_synced_at": gh.get("last_checked_at"),
+            }
+        )
+    rc = await _safe(get_repo_content_syncer().status())
+    if rc:
+        sources.append(
+            {
+                "name": rc.get("org"),
+                "type": "repo_content",
+                "documents": rc.get("tracked_files", 0),
+                "status": "tracked" if rc.get("last_checked_at") else "ready",
+                "last_synced_at": rc.get("last_checked_at"),
+            }
+        )
+    ln = await _safe(get_linear_syncer().status())
+    if ln:
+        sources.append(
+            {
+                "name": "Linear workspace",
+                "type": "linear",
+                "documents": ln.get("issue_count", 0),
+                "status": "tracked" if ln.get("last_synced_at") else "ready",
+                "last_synced_at": ln.get("last_synced_at"),
+            }
+        )
+
+    docs_total = sum(int(s.get("documents") or 0) for s in sources)
+    return {
+        "ok": True,
+        "service": "Citadel Archive",
+        "version": app.version,
+        "healthy": True,
+        "sources": sources,
+        "totals": {
+            "documents": docs_total,
+            "github_repositories": int(gh.get("tracked_repositories", 0) or 0) if gh else 0,
+            "linear_issues": int(ln.get("issue_count", 0) or 0) if ln else 0,
+        },
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+    }
 
 
 @app.get("/.well-known/citadel.json")

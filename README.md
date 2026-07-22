@@ -19,6 +19,8 @@ The result is organizational memory that behaves like a company vault: private w
   <img src="docs/brand/readme-dashboard.jpg" alt="Citadel Archive dashboard — Overview analytics, Knowledge Mesh, and vault workflow" width="860" />
 </p>
 
+**📊 [State of the Vault](https://citadel-archive-production.up.railway.app/info)** — a live report of current metrics, shipped releases, and the roadmap, served from the running node.
+
 ## What Citadel does
 
 - **Organization Vault** — Central (`masumi-network`) holds org-wide structured knowledge; each seat has a private **Node** (`seat:{slug}`) for working memory. You read your Node + Central; you never read another seat's Node.
