@@ -229,6 +229,18 @@ footer { margin-top: 30px; color: var(--ink-2); font-size: 15px; }
 .foot-note { color: var(--ink-3); font-size: 13.5px; margin-top: 16px; }
 code { font-family: var(--mono); font-size: .83em; background: var(--surface-2); padding: 1.5px 6px; border-radius: 5px; color: var(--ink); }
 
+/* Wide screens: widen the frame so the metrics, cards, diagram and timeline
+   use the space (report/dashboard feel, not a lone blog column) while running
+   text stays at a comfortable measure so lines don't sprawl. */
+@media (min-width: 1120px) {
+  .wrap { max-width: 1140px; padding-left: 40px; padding-right: 40px; }
+  header { padding-top: 72px; }
+  h1 { max-width: 20ch; }
+  .tldr p, .dbody p, .dbody li, .nrow p { max-width: 74ch; }
+  .metric .n { font-size: 27px; }
+  .nrow { grid-template-columns: 150px 1fr; }
+}
+
 @media (max-width: 760px) { .metrics { grid-template-columns: repeat(2, 1fr); } }
 @media (max-width: 620px) {
   .pillars { grid-template-columns: 1fr; }
