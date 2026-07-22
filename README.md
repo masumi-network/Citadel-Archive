@@ -6,6 +6,7 @@
 
 > A self-hosted **Organization Vault** — shared, access-controlled memory for your team and its AI agents.
 
+[![State of the Vault](https://img.shields.io/badge/live-state%20of%20the%20vault-FF51FF?style=flat&labelColor=0a0a0a)](https://citadel-archive-production.up.railway.app/info)
 ![License](https://img.shields.io/badge/license-Apache--2.0-blue)
 ![Python](https://img.shields.io/badge/python-3.10%2B-blue)
 ![Client](https://img.shields.io/badge/cli-zero--dependency-green)
