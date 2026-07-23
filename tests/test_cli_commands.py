@@ -348,6 +348,51 @@ def test_search_no_token_json_auth_required(monkeypatch, capsys) -> None:
     assert out["code"] == "AUTH_REQUIRED"
 
 
+def test_search_json_connection_error_emits_json(monkeypatch, capsys) -> None:
+    # A non-timeout network failure under --json used to print to stderr and
+    # leave stdout empty, so a scripted caller got nothing to parse.
+    monkeypatch.setattr("kb.cli.capture_token", lambda: "ctdl_x")
+
+    def boom(*_a, **_k):
+        raise urllib.error.URLError("Connection refused")
+
+    monkeypatch.setattr("kb.status.search_node", boom)
+    rc = asyncio.run(_search(_search_args(query="hi")))
+    assert rc == 1
+    out = json.loads(capsys.readouterr().out)
+    assert out["ok"] is False
+    assert out["code"] == "NODE_UNREACHABLE"
+
+
+def test_search_json_http_error_emits_json(monkeypatch, capsys) -> None:
+    monkeypatch.setattr("kb.cli.capture_token", lambda: "ctdl_x")
+
+    def boom(*_a, **_k):
+        raise urllib.error.HTTPError("https://node.example", 503, "Service Unavailable", {}, None)
+
+    monkeypatch.setattr("kb.status.search_node", boom)
+    rc = asyncio.run(_search(_search_args(query="hi")))
+    assert rc == 1
+    out = json.loads(capsys.readouterr().out)
+    assert out["ok"] is False
+    assert out["code"] == "HTTP_ERROR"
+    assert out["http_status"] == 503
+
+
+def test_ingest_json_connection_error_emits_json(monkeypatch, capsys) -> None:
+    monkeypatch.setattr("kb.cli.capture_token", lambda: "ctdl_x")
+
+    def boom(*_a, **_k):
+        raise urllib.error.URLError("Connection refused")
+
+    monkeypatch.setattr("kb.status.ingest_node", boom)
+    rc = asyncio.run(_ingest(_ingest_args()))
+    assert rc == 1
+    out = json.loads(capsys.readouterr().out)
+    assert out["ok"] is False
+    assert out["code"] == "NODE_UNREACHABLE"
+
+
 def test_search_timeout_returns_truncated_json(monkeypatch, capsys) -> None:
     monkeypatch.setattr("kb.cli.capture_token", lambda: "ctdl_x")
 

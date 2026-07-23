@@ -243,6 +243,31 @@ def _emit_no_token(command: str, *, as_json: bool) -> int:
     return 1
 
 
+def _emit_error(
+    command: str,
+    message: str,
+    *,
+    as_json: bool,
+    code: str,
+    exit_code: int = 1,
+    extra: dict[str, Any] | None = None,
+) -> int:
+    """Uniform failure emit: a JSON object under ``--json``, else a stderr line.
+
+    Under ``--json`` a scripted/agent caller always gets a parseable object on
+    stdout with a stable ``code`` — previously the network/HTTP failure paths
+    printed only to stderr and left stdout empty, so the caller got nothing.
+    """
+    if as_json:
+        payload: dict[str, Any] = {"ok": False, "error": message, "code": code}
+        if extra:
+            payload.update(extra)
+        _print_json(payload)
+    else:
+        print(f"citadel {command}: {message}", file=sys.stderr)
+    return exit_code
+
+
 def _result_exit(value: Any) -> int:
     """Exit 1 when a result payload carries ``ok: False``; else 0.
 
@@ -277,19 +302,26 @@ async def _ingest(args: argparse.Namespace) -> int:
             result = await asyncio.to_thread(ingest_node, base_url, token, args.data, args.tag, cognify)
     except urllib.error.HTTPError as exc:
         detail = exc.read().decode(errors="replace")[:200] if exc.fp else exc.reason
-        print(f"citadel ingest: HTTP {exc.code} {detail}", file=sys.stderr)
-        _print_auth_hint("ingest", exc.code)
-        return 1
-    except TimeoutError:
-        print(
-            "citadel ingest: the Node is still working (cognify can be slow). Your note is "
-            "saved — it'll be searchable shortly; check `citadel search`.",
-            file=sys.stderr,
+        if not as_json:
+            _print_auth_hint("ingest", exc.code)
+        return _emit_error(
+            "ingest",
+            f"HTTP {exc.code} {detail}",
+            as_json=as_json,
+            code="HTTP_ERROR",
+            extra={"http_status": exc.code},
         )
-        return 1
+    except TimeoutError:
+        return _emit_error(
+            "ingest",
+            "the Node is still working (cognify can be slow). Your note is saved — it'll "
+            "be searchable shortly; check `citadel search`.",
+            as_json=as_json,
+            code="TIMEOUT",
+            extra={"saved": True},
+        )
     except (urllib.error.URLError, OSError, ValueError, http.client.HTTPException) as exc:
-        print(f"citadel ingest: {exc}", file=sys.stderr)
-        return 1
+        return _emit_error("ingest", str(exc), as_json=as_json, code="NODE_UNREACHABLE")
     if not isinstance(result, dict):  # a misconfigured Node could return non-dict JSON
         result = {"accepted": False, "reason": "unexpected response from the Node"}
     accepted = result.get("accepted", True)
@@ -560,15 +592,23 @@ async def _search(args: argparse.Namespace) -> int:
             )
     except urllib.error.HTTPError as exc:
         detail = exc.read().decode(errors="replace")[:200] if exc.fp else exc.reason
-        print(f"citadel search: HTTP {exc.code} {detail}", file=sys.stderr)
-        _print_auth_hint("search", exc.code)
-        return 1
+        as_json = getattr(args, "json", False)
+        if not as_json:
+            _print_auth_hint("search", exc.code)
+        return _emit_error(
+            "search",
+            f"HTTP {exc.code} {detail}",
+            as_json=as_json,
+            code="HTTP_ERROR",
+            extra={"http_status": exc.code},
+        )
     except (TimeoutError, urllib.error.URLError, OSError, ValueError, http.client.HTTPException) as exc:
         # TimeoutError and urllib URLError("timed out") share one soft-fail path.
         if _is_timeout_exc(exc):
             return _emit_search_timeout(args, note=str(exc) or "search timed out")
-        print(f"citadel search: {exc}", file=sys.stderr)
-        return 1
+        return _emit_error(
+            "search", str(exc), as_json=getattr(args, "json", False), code="NODE_UNREACHABLE"
+        )
 
     raw = payload if isinstance(payload, dict) else {"results": []}
     # Server may already mark soft timeout with partial/empty results.
