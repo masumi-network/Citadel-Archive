@@ -1724,6 +1724,8 @@ def _render_presence(board: dict[str, Any], color: bool) -> str:
 
     Renders only Seat Presence (slug + contribution count) — no Node content.
     """
+    if board.get("error"):
+        return paint(f"Couldn't reach the Node: {board['error']}", "yellow", enable=color)
     seats = [s for s in (board.get("seats") or []) if isinstance(s, dict)]
     if not seats:
         return paint("No seats visible.", "dim", enable=color)
@@ -1743,7 +1745,7 @@ async def _activity_global(node_url: str, token: str | None, color: bool, watch:
     """Live team-presence broadcast — Seat Presence only (ADR-0009), no content."""
     board = await asyncio.to_thread(fetch_presence, node_url, token)
     print(_render_presence(board, color))
-    if not token and not (board.get("seats")):
+    if not token and not board.get("error") and not board.get("seats"):
         print(paint("  (no token configured — run `citadel onboard`)", "yellow", enable=color))
     if not watch:
         return 0
@@ -1791,9 +1793,12 @@ async def _activity(args: argparse.Namespace) -> int:
 
     if not args.watch:
         if not events:
-            print(paint("No recent activity.", "dim", enable=use_color))
-            if not token:
-                print(paint("  (no token configured — run `citadel onboard`)", "yellow", enable=use_color))
+            if data.get("error"):
+                print(paint(f"Couldn't reach the Node: {data['error']}", "yellow", enable=use_color))
+            else:
+                print(paint("No recent activity.", "dim", enable=use_color))
+                if not token:
+                    print(paint("  (no token configured — run `citadel onboard`)", "yellow", enable=use_color))
         return 0
 
     print(paint("— watching your Node (Ctrl-C to stop) —", "dim", enable=use_color))

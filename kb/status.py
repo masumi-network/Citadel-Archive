@@ -432,8 +432,10 @@ def fetch_mesh(base_url: str, token: str | None, *, timeout: float = _TIMEOUT) -
         return {}
     try:
         data = _request("GET", f"{base_url.rstrip('/')}/api/mesh", token=token, timeout=timeout)
-    except Exception:
-        return {}
+    except Exception as exc:
+        # A network failure is NOT an empty vault — mark it so the renderer says
+        # "couldn't reach the Node" instead of silently showing nothing (#101).
+        return {"error": _humanize_net_error(exc)}
     return data if isinstance(data, dict) else {}
 
 
@@ -460,8 +462,8 @@ def fetch_events(
         data = _request(
             "GET", f"{base_url.rstrip('/')}/api/knowledge/events?{query}", token=token, timeout=timeout
         )
-    except Exception:
-        return {}
+    except Exception as exc:
+        return {"error": _humanize_net_error(exc)}
     return data if isinstance(data, dict) else {}
 
 
@@ -481,8 +483,8 @@ def fetch_presence(base_url: str, token: str | None, *, timeout: float = _TIMEOU
         data = _request(
             "GET", f"{base_url.rstrip('/')}/api/mesh/graph?limit=1", token=token, timeout=timeout
         )
-    except Exception:
-        return {}
+    except Exception as exc:
+        return {"error": _humanize_net_error(exc)}
     if not isinstance(data, dict):
         return {}
     seats: list[dict[str, Any]] = []
@@ -762,7 +764,13 @@ def render_text(report: StatusReport, *, color: bool = False, verdict: bool = Tr
         identity_line,
         paint(f"node: {report.node_url}", "dim", enable=color),
     ]
-    seat_hint = seatless_token_hint(ident)
+    # Only claim "no seat" when auth actually SUCCEEDED. On a timeout/unreachable
+    # node check_auth returns an identity with no seat_slug, which used to trip the
+    # seatless hint and tell a user with a working token to go ask an admin (#101).
+    # The Auth row below already shows the real failure, so stay silent here.
+    auth_check = next((c for c in report.checks if c.name == "auth"), None)
+    auth_ok = auth_check.ok if auth_check is not None else True
+    seat_hint = seatless_token_hint(ident) if auth_ok else None
     if seat_hint:
         lines.append(paint(f"  hint: {seat_hint}", "yellow", enable=color))
     lines.append("")

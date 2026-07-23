@@ -544,12 +544,18 @@ def test_fetch_events_builds_scoped_url_and_parses(monkeypatch) -> None:
     assert data["latest_event_id"] == 7
 
 
-def test_fetch_events_swallows_errors(monkeypatch) -> None:
+def test_fetch_events_marks_network_failure(monkeypatch) -> None:
+    # A network failure must be distinguishable from an empty feed (#101), so the
+    # renderer can say "couldn't reach the Node" instead of "No recent activity".
     def boom(request: Any, timeout: float | None = None) -> _FakeResp:
         raise RuntimeError("network down")
 
     monkeypatch.setattr(status_mod._OPENER, "open", boom)
-    assert status_mod.fetch_events("https://node.example", "ctdl_tok") == {}
+    result = status_mod.fetch_events("https://node.example", "ctdl_tok")
+    assert result.get("error")
+    assert "events" not in result
+    # A missing token is a genuinely-empty state, NOT a failure.
+    assert status_mod.fetch_events("https://node.example", None) == {}
 
 
 def test_render_event_line() -> None:
@@ -596,6 +602,48 @@ def test_fetch_presence_extracts_only_seat_hubs_no_content(monkeypatch) -> None:
 
 def test_fetch_presence_empty_without_token() -> None:
     assert status_mod.fetch_presence("https://node.example", None) == {}
+
+
+def test_fetch_presence_marks_network_failure(monkeypatch) -> None:
+    # "No seats visible." must not be printed for a timed-out node (#101).
+    def boom(request: Any, timeout: float | None = None) -> _FakeResp:
+        raise RuntimeError("timed out")
+
+    monkeypatch.setattr(status_mod._OPENER, "open", boom)
+    board = status_mod.fetch_presence("https://node.example", "ctdl_tok")
+    assert board.get("error")
+    assert "seats" not in board
+
+
+def test_seat_hint_suppressed_when_auth_failed() -> None:
+    # A timed-out /api/session leaves no seat_slug; the seatless hint used to fire
+    # and tell a working token to go ask an admin for a seat (#101).
+    from kb.status import Check, StatusReport, render_text
+
+    failed = StatusReport(
+        node_url="https://node.example",
+        healthy=False,
+        identity={"code": "AUTH_REQUIRED"},
+        checks=[
+            Check("node", ok=False, detail="unreachable (timed out)"),
+            Check("auth", ok=False, detail="unreachable (timed out)", data={"code": "AUTH_REQUIRED"}),
+        ],
+        recent=[],
+    )
+    assert "has no seat" not in render_text(failed, color=False)
+
+    # A genuinely seatless but VALID token still gets the warning.
+    seatless = StatusReport(
+        node_url="https://node.example",
+        healthy=True,
+        identity={"seat_slug": None, "role": "writer"},
+        checks=[
+            Check("node", ok=True, detail="healthy"),
+            Check("auth", ok=True, detail="valid", data={"role": "writer"}),
+        ],
+        recent=[],
+    )
+    assert "has no seat" in render_text(seatless, color=False)
 
 
 def test_render_presence_board_sorts_by_count() -> None:
