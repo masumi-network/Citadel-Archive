@@ -140,6 +140,19 @@ def test_digest_cannot_relabel_itself_as_documentation() -> None:
     assert filter_hits([hit], canonical_only=True) == []
 
 
+def test_repo_scoping_is_not_satisfied_by_the_dataset_name() -> None:
+    """Central is named after the org, so repo=<org> matched every hit in it."""
+    central_hit = normalize_search_hit(
+        {"id": "c", "text": "a note about nothing", "_citadel": {"dataset": "masumi-network"}}
+    )
+    assert filter_hits([central_hit], repo="masumi-network") == []
+
+    real = normalize_search_hit(
+        {"id": "r", "text": "x", "url": "https://github.com/masumi-network/citadel/blob/x"}
+    )
+    assert filter_hits([real], repo="masumi-network") == [real]
+
+
 def test_seat_slug_cannot_relabel_a_seats_notes() -> None:
     """A team seat innocently named "devhub" is not documentation."""
     note = {

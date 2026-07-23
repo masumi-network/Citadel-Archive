@@ -393,7 +393,6 @@ def _hit_trust_tier(hit: dict[str, Any]) -> str:
 
 def _hit_blob(hit: dict[str, Any], *extra_keys: str) -> str:
     """Lowercased haystack for substring filters (shaped hits + server envelopes)."""
-    envelope = _hit_envelope(hit)
     provenance = _hit_provenance(hit)
     metadata = hit.get("metadata") if isinstance(hit.get("metadata"), dict) else {}
     parts: list[Any] = [
@@ -411,7 +410,10 @@ def _hit_blob(hit: dict[str, Any], *extra_keys: str) -> str:
         metadata.get("repo"),
         metadata.get("path"),
         metadata.get("full_name"),
-        envelope.get("dataset"),
+        # NOT envelope["dataset"]: Central is literally named after the org, so
+        # repo="masumi-network" matched every hit in it, and a seat dataset
+        # matched its own slug. Scoping filters must not be satisfied by the
+        # name of the dataset a hit happens to live in.
     ]
     for key in extra_keys:
         parts.append(hit.get(key))
