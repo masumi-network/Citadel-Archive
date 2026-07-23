@@ -36,6 +36,36 @@ TRUTHY = frozenset({"1", "true", "yes", "on"})
 AUDIT_VIEWS = frozenset({"all", "mcp", "access", "failures"})
 PUBLIC_HOST_RE = re.compile(r"^(?:[A-Za-z0-9.-]+|\[[0-9A-Fa-f:.]+\])(?::[0-9]{1,5})?$")
 
+# tools/list resolves the caller's role in-process; if that ever fails it uses a
+# bounded threaded HTTP fallback so the handler never blocks the event loop.
+_TOOLS_LIST_SESSION_HTTP_TIMEOUT = 2.0
+_TOOLS_LIST_SESSION_WAIT = 2.5
+
+
+def _session_from_token_inprocess(token: str) -> dict[str, Any] | None:
+    """Resolve role/seat for tools/list WITHOUT a nested HTTP self-call.
+
+    A synchronous ``GET /api/session`` from inside the tools/list handler runs on
+    the same event loop that must serve it, so it self-deadlocks and — after the
+    HTTP client's 3 retries — takes ~90s, which is why clients report
+    "connected · tools fetch failed" with zero tools. ``access_key_identity``
+    reads the access store in-process, so it returns in milliseconds. Fails open
+    (returns ``None``) so a lookup error never blanks the tool list.
+    """
+    try:
+        from kb.server import access_key_identity
+    except Exception:
+        return None
+    try:
+        pair = access_key_identity(token)
+    except Exception as exc:  # noqa: BLE001 - fail open
+        logger.warning("tools/list access_key_identity failed: %s", exc)
+        return None
+    if not pair:
+        return None
+    identity, _ = pair
+    return {"ok": True, "role": identity.role, "seat_slug": identity.seat_slug}
+
 
 class CitadelMcpError(RuntimeError):
     pass
@@ -1173,12 +1203,14 @@ def create_mcp_server(
     async def _role_filtered_list_tools() -> list[Any]:
         """Hide tools the caller cannot use from tools/list (#33).
 
-        Resolves the caller's role + seat via /api/session and drops tools whose
-        required role exceeds the caller (so a writer/reader never sees the 6
-        admin tools) and citadel_contribute for seat holders (Central is
-        read-only from seat MCP). Server-side 403s remain the real enforcement;
-        this only stops 403 trial-and-error and fails OPEN on any resolution
-        error so a transient session lookup never blanks the tool list.
+        Resolves the caller's role + seat IN-PROCESS (preferred) or via a short
+        threaded HTTP fallback — never with a sync self-call on the event loop.
+        A nested blocking ``GET /api/session`` self-deadlocks the hosted
+        streamable-HTTP transport: it runs on the same loop that must serve it,
+        so after the HTTP client's retries tools/list takes ~90s and clients
+        register zero tools. Server-side 403s remain the real enforcement; this
+        only stops 403 trial-and-error and fails OPEN on any resolution error so
+        a transient lookup never blanks the tool list. (#100)
         """
         all_tools = await mcp.list_tools()
         try:
@@ -1188,13 +1220,22 @@ def create_mcp_server(
         token = _bearer_from_context(ctx)
         if not token:
             return all_tools  # stdio / unauthenticated handshake — call-time authz still applies
-        try:
-            session = CitadelHttpClient(
-                base_url=_self_base_url(), access_token=token
-            ).get("/api/session")
-        except Exception as exc:  # noqa: BLE001 - fail open for availability
-            logger.warning("tools/list role filter could not resolve session: %s", exc)
-            return all_tools
+        session = _session_from_token_inprocess(token)
+        if session is None:
+            try:
+                session = await asyncio.wait_for(
+                    asyncio.to_thread(
+                        lambda: CitadelHttpClient(
+                            base_url=_self_base_url(),
+                            access_token=token,
+                            timeout=_TOOLS_LIST_SESSION_HTTP_TIMEOUT,
+                        ).get("/api/session")
+                    ),
+                    timeout=_TOOLS_LIST_SESSION_WAIT,
+                )
+            except Exception as exc:  # noqa: BLE001 - fail open for availability
+                logger.warning("tools/list role filter could not resolve session: %s", exc)
+                return all_tools
         return _filter_tools_for_session(all_tools, session)
 
     return mcp
