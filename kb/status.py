@@ -30,10 +30,20 @@ TOKEN_ENV = "CITADEL_MCP_ACCESS_TOKEN"
 MCP_SERVER_NAME = "citadel"
 SESSION_HOOK_MARKER = "kb.hooks.sync_session"
 _TIMEOUT = 8.0
-_SEARCH_TIMEOUT = 20.0  # full vault search (`citadel search`); cognee cold-start is slow
+# Full vault search. The server caps its own recall at ``search_timeout_seconds``
+# (config default 20s) and then answers HTTP 200 with a structured
+# ``{timed_out:true, code:"TIMEOUT"}`` envelope. The client budget MUST sit above
+# that server budget plus the server's post-recall work (drilldown, telemetry,
+# mesh, audit) plus network, or the client aborts at the exact moment the server
+# is about to return — turning a recoverable soft-timeout into a hard client
+# failure, and killing normal 13-20s searches just before they'd return. 35s
+# leaves ~15s of slack over the 20s server budget.
+_SEARCH_TIMEOUT = 35.0
 # Status smoke must not inherit the full search budget — search never gates
-# `healthy`, so a 20s hang was pure wall-time tax on every `citadel status`.
-_SMOKE_SEARCH_TIMEOUT = 3.0
+# `healthy`. But 3s sat below the FLOOR of real cognee recall latency (6-12s), so
+# `--check-search` reported "timed out — node warming up" on every healthy node.
+# 15s clears typical latency while staying under the server's 20s soft cap.
+_SMOKE_SEARCH_TIMEOUT = 15.0
 _INGEST_TIMEOUT = 60.0  # /ingest does real write work (and cold nodes are slow)
 _SMOKE_QUERY = "citadel status connectivity smoke"
 
