@@ -77,6 +77,61 @@ def run_tool(server: Any, name: str, *args: Any, **kwargs: Any) -> Any:
     return result
 
 
+def test_streamable_http_uses_json_response_not_sse() -> None:
+    """tools/list must return an immediate application/json body, not an SSE stream.
+
+    The hosted proxy buffered the SSE stream and held it open ~91s, so a trivial
+    tools/list hung and clients reported "connected · tools fetch failed" (#100).
+    json_response mode answers each request with a plain JSON body instead.
+    """
+    import httpx
+
+    server = create_mcp_server(FakeHttpClient(), stateless_http=True)
+    assert server.settings.json_response is True
+
+    app = server.streamable_http_app()
+
+    async def _roundtrip() -> tuple[str, int]:
+        async with app.router.lifespan_context(app):
+            transport = httpx.ASGITransport(app=app)
+            async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+                headers = {
+                    "Accept": "application/json, text/event-stream",
+                    "Content-Type": "application/json",
+                }
+                init = await client.post(
+                    "/",
+                    headers=headers,
+                    json={
+                        "jsonrpc": "2.0",
+                        "id": 1,
+                        "method": "initialize",
+                        "params": {
+                            "protocolVersion": "2024-11-05",
+                            "capabilities": {},
+                            "clientInfo": {"name": "t", "version": "1"},
+                        },
+                    },
+                )
+                sid = init.headers.get("mcp-session-id")
+                if sid:
+                    headers = {**headers, "mcp-session-id": sid}
+                await client.post(
+                    "/", headers=headers, json={"jsonrpc": "2.0", "method": "notifications/initialized"}
+                )
+                resp = await client.post(
+                    "/",
+                    headers=headers,
+                    json={"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}},
+                )
+                return resp.headers.get("content-type", ""), resp.text.count('"name"')
+
+    content_type, tool_names = asyncio.run(_roundtrip())
+    assert content_type.startswith("application/json")
+    assert "text/event-stream" not in content_type
+    assert tool_names == len(TOOL_POLICIES)
+
+
 def test_registered_tools_include_safety_annotations() -> None:
     server = create_mcp_server(FakeHttpClient())
 
