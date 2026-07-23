@@ -619,6 +619,12 @@ def create_mcp_server(
             "user asks to add durable context. Use admin tools only after explicit approval."
         ),
         stateless_http=stateless_http,
+        # Answer each request with an immediate application/json body instead of
+        # an SSE stream. The hosted proxy buffered the streamed response and held
+        # the stream open, so a trivial tools/list took ~91s and clients reported
+        # "connected · tools fetch failed". Our tools return plain dict payloads
+        # (nothing streams), so JSON responses lose nothing. (#100)
+        json_response=True,
         streamable_http_path="/",
         transport_security=_transport_security(),
     )
