@@ -74,6 +74,7 @@ from kb.search_format import (
     apply_query_ranking,
     compact_search_filters,
     filter_hits,
+    infer_content_hint,
     infer_doc_type,
     infer_trust_tier,
     is_docs_mode_query,
@@ -2099,6 +2100,7 @@ def with_result_metadata(
         DOC_TYPE_TRACE if metadata.get("trust") == "reference-only" else infer_doc_type(preview)
     )
     metadata["doc_type"] = doc_type
+    metadata["content_hint"] = infer_content_hint(preview, doc_type)
     metadata["trust_tier"] = infer_trust_tier(preview, doc_type)
     return {**normalized, "_citadel": metadata}
 

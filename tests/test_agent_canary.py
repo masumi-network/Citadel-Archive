@@ -137,10 +137,13 @@ def test_canary_search_json_schema_limit_filters() -> None:
         "score",
         "snippet",
         "trust_tier",
+        "content_hint",
     ):
         assert key in hit
     assert hit["doc_type"] == "spec"
-    assert hit["trust_tier"] == "canonical"
+    # Shape is reported; authority is not claimed (nothing in the vault is attested).
+    assert hit["content_hint"] == "looks-like-spec"
+    assert hit["trust_tier"] == "unattested"
     assert hit["rank"] == 1 or hit["rank"] is not None
 
 
@@ -198,7 +201,7 @@ def test_canary_verify_and_prepare_pr_shapes(tmp_path: Path) -> None:
     report = shape_verify_report(
         path=path, file_text=path.read_text(), search_payload=payload, query="MIP-003 schema"
     )
-    assert report["canonical_sources"]
+    assert report["doc_shaped_sources"]
     brief = shape_prepare_pr_context(
         repo="cardano-dev-skills", topic="masumi", search_payload=payload
     )

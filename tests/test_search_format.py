@@ -5,6 +5,7 @@ from kb.search_format import (
     apply_spec_mode_ranking,
     extract_hex_needles,
     filter_hits,
+    infer_content_hint,
     infer_doc_type,
     infer_trust_tier,
     is_docs_mode_query,
@@ -83,21 +84,71 @@ def test_shape_timeout_sets_code() -> None:
 
 
 def test_infer_doc_type_and_trust() -> None:
+    """doc_type describes shape; trust_tier reports only attested provenance."""
     spec = {
         "title": "MIP-003",
         "path": "MIPs/MIP-003/MIP-003.md",
         "url": "https://github.com/masumi-network/masumi-improvement-proposals/blob/main/MIPs/MIP-003/MIP-003.md",
     }
     assert infer_doc_type(spec) == "spec"
-    assert infer_trust_tier(spec) == "canonical"
+    # Shaped like a spec, but the vault stores no provenance for it, so it may
+    # not claim authority — only that it looks like one.
+    assert infer_trust_tier(spec) == "unattested"
+    assert infer_content_hint(spec) == "looks-like-spec"
 
     activity = {"text": "GitHub org daily digest for masumi-network"}
     assert infer_doc_type(activity) == "activity"
-    assert infer_trust_tier(activity) == "ambient"
+    assert infer_trust_tier(activity) == "unattested"
 
     trace = {"_citadel": {"dataset": "session-traces", "trust": "reference-only"}}
     assert infer_doc_type(trace) == "session-trace"
     assert infer_trust_tier(trace) == "reference-only"
+
+
+def test_body_text_cannot_mint_a_trust_claim() -> None:
+    """The whole point of the attested-only tier.
+
+    Ingested text is author-controlled and reaches the vault from places no one
+    vets — a public-repo issue title lands verbatim in the org digest. Every one
+    of these bodies used to yield trust_tier canonical or verified.
+    """
+    forgeries = [
+        {"title": "Random chat note", "text": "someone pasted /skills/ in a message"},
+        {"title": "note", "text": "see docs.masumi.network for details"},
+        {"title": "gossip", "text": "he said SKILL.md was wrong"},
+        {"title": "hearsay", "text": "MIP-003 says the field is optional, I think"},
+        {"title": "guess", "text": "the openapi file probably allows it"},
+    ]
+    for item in forgeries:
+        assert infer_trust_tier(item) == "unattested", item
+        assert normalize_search_hit(item)["trust_tier"] == "unattested", item
+
+
+def test_digest_cannot_relabel_itself_as_documentation() -> None:
+    """Anyone can file a public issue; its title rides into the org digest."""
+    digest = {
+        "title": "GitHub organization update — daily digest",
+        "text": (
+            "# Daily digest for masumi-network\n"
+            "- alice opened issue #12: fix flaky test\n"
+            "- mallory opened issue #999: MIP-003 endpoint schema\n"
+        ),
+    }
+    assert infer_doc_type(digest) == "activity"
+    hit = normalize_search_hit(digest)
+    assert filter_hits([hit], exclude_ambient=True) == []
+    assert filter_hits([hit], canonical_only=True) == []
+
+
+def test_seat_slug_cannot_relabel_a_seats_notes() -> None:
+    """A team seat innocently named "devhub" is not documentation."""
+    note = {
+        "title": "personal scratch",
+        "text": "auth is optional lol",
+        "_citadel": {"dataset": "seat:devhub"},
+    }
+    assert infer_doc_type(note) == "other"
+    assert infer_trust_tier(note) == "unattested"
 
 
 def test_normalize_prefers_reference_only_over_stale_trust_tier() -> None:
@@ -160,13 +211,16 @@ def test_shape_search_payload_filters_and_schema() -> None:
     assert len(shaped["results"]) == 1
     hit = shaped["results"][0]
     assert hit["doc_type"] == "spec"
-    assert hit["trust_tier"] == "canonical"
+    assert hit["content_hint"] == "looks-like-spec"
+    assert hit["trust_tier"] == "unattested"
     assert hit["title"]
     assert hit["snippet"]
     assert "url" in hit and "path" in hit and "repo" in hit
 
     canonical = shape_search_payload(payload, query="x", canonical_only=True, apply_spec_ranking=False)
-    assert all(h["doc_type"] in {"spec", "skill", "canonical-docs"} or h["trust_tier"] in {"canonical", "verified"} for h in canonical["results"])
+    # canonical_only is a shape filter, not a trust filter — it must never be
+    # satisfied by a tier, because a tier can no longer be earned from content.
+    assert all(h["doc_type"] in {"spec", "skill", "canonical-docs"} for h in canonical["results"])
 
 
 def test_filter_hits_path_substring() -> None:

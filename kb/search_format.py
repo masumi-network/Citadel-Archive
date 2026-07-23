@@ -44,11 +44,26 @@ DOC_TYPE_ACTIVITY = "activity"
 DOC_TYPE_TRACE = "session-trace"
 DOC_TYPE_OTHER = "other"
 
+# ``trust_tier`` carries ATTESTED facts only — things the server itself knows
+# about where a hit came from. Nothing derived from a hit's body may appear
+# here: ingested text is author-controlled (a public GitHub issue title reaches
+# the org digest), so a body-derived tier is forgeable by anyone who can get
+# text into the vault. What the text *looks like* is reported separately as
+# ``content_hint``, which makes no authority claim.
+TRUST_REFERENCE = "reference-only"
+TRUST_UNATTESTED = "unattested"
+
+# Retained so older parsers and stored telemetry keep resolving; never assigned.
 TRUST_CANONICAL = "canonical"
 TRUST_VERIFIED = "verified"
 TRUST_DERIVED = "derived"
 TRUST_AMBIENT = "ambient"
-TRUST_REFERENCE = "reference-only"
+
+HINT_UNCLASSIFIED = "unclassified"
+# doc_types that describe shaped documentation rather than chatter/activity.
+DOC_SHAPED_TYPES = frozenset({DOC_TYPE_SPEC, DOC_TYPE_CANONICAL, DOC_TYPE_SKILL})
+# doc_types that are activity/pointer material rather than reference material.
+AMBIENT_DOC_TYPES = frozenset({DOC_TYPE_ACTIVITY, DOC_TYPE_ISSUE, DOC_TYPE_TRACE})
 
 
 def is_spec_mode_query(query: str) -> bool:
@@ -85,12 +100,14 @@ def _hit_text(item: dict[str, Any]) -> str:
     ]
     envelope = item.get("_citadel") if isinstance(item.get("_citadel"), dict) else {}
     provenance = envelope.get("provenance") if isinstance(envelope.get("provenance"), dict) else {}
+    # ``dataset`` is deliberately NOT part of the content haystack: seat datasets
+    # are "seat:<slug>", and a team seat innocently named "devhub" or "mip-003"
+    # would relabel every personal note in it as documentation.
     parts.extend(
         [
             provenance.get("path"),
             provenance.get("source_url"),
             provenance.get("title"),
-            envelope.get("dataset"),
         ]
     )
     return " ".join(str(p) for p in parts if p)
@@ -103,32 +120,52 @@ def infer_doc_type(item: dict[str, Any]) -> str:
         return DOC_TYPE_TRACE
     text = _hit_text(item)
     lowered = text.lower()
+    # Activity/issue material is checked FIRST. A digest aggregates titles written
+    # by anyone (a public-repo issue called "MIP-003 endpoint schema" lands in the
+    # org digest verbatim), so testing the spec patterns first let ambient
+    # material relabel itself as documentation and slip past exclude_ambient.
+    if ACTIVITY_RE.search(text) or "digest" in lowered:
+        return DOC_TYPE_ACTIVITY
+    if "linear.app" in lowered or "linear issue" in lowered:
+        return DOC_TYPE_ISSUE
     if "skill.md" in lowered or "/skills/" in lowered:
         return DOC_TYPE_SKILL
     if SPEC_PATH_RE.search(text) or "mip-" in lowered:
         return DOC_TYPE_SPEC
-    if "linear.app" in lowered or "linear issue" in lowered:
-        return DOC_TYPE_ISSUE
-    if ACTIVITY_RE.search(text) or "digest" in lowered:
-        return DOC_TYPE_ACTIVITY
     if "devhub" in lowered or "docs.masumi" in lowered or "/dev/" in lowered:
         return DOC_TYPE_CANONICAL
     return DOC_TYPE_OTHER
 
 
-def infer_trust_tier(item: dict[str, Any], doc_type: str | None = None) -> str:
-    envelope = item.get("_citadel") if isinstance(item.get("_citadel"), dict) else {}
-    existing = envelope.get("trust")
-    if existing == "reference-only":
-        return TRUST_REFERENCE
+def infer_content_hint(item: dict[str, Any], doc_type: str | None = None) -> str:
+    """What the hit's text LOOKS like — a relevance signal, not an authority claim.
+
+    Derived from the body, so a note can steer it by containing the right words.
+    That is acceptable here precisely because nothing may act on it as trust:
+    it orders results and labels them for a reader.
+    """
     kind = doc_type or infer_doc_type(item)
-    if kind in (DOC_TYPE_SPEC, DOC_TYPE_CANONICAL):
-        return TRUST_CANONICAL
-    if kind == DOC_TYPE_SKILL:
-        return TRUST_VERIFIED
-    if kind in (DOC_TYPE_ACTIVITY, DOC_TYPE_ISSUE, DOC_TYPE_TRACE):
-        return TRUST_AMBIENT
-    return TRUST_DERIVED
+    if kind == DOC_TYPE_OTHER:
+        return HINT_UNCLASSIFIED
+    return f"looks-like-{kind}"
+
+
+def infer_trust_tier(item: dict[str, Any], doc_type: str | None = None) -> str:
+    """Attested provenance only. Body text can never raise this.
+
+    ``reference-only`` is the one tier the server can actually attest today: it
+    comes from the dataset a hit was read out of (session traces), not from the
+    hit's content. Everything else is ``unattested`` — the vault stores no
+    per-document provenance yet, so no hit can honestly claim more.
+    """
+    envelope = item.get("_citadel") if isinstance(item.get("_citadel"), dict) else {}
+    if envelope.get("trust") == TRUST_REFERENCE:
+        return TRUST_REFERENCE
+    if str(envelope.get("dataset") or "") == "session-traces":
+        return TRUST_REFERENCE
+    if (doc_type or infer_doc_type(item)) == DOC_TYPE_TRACE:
+        return TRUST_REFERENCE
+    return TRUST_UNATTESTED
 
 
 def spec_mode_boost(item: dict[str, Any]) -> float:
@@ -267,7 +304,8 @@ def normalize_search_hit(item: Any, *, index: int = 0) -> dict[str, Any]:
             "updated_at": None,
             "score": None,
             "snippet": text[:500],
-            "trust_tier": TRUST_DERIVED,
+            "content_hint": HINT_UNCLASSIFIED,
+            "trust_tier": TRUST_UNATTESTED,
             "rank": index + 1,
         }
 
@@ -300,14 +338,10 @@ def normalize_search_hit(item: Any, *, index: int = 0) -> dict[str, Any]:
             repo = match.group(1)
 
     doc_type = infer_doc_type(item)
-    # ``trust: reference-only`` is authoritative (session traces); prefer it over
-    # a stale/wrong ``trust_tier`` that may have been written before metadata attach.
-    if envelope.get("trust") == TRUST_REFERENCE or doc_type == DOC_TYPE_TRACE:
-        trust_tier = TRUST_REFERENCE
-    else:
-        trust_tier = _first_str(envelope.get("trust_tier"), envelope.get("trust")) or infer_trust_tier(
-            item, doc_type
-        )
+    # Always recompute rather than inheriting ``_citadel.trust_tier``: rows
+    # stored by an older build carry body-derived tiers like "canonical", and
+    # echoing those back would reintroduce exactly the claim this schema drops.
+    trust_tier = infer_trust_tier(item, doc_type)
     score = item.get("score")
     if not isinstance(score, (int, float)) or isinstance(score, bool):
         score = None
@@ -328,6 +362,7 @@ def normalize_search_hit(item: Any, *, index: int = 0) -> dict[str, Any]:
         "snippet": " ".join(text.split())[:500],
         # Alias kept for older agent parsers that read ``text``.
         "text": " ".join(text.split())[:500],
+        "content_hint": infer_content_hint(item, doc_type),
         "trust_tier": trust_tier,
         "rank": envelope.get("rank") or (index + 1),
         "dataset": envelope.get("dataset"),
@@ -443,19 +478,16 @@ def filter_hits(
         if needle:
             filtered = [h for h in filtered if needle in _hit_blob(h)]
     if canonical_only:
-        filtered = [
-            h
-            for h in filtered
-            if _hit_trust_tier(h) in {TRUST_CANONICAL, TRUST_VERIFIED}
-            or _hit_doc_type(h) in {DOC_TYPE_SPEC, DOC_TYPE_CANONICAL, DOC_TYPE_SKILL}
-        ]
+        # Content-shaped, NOT a trust filter: it keeps hits whose text reads like
+        # documentation. It cannot vouch for any of them — the tier that could
+        # is attested-only now, so this deliberately no longer consults it.
+        filtered = [h for h in filtered if _hit_doc_type(h) in DOC_SHAPED_TYPES]
     if exclude_ambient:
         filtered = [
             h
             for h in filtered
-            if _hit_trust_tier(h) not in {TRUST_AMBIENT, TRUST_REFERENCE}
-            and _hit_doc_type(h)
-            not in {DOC_TYPE_ACTIVITY, DOC_TYPE_ISSUE, DOC_TYPE_TRACE}
+            if _hit_doc_type(h) not in AMBIENT_DOC_TYPES
+            and _hit_trust_tier(h) != TRUST_REFERENCE
         ]
     return filtered
 

@@ -756,8 +756,12 @@ def create_mcp_server(
 
         Optional filters (``types``, ``repo``, ``path``, ``canonical_only``,
         ``exclude_ambient``, ``mode=docs``) are applied server-side and recorded
-        in automatic search telemetry. Token/asset-ID queries auto-boost docs;
-        never treat vault hits as sole authority for Mainnet payment token units.
+        in automatic search telemetry. ``canonical_only`` selects hits whose TEXT
+        reads like documentation — it is a relevance filter, not a vouch. Each hit
+        carries ``content_hint`` (what it looks like, author-influenced) and
+        ``trust_tier`` (attested provenance only: ``reference-only`` or
+        ``unattested``). Token/asset-ID queries auto-boost docs; never treat vault
+        hits as sole authority for Mainnet payment token units.
 
         Each call automatically records implicit search telemetry (non-blocking)
         into the feedback mesh. Response may include ``search_id`` and a

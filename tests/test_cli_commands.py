@@ -425,8 +425,8 @@ def test_verify_and_prepare_pr_context(monkeypatch, tmp_path, capsys) -> None:
     assert asyncio.run(_verify(v_args)) == 0
     verify_out = json.loads(capsys.readouterr().out)
     assert verify_out["ok"] is True
-    assert verify_out["canonical_sources"]
-    assert verify_out["canonical_sources"][0]["trust_tier"] == "canonical"
+    assert verify_out["doc_shaped_sources"]
+    assert verify_out["doc_shaped_sources"][0]["trust_tier"] == "unattested"
     assert "agent_instruction" in verify_out
 
     p_args = argparse.Namespace(
@@ -441,7 +441,7 @@ def test_verify_and_prepare_pr_context(monkeypatch, tmp_path, capsys) -> None:
     brief = json.loads(capsys.readouterr().out)
     assert brief["ok"] is True
     assert brief["repo"] == "cardano-dev-skills"
-    assert brief["canonical_sources"] or brief["org_context"]
+    assert brief["doc_shaped_sources"] or brief["org_context"]
     assert "agent_instruction" in brief
 
 

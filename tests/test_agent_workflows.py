@@ -45,7 +45,8 @@ def test_shape_verify_and_prepare() -> None:
     report = shape_verify_report(
         path=path, file_text="MIP-003 purchase endpoint", search_payload=payload, query="MIP-003"
     )
-    assert report["canonical_sources"][0]["trust_tier"] == "canonical"
+    assert report["doc_shaped_sources"][0]["trust_tier"] == "unattested"
+    assert report["doc_shaped_sources"][0]["content_hint"] == "looks-like-spec"
     assert report["known_overlaps"]
     brief = shape_prepare_pr_context(repo="cardano-dev-skills", topic="masumi", search_payload=payload)
     assert brief["command"] == "prepare-pr-context"

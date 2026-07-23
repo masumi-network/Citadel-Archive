@@ -1,4 +1,4 @@
-"""Thin agent workflow helpers built on search + trust tiers.
+"""Thin agent workflow helpers built on search shaping.
 
 These are CLI-facing conveniences (`citadel verify`, `citadel prepare-pr-context`),
 not a separate platform — they reuse Node search and ``shape_search_payload``.
@@ -11,8 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from kb.search_format import (
-    TRUST_CANONICAL,
-    TRUST_VERIFIED,
+    DOC_SHAPED_TYPES,
     filter_hits,
     is_spec_mode_query,
     is_token_asset_query,
@@ -114,15 +113,15 @@ def build_verify_query(path: Path, text: str) -> str:
     return " ".join(parts)
 
 
-def _canonical_sources(hits: list[dict[str, Any]], *, limit: int = 8) -> list[dict[str, Any]]:
-    preferred = [
-        h
-        for h in hits
-        if h.get("trust_tier") in (TRUST_CANONICAL, TRUST_VERIFIED)
-        or h.get("doc_type") in {"spec", "skill", "canonical-docs"}
-    ]
-    if not preferred:
-        preferred = hits
+def _doc_shaped_sources(hits: list[dict[str, Any]], *, limit: int = 8) -> list[dict[str, Any]]:
+    """Hits whose TEXT reads like documentation. Not a vouch for any of them.
+
+    Selection is on shape alone. It used to also accept a canonical/verified
+    ``trust_tier`` and, when nothing qualified, silently fall back to every hit —
+    so a brief labelled "canonical sources" could be entirely chat notes.
+    An empty list is the honest answer when nothing is shaped like a doc.
+    """
+    preferred = [h for h in hits if h.get("doc_type") in DOC_SHAPED_TYPES]
     out: list[dict[str, Any]] = []
     for hit in preferred[:limit]:
         out.append(
@@ -132,6 +131,7 @@ def _canonical_sources(hits: list[dict[str, Any]], *, limit: int = 8) -> list[di
                 "path": hit.get("path"),
                 "repo": hit.get("repo"),
                 "doc_type": hit.get("doc_type"),
+                "content_hint": hit.get("content_hint"),
                 "trust_tier": hit.get("trust_tier"),
                 "snippet": hit.get("snippet") or hit.get("text"),
                 "score": hit.get("score"),
@@ -180,7 +180,7 @@ def shape_verify_report(
         apply_spec_ranking=True,
     )
     hits = shaped["results"]
-    canonical = _canonical_sources(hits)
+    doc_shaped = _doc_shaped_sources(hits)
     overlaps = _known_overlaps(file_text, hits)
     warnings = list(shaped.get("warnings") or [])
     warnings.append(
@@ -200,7 +200,7 @@ def shape_verify_report(
         "file": str(path),
         "query": query,
         "spec_mode": True,
-        "canonical_sources": canonical,
+        "doc_shaped_sources": doc_shaped,
         "known_overlaps": overlaps,
         "org_context": [
             {
@@ -217,8 +217,10 @@ def shape_verify_report(
         "code": shaped.get("code"),
         "warnings": warnings,
         "agent_instruction": (
-            "Prefer canonical_sources (trust_tier canonical|verified). "
-            "Treat ambient/derived overlaps as pointers only. "
+            "doc_shaped_sources are hits whose TEXT reads like documentation — "
+            "a starting point, not an authority: the vault attests no provenance, "
+            "so trust_tier is 'unattested' for all of them. Treat overlaps as "
+            "pointers only. "
             "Always spot-check live MIP/OpenAPI before shipping API claims. "
             "Never use Citadel as sole authority for Mainnet payment token units."
         ),
@@ -250,7 +252,7 @@ def shape_prepare_pr_context(
         shaped["warnings"] = list(shaped.get("warnings") or []) + [
             f"no hits matched --repo {repo!r}; showing unfiltered ranked results"
         ]
-    canonical = _canonical_sources(hits)
+    doc_shaped = _doc_shaped_sources(hits)
     org_context = [
         {
             "title": h.get("title"),
@@ -273,15 +275,16 @@ def shape_prepare_pr_context(
         "repo": repo,
         "topic": topic,
         "query": query,
-        "canonical_sources": canonical,
+        "doc_shaped_sources": doc_shaped,
         "org_context": org_context,
         "timed_out": shaped.get("timed_out"),
         "truncated": shaped.get("truncated"),
         "code": shaped.get("code"),
         "warnings": warnings,
         "agent_instruction": (
-            "Use canonical_sources for API/spec claims; use org_context for migrations "
-            "and footguns. Citadel does not replace live OpenAPI for mutable services. "
+            "Start from doc_shaped_sources and org_context, then VERIFY: these are "
+            "shape matches on vault text, not attested sources. Citadel does not "
+            "replace live OpenAPI for mutable services. "
             "Payment token / asset IDs: prefer official Masumi docs / skills/masumi."
         ),
         "spec_mode": True,
