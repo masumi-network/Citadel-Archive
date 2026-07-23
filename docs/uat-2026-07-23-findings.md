@@ -22,7 +22,7 @@ Findings are tracked as GitHub issues #100–#106. Fixes landed on
 | #102 | `--json` emits nothing on failure paths | medium | **Fixed** |
 | #102 | Client search budgets below server latency | high | **Fixed** |
 | #101 | CLI renders swallowed timeouts as facts | blocker | **Fixed** |
-| #100 | Hosted MCP `tools/list` ~91s | blocker | **Fixed** (SSE transport, not #105) |
+| #100 | Hosted MCP `tools/list` ~91s | blocker | **Fixed + confirmed on prod** (0.2s) |
 | #105 | One seat's search wedges the node (event-loop starvation) | blocker | **Diagnosed; fix needs cognee validation** |
 | #106 | Exact match buried at #2 by section grouping | high | **Documented; fix is a UX decision** |
 | #104 | Ingest stores no provenance | — | **Studied; blocked on a cognee spike** |
@@ -83,10 +83,11 @@ Findings are tracked as GitHub issues #100–#106. Fixes landed on
   `wait_for(to_thread(...), 2.5s)` HTTP fallback so the handler can never block
   on the self-deadlock (PR #108). Fails open; server-side 403s remain the real
   enforcement.
-- **Shipped:** both as minimal hotfixes isolated from this branch — PR #107
-  (`df89899`) and PR #108 (`a305300`), merged to `main`. Runtime confirmation on
-  the live node is the last step (the 91s is a hosted behaviour, not reproducible
-  locally), pending the post-deploy warmup.
+- **Shipped + confirmed:** both as minimal hotfixes isolated from this branch —
+  PR #107 (`df89899`) and PR #108 (`a305300`), merged to `main`. Verified on the
+  live node after deploy `9699cedf`: `initialize` 0.2s, `tools/list` **0.2s**
+  (was ~91s), `content-type: application/json`, 13 tools for a writer seat (admin
+  tools correctly hidden — the role filter now actually runs).
 - **Lesson:** the first diagnosis (SSE buffering) fit the symptom — an SSE body
   silent for 91s — but the cause was the blocked handler, not the proxy. The prod
   deploy logs, not the local trace, revealed it. Recorded in memory.
