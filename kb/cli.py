@@ -260,6 +260,7 @@ async def _ingest(args: argparse.Namespace) -> int:
     runs the in-process server stack (needs the [server] extra)."""
     if getattr(args, "local", False):
         return await _ingest_local(args)
+    _reject_local_only_flags(args, "ingest")
     base_url = node_base_url(getattr(args, "node_url", None))
     token = capture_token()
     if not token:
@@ -476,6 +477,40 @@ def _is_timeout_exc(exc: BaseException) -> bool:
     return "timed out" in str(exc).lower()
 
 
+def _reject_local_only_flags(args: argparse.Namespace, prog: str) -> None:
+    """`--dataset`/`--session` only apply to the in-process `--local` stack.
+
+    On the default HTTP path the Node picks the dataset from the seat token, so
+    these flags were silently ignored — a scoped search quietly returned
+    everything. Reject them (exit 2) instead of dropping them, matching how the
+    CLI already errors on a missing query or a bad `--top-k`.
+    """
+    if getattr(args, "local", False):
+        return
+    offending = [
+        flag
+        for flag, attr in (("--dataset", "dataset"), ("--session", "session"))
+        if getattr(args, attr, None)
+    ]
+    if not offending:
+        return
+    color = supports_color(sys.stderr)
+    joined = ", ".join(offending)
+    verb = "requires" if len(offending) == 1 else "require"
+    sys.stderr.write(
+        "\n".join(
+            [
+                paint(f"✗ citadel {prog}: {joined} {verb} --local", "red", enable=color),
+                f"  the Node scopes {prog} by your seat token; pass --local to target a "
+                "specific dataset/session.",
+                "  run " + paint(f"citadel {prog} --help", "cyan", enable=color) + " for details.",
+            ]
+        )
+        + "\n"
+    )
+    raise SystemExit(2)
+
+
 async def _search(args: argparse.Namespace) -> int:
     """Search the Organization Vault over HTTP (the Node), like MCP citadel_search.
 
@@ -485,6 +520,7 @@ async def _search(args: argparse.Namespace) -> int:
     """
     if getattr(args, "local", False):
         return await _search_local(args)
+    _reject_local_only_flags(args, "search")
     base_url = node_base_url(getattr(args, "node_url", None))
     token = capture_token()
     if not token:

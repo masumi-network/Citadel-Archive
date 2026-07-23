@@ -190,6 +190,61 @@ def test_search_http_renders_results(monkeypatch, capsys) -> None:
     assert out["ok"] is True
 
 
+def _search_args(**kw):
+    base = dict(
+        query="hi", top_k=10, json=True, node_url="https://node.example",
+        local=False, dataset=None, session=None,
+        type=None, repo=None, path=None, canonical_only=False,
+        exclude_ambient=False, mode=None, timeout=None, budget_ms=None,
+    )
+    base.update(kw)
+    return argparse.Namespace(**base)
+
+
+def test_search_dataset_without_local_is_rejected(monkeypatch, capsys) -> None:
+    # --dataset used to be silently dropped on the HTTP path, so a scoped search
+    # quietly returned everything. It must now error instead of running.
+    called = {"n": 0}
+    monkeypatch.setattr("kb.cli.capture_token", lambda: "ctdl_x")
+    monkeypatch.setattr(
+        "kb.status.search_node",
+        lambda *a, **k: called.__setitem__("n", called["n"] + 1) or {"results": []},
+    )
+    with pytest.raises(SystemExit) as exc:
+        asyncio.run(_search(_search_args(dataset="masumi-network")))
+    assert exc.value.code == 2
+    assert called["n"] == 0  # never reached the Node
+    assert "requires --local" in capsys.readouterr().err
+
+
+def test_ingest_session_without_local_is_rejected(monkeypatch, capsys) -> None:
+    called = {"n": 0}
+    monkeypatch.setattr("kb.cli.capture_token", lambda: "ctdl_x")
+    monkeypatch.setattr(
+        "kb.status.ingest_node",
+        lambda *a, **k: called.__setitem__("n", called["n"] + 1) or {"accepted": True},
+    )
+    with pytest.raises(SystemExit) as exc:
+        asyncio.run(_ingest(_ingest_args(session="s1")))
+    assert exc.value.code == 2
+    assert called["n"] == 0
+    assert "requires --local" in capsys.readouterr().err
+
+
+def test_search_local_still_accepts_dataset(monkeypatch) -> None:
+    # The guard must not touch the --local path, where --dataset is valid.
+    seen = {}
+
+    async def fake_local(args):
+        seen["dataset"] = args.dataset
+        return 0
+
+    monkeypatch.setattr("kb.cli._search_local", fake_local)
+    rc = asyncio.run(_search(_search_args(local=True, dataset="seat:alice")))
+    assert rc == 0
+    assert seen["dataset"] == "seat:alice"
+
+
 def test_search_http_forwards_cli_filters(monkeypatch, capsys) -> None:
     monkeypatch.setattr("kb.cli.capture_token", lambda: "ctdl_x")
     captured: dict[str, Any] = {}
