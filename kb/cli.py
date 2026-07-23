@@ -2919,11 +2919,16 @@ def build_parser() -> argparse.ArgumentParser:
     prepare_pr.set_defaults(handler=_prepare_pr_context)
 
     feedback = subcommands.add_parser("feedback", help="Attach feedback to a Cognee QA entry")
-    feedback.add_argument("qa_id")
-    feedback.add_argument("--score", type=int, choices=[-1, 0, 1])
-    feedback.add_argument("--text")
-    feedback.add_argument("--dataset")
-    feedback.add_argument("--session")
+    feedback.add_argument(
+        "qa_id",
+        help="QA entry id to rate (the `id` from a `citadel search --local` hit)",
+    )
+    feedback.add_argument(
+        "--score", type=int, choices=[-1, 0, 1], help="1 useful, -1 not useful, 0 neutral"
+    )
+    feedback.add_argument("--text", help="Optional free-text note on the rating")
+    feedback.add_argument("--dataset", help="Dataset the QA entry belongs to")
+    feedback.add_argument("--session", help="Session id the QA entry belongs to")
     feedback.set_defaults(handler=_feedback)
 
     improve = subcommands.add_parser("improve", help="Run Cognee improvement")
