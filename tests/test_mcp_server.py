@@ -78,6 +78,21 @@ def run_tool(server: Any, name: str, *args: Any, **kwargs: Any) -> Any:
     return result
 
 
+def test_record_feedback_does_not_require_qa_id() -> None:
+    """The documented flow is "pass qa_id OR result_id".
+
+    qa_id had no default, so FastMCP generated it as a REQUIRED parameter and
+    the documented result_id-only call failed schema validation before it ever
+    reached the server — which does accept result_id alone.
+    """
+    server = create_mcp_server(FakeHttpClient())
+
+    schema = server._tool_manager.get_tool("citadel_record_feedback").parameters
+
+    assert "qa_id" not in (schema.get("required") or [])
+    assert "qa_id" in schema["properties"]
+
+
 def test_registered_tools_include_safety_annotations() -> None:
     server = create_mcp_server(FakeHttpClient())
 
@@ -284,13 +299,12 @@ def test_write_tools_reject_empty_or_oversized_payloads(monkeypatch: pytest.Monk
     with pytest.raises(ToolError, match="payload is 5 bytes"):
         run_tool(server, "citadel_ingest", "12345", None)
 
-    with pytest.raises(ToolError, match="qa_id must not be empty"):
-        run_tool(server, "citadel_record_feedback", "", None)
+    with pytest.raises(ToolError, match="pass qa_id or result_id"):
+        run_tool(server, "citadel_record_feedback", None, "")
 
     rated = run_tool(
         server,
         "citadel_record_feedback",
-        None,
         None,
         result_id="hit-1",
         correct=True,

@@ -416,6 +416,21 @@ work:
    Host allowlist text lives in `AGENTS.md` (vault search is in-scope when the
    user asks to use Citadel).
 
+### What a hit tells you (and what it does not)
+
+| Field | Means | Trust it? |
+| --- | --- | --- |
+| `doc_type` / `content_hint` | What the hit's **text looks like** (`spec`, `skill`, `activity`, …; `looks-like-spec`, …) | **No.** Derived from the body, which is written by whoever ingested it — including third-party text that arrives via sync. Use it to rank and to skim, never as authority. |
+| `trust_tier` | What the server **attested**: `reference-only` (session traces) or `unattested` | As far as it goes. `unattested` is the normal case: the vault stores no per-document provenance, so most hits cannot claim more. |
+| `_citadel.dataset` | Which dataset the hit was **requested from** | Treat as a label, not provenance. |
+| `_citadel.retrieval` | `untrusted_context: true`, `citation_required: true` | Always true — cite a title + snippet. |
+
+`canonical_only` and `--canonical-only` filter on *shape*, not on trust: they
+keep hits that read like documentation. They do not vouch for them. Likewise
+`citadel verify` / `prepare-pr-context` return `doc_shaped_sources` — a starting
+point to verify, not a set of sources to quote. Background:
+[ADR-0012](../adr/0012-attested-trust-vs-content-hint.md).
+
 Agent canary (unit mocks): `pytest -q -m canary` or `python scripts/agent_canary.py`.
 
 **Content hygiene:** do not seed vault notes with unverified Mainnet asset hex.
@@ -465,11 +480,18 @@ npx -y mcp-remote@0.1.38 \
 
 The server exposes:
 
-- **13 tools**: `citadel_discovery`, `citadel_session`, `citadel_search`,
-  `citadel_get_document`, `citadel_get_mesh`, `citadel_list_sources`,
-  `citadel_ingest`, `citadel_record_feedback`, `citadel_run_learning_agent`,
-  `citadel_backup_mirror_status`, `citadel_run_backup_mirror`,
-  `citadel_audit_events`, `citadel_improve`
+- **22 tools** — `citadel_discovery` reports the live list, which is the
+  authority if this section drifts again:
+  - read: `citadel_discovery`, `citadel_session`, `citadel_search`,
+    `citadel_get_document`, `citadel_get_mesh`, `citadel_list_sources`,
+    `citadel_recent_contributions`, `citadel_linear_my_issues`,
+    `citadel_linear_search`
+  - write (writer role): `citadel_ingest`, `citadel_contribute`,
+    `citadel_record_feedback`, `citadel_share_session`
+  - admin: `citadel_run_learning_agent`, `citadel_run_repo_content_sync`,
+    `citadel_backup_mirror_status`, `citadel_run_backup_mirror`,
+    `citadel_audit_events`, `citadel_improve`, `citadel_promotion_pending`,
+    `citadel_promotion_approve`, `citadel_promotion_reject`
 - **5 resources**: `citadel://discovery`, `citadel://session`,
   `citadel://sources`, `citadel://indexes`, `citadel://events/recent`
 - **3 prompts**: `citadel_answer_from_kb`, `citadel_ingest_decision`,

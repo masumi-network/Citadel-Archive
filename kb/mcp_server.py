@@ -1020,8 +1020,8 @@ def create_mcp_server(
 
     @mcp.tool(annotations=TOOL_POLICIES["citadel_record_feedback"].annotations)
     async def citadel_record_feedback(
-        qa_id: str | None,
         ctx: Context,
+        qa_id: str | None = None,
         score: int | None = None,
         text: str | None = None,
         session_id: str | None = None,
@@ -1039,7 +1039,7 @@ def create_mcp_server(
         """
         resolved_id = ((qa_id if qa_id is not None else "") or (result_id or "")).strip()
         if not resolved_id:
-            raise ToolError("qa_id must not be empty")
+            raise ToolError("pass qa_id or result_id (a hit id / search_id from citadel_search)")
         payload: dict[str, Any] = {
             "qa_id": resolved_id,
             "result_id": result_id,
