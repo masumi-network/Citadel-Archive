@@ -78,8 +78,12 @@ Findings are tracked as GitHub issues #100–#106. Fixes landed on
 - **Fix:** `json_response=True` — each request returns an immediate
   `application/json` body, so there is no stream to buffer. Verified locally that
   the transport flips from `text/event-stream` to `application/json` and still
-  returns all 22 tools. **Final confirmation needs a deploy** (the 91s is
-  Railway-proxy behaviour, not reproducible in the local ASGI harness).
+  returns all 22 tools.
+- **Shipped:** as a minimal 7-line hotfix isolated from this branch — PR #107,
+  merged to `main` as `df89899`, Railway deploy `ece1b113` (SUCCESS). Runtime
+  confirmation on the live node is the last step (the 91s is Railway-proxy
+  behaviour, not reproducible in the local ASGI harness), pending post-deploy
+  node warmup.
 
 ### Trust-metadata fixes (audit)
 See [ADR-0012](adr/0012-attested-trust-vs-content-hint.md). `trust_tier` is now
