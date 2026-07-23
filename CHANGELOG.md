@@ -43,12 +43,14 @@ All notable changes to `citadel-archive` are documented here. Format follows
 ### Fixed
 
 - **Hosted MCP `tools/list` hung ~91s → "connected · tools fetch failed"
-  (#100).** The streamable-HTTP transport answered over an SSE stream that the
-  Railway proxy buffered and held open, so clients timed out with zero
-  `citadel_*` tools. The transport now uses `json_response=True` (immediate
-  `application/json` per request) — our tools return plain payloads, so nothing
-  streams. `initialize` was 0.2s while `tools/list` was 90.6s even on an idle
-  node; traced to the SSE body being silent for 91s then flushed on close.
+  (#100).** Two layers. (1) The streamable-HTTP transport answered over an SSE
+  stream that the Railway proxy buffered — now `json_response=True` returns an
+  immediate `application/json` body (our tools stream nothing). (2) The real
+  ~91s: the tools/list role filter ran a *synchronous* `GET /api/session`
+  self-call on the event loop, which must be served by the same loop it blocks,
+  so it timed out (30s) and retried 3× ≈ 90s. It now resolves the caller's role
+  **in-process** (`access_key_identity`, ~0.2s) with a bounded off-loop fallback,
+  so the handler never blocks on the self-deadlock.
 - **`citadel status` / `activity --global` rendered swallowed timeouts as facts
   (#101).** A slow Node made the CLI print "No seats visible." (with 12 seats)
   and "This token has no seat" for a working token. `fetch_presence` /

@@ -67,23 +67,29 @@ Findings are tracked as GitHub issues #100–#106. Fixes landed on
 ### #100 — hosted MCP `tools/list` hung ~91s
 - **Effect:** MCP clients reported "connected · tools fetch failed" and no
   `citadel_*` tools reached the agent — the documented primary path was unusable.
-- **Correction to the earlier diagnosis:** this is **not** the #105 event-loop
-  starvation. It reproduces at a fixed ~91s on an idle node, and locally every
-  code path is fast (`list_tools()` 0.00s / 22 tools, in-process session resolve
-  0.2s). A line-by-line read of the SSE body showed silence from 0→91s, then a
-  ping + the whole result flushed on stream close.
-- **Root cause:** the streamable-HTTP transport answered over an **SSE stream**
-  (`stateless_http=True` but `json_response` defaulted to `False`), which the
-  Railway proxy buffered and held open ~91s before closing.
-- **Fix:** `json_response=True` — each request returns an immediate
-  `application/json` body, so there is no stream to buffer. Verified locally that
-  the transport flips from `text/event-stream` to `application/json` and still
-  returns all 22 tools.
-- **Shipped:** as a minimal 7-line hotfix isolated from this branch — PR #107,
-  merged to `main` as `df89899`, Railway deploy `ece1b113` (SUCCESS). Runtime
-  confirmation on the live node is the last step (the 91s is Railway-proxy
-  behaviour, not reproducible in the local ASGI harness), pending post-deploy
-  node warmup.
+- **Not #105:** it reproduces at a fixed ~91s on an idle node, and locally every
+  code path is fast (`list_tools()` 0.00s / 22 tools).
+- **Root cause (two layers, found in this order):**
+  1. The transport answered over an **SSE stream** (`json_response` defaulted to
+     `False`), which the Railway proxy buffers. Fixed with `json_response=True`
+     (PR #107) — the transport now returns immediate `application/json`.
+  2. That deploy did **not** fix the 91s, and the prod logs showed why: the
+     tools/list **role filter** ran a *synchronous* `GET /api/session` self-call
+     on the event loop. It must be served by the same loop it blocks, so it
+     times out (30s) and the HTTP client retries 3× ≈ 90s — and the SSE body
+     looked "buffered" because the handler was blocked the whole time.
+- **Real fix:** resolve the caller's role **in-process** via
+  `access_key_identity` (~0.2s, no loop), with a bounded off-loop
+  `wait_for(to_thread(...), 2.5s)` HTTP fallback so the handler can never block
+  on the self-deadlock (PR #108). Fails open; server-side 403s remain the real
+  enforcement.
+- **Shipped:** both as minimal hotfixes isolated from this branch — PR #107
+  (`df89899`) and PR #108 (`a305300`), merged to `main`. Runtime confirmation on
+  the live node is the last step (the 91s is a hosted behaviour, not reproducible
+  locally), pending the post-deploy warmup.
+- **Lesson:** the first diagnosis (SSE buffering) fit the symptom — an SSE body
+  silent for 91s — but the cause was the blocked handler, not the proxy. The prod
+  deploy logs, not the local trace, revealed it. Recorded in memory.
 
 ### Trust-metadata fixes (audit)
 See [ADR-0012](adr/0012-attested-trust-vs-content-hint.md). `trust_tier` is now
