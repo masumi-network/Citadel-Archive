@@ -70,6 +70,7 @@ from kb.repo_content_sync import RepoContentSyncer
 from kb.search_feedback import build_search_telemetry, presence_only_telemetry
 from kb.search_format import (
     CODE_TIMEOUT,
+    DOC_TYPE_TRACE,
     apply_query_ranking,
     compact_search_filters,
     filter_hits,
@@ -1431,6 +1432,10 @@ def resolve_write_dataset(
     return resolve_write_targets(identity, requested, [], config)[0].dataset
 
 
+# Private marker set during cross-dataset merge; never emitted to callers.
+SHARED_TRACE_MARKER = "_citadel_shared_trace"
+
+
 def search_result_dedup_key(result: Any) -> str:
     if isinstance(result, dict):
         text = first_string(
@@ -1486,6 +1491,17 @@ async def search_across_datasets(
 
     merged: list[tuple[str, Any]] = []
     seen: set[str] = set()
+    # A volunteered trace is dual-written to the author's Node and to
+    # session-traces (resolve_write_targets_for_share). The Node copy wins dedup
+    # below, and ``reference-only`` is stamped off the dataset alone — so without
+    # this the author's own dead-end trace comes back as ordinary knowledge.
+    # Carry the marker across the dedup so the lower trust always survives.
+    trace_keys = {
+        search_result_dedup_key(result)
+        for dataset, results in per_dataset
+        if dataset == SESSION_TRACES_DATASET
+        for result in results
+    }
 
     def take(dataset: str, results: list[Any], budget: int) -> None:
         for result in results:
@@ -1495,6 +1511,12 @@ async def search_across_datasets(
             if key in seen:
                 continue
             seen.add(key)
+            if (
+                dataset != SESSION_TRACES_DATASET
+                and key in trace_keys
+                and isinstance(result, dict)
+            ):
+                result = {**result, SHARED_TRACE_MARKER: True}
             merged.append((dataset, result))
             budget -= 1
 
@@ -2030,6 +2052,12 @@ def with_result_metadata(
     """
     if not isinstance(result, dict):
         return result
+    # Set when this hit is the Node-side copy of a volunteered session trace that
+    # won dedup against the shared one (search_across_datasets). Strip it before
+    # hashing so the content hash stays stable across both copies.
+    shared_trace = bool(result.get(SHARED_TRACE_MARKER))
+    if shared_trace:
+        result = {key: value for key, value in result.items() if key != SHARED_TRACE_MARKER}
     normalized = with_result_id(result)
     result_id = str(normalized["id"])
     document_endpoint = document_endpoint_for_result(result_id)
@@ -2053,7 +2081,7 @@ def with_result_metadata(
     }
     if drilldown_available:
         metadata["document_endpoint"] = document_endpoint
-    if dataset == SESSION_TRACES_DATASET:
+    if dataset == SESSION_TRACES_DATASET or shared_trace:
         metadata["trust"] = "reference-only"
         author_seat = _trace_author_seat(normalized)
         if author_seat:
@@ -2064,7 +2092,12 @@ def with_result_metadata(
     # Infer against in-progress metadata so dataset/trust are visible
     # (raw hits do not yet carry ``_citadel``).
     preview = {**normalized, "_citadel": metadata}
-    doc_type = infer_doc_type(preview)
+    # ``reference-only`` is attested by the dataset, so it outranks anything the
+    # body text would suggest — otherwise a trace whose text mentions /skills/
+    # classifies as a skill doc and reads as verified knowledge.
+    doc_type = (
+        DOC_TYPE_TRACE if metadata.get("trust") == "reference-only" else infer_doc_type(preview)
+    )
     metadata["doc_type"] = doc_type
     metadata["trust_tier"] = infer_trust_tier(preview, doc_type)
     return {**normalized, "_citadel": metadata}
