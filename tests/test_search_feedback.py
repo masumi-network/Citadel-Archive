@@ -292,6 +292,59 @@ def test_search_endpoint_records_client_filters_in_telemetry(
     assert captured["filters"]["top_k"] == 5
 
 
+def test_search_telemetry_never_reaches_another_seat(tmp_path: Any) -> None:
+    """ADR-0009: a seat's query text must never be readable by another seat.
+
+    Telemetry rows used to be tagged with ``primary_dataset``, and timeline
+    scoping keys off ``details.dataset`` alone, so any seat that narrowed with
+    an explicit ``dataset`` published its query text, ``seat_slug`` and
+    ``actor_id`` to every other reader. Passing ``dataset`` is documented normal
+    usage, so this was reachable without doing anything unusual.
+    """
+    import json as _json
+
+    from fastapi.testclient import TestClient
+
+    from kb.access import AccessStore
+    from kb.server import app
+    from test_server import authed_client
+
+    app.state.access_store = AccessStore(tmp_path / "access.json")
+    admin = authed_client()
+    alice = admin.post("/api/access/seats", json={"name": "Alice", "slug": "alice"})
+    bob = admin.post("/api/access/seats", json={"name": "Bob", "slug": "bob"})
+    assert alice.status_code == 200 and bob.status_code == 200
+    alice_token = alice.json()["token"]
+    bob_token = bob.json()["token"]
+
+    client = TestClient(app, base_url="https://testserver")
+    secret = "alice private merger codename bluebird"
+    search = client.post(
+        "/search",
+        json={"query": secret, "dataset": "masumi-network"},
+        headers={"Authorization": f"Bearer {alice_token}"},
+    )
+    assert search.status_code == 200
+
+    leaked = client.get(
+        "/api/knowledge/events?limit=50",
+        headers={"Authorization": f"Bearer {bob_token}"},
+    )
+    assert leaked.status_code == 200
+    blob = _json.dumps(leaked.json())
+    assert secret not in blob
+    assert "seat:alice" not in blob
+    assert alice.json()["principal"]["id"] not in blob
+
+    # The signal is still preserved for the seat that owns it.
+    own = client.get(
+        "/api/knowledge/events?limit=50",
+        headers={"Authorization": f"Bearer {alice_token}"},
+    )
+    assert own.status_code == 200
+    assert secret in _json.dumps(own.json())
+
+
 def test_feedback_accepts_result_id_and_correct_flag() -> None:
     from test_server import authed_client
 
