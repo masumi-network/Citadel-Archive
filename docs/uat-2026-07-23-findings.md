@@ -22,7 +22,7 @@ Findings are tracked as GitHub issues #100–#106. Fixes landed on
 | #102 | `--json` emits nothing on failure paths | medium | **Fixed** |
 | #102 | Client search budgets below server latency | high | **Fixed** |
 | #101 | CLI renders swallowed timeouts as facts | blocker | **Fixed** |
-| #100 | Hosted MCP `tools/list` ~91s | blocker | **Diagnosed** (same root as #105) |
+| #100 | Hosted MCP `tools/list` ~91s | blocker | **Fixed** (SSE transport, not #105) |
 | #105 | One seat's search wedges the node (event-loop starvation) | blocker | **Diagnosed; fix needs cognee validation** |
 | #106 | Exact match buried at #2 by section grouping | high | **Documented; fix is a UX decision** |
 | #104 | Ingest stores no provenance | — | **Studied; blocked on a cognee spike** |
@@ -64,6 +64,23 @@ Findings are tracked as GitHub issues #100–#106. Fixes landed on
   reach the Node: …". Same swallowed-error class as an earlier missing-token
   misdiagnosis.
 
+### #100 — hosted MCP `tools/list` hung ~91s
+- **Effect:** MCP clients reported "connected · tools fetch failed" and no
+  `citadel_*` tools reached the agent — the documented primary path was unusable.
+- **Correction to the earlier diagnosis:** this is **not** the #105 event-loop
+  starvation. It reproduces at a fixed ~91s on an idle node, and locally every
+  code path is fast (`list_tools()` 0.00s / 22 tools, in-process session resolve
+  0.2s). A line-by-line read of the SSE body showed silence from 0→91s, then a
+  ping + the whole result flushed on stream close.
+- **Root cause:** the streamable-HTTP transport answered over an **SSE stream**
+  (`stateless_http=True` but `json_response` defaulted to `False`), which the
+  Railway proxy buffered and held open ~91s before closing.
+- **Fix:** `json_response=True` — each request returns an immediate
+  `application/json` body, so there is no stream to buffer. Verified locally that
+  the transport flips from `text/event-stream` to `application/json` and still
+  returns all 22 tools. **Final confirmation needs a deploy** (the 91s is
+  Railway-proxy behaviour, not reproducible in the local ASGI harness).
+
 ### Trust-metadata fixes (audit)
 See [ADR-0012](adr/0012-attested-trust-vs-content-hint.md). `trust_tier` is now
 attested-only (`reference-only` / `unattested`); body-derived shape moved to
@@ -73,7 +90,7 @@ repo/path scoping.
 
 ## Diagnosed — fix needs an environment we don't have here
 
-### #105 / #100 — event-loop starvation
+### #105 — event-loop starvation
 - **Effect:** ~25–35 sequential searches from one seat wedge the whole node;
   `/healthz` and `/readyz` hang 25–40s while `/api/session` stays at 0.3s; hosted
   MCP `tools/list` takes ~91s.
