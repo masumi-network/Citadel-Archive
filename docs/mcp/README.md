@@ -68,7 +68,7 @@ Citadel splits always-on policy, how-to guidance, and live tools on purpose:
 
 | Layer | What it is | When it runs |
 |---|---|---|
-| **Rules / SessionStart** | Always-on agent policy (search-first; traces are reference-only; share only with approval; CLI fallback when no `citadel_*` tools) | Every session — `AGENTS.md`, Cursor/Windsurf rules, Claude `SessionStart` (`kb.hooks.sync_start`) |
+| **Rules / SessionStart** | Always-on agent policy (search-first; MCP → CLI → official docs ladder; never claim vault authority / “Citadel confirms X” without a hit title+snippet; never sole authority for Mainnet payment token units; traces are reference-only; share only with approval) | Every session — `AGENTS.md`, Cursor/Windsurf rules, Claude `SessionStart` (`kb.hooks.sync_start`) |
 | **Skill** | How-to: connect MCP, onboard, vault workflows, safety | When the agent loads `citadel-archive` / `/skills/connect` / `/skills/vault` |
 | **MCP** | The actual tools (`citadel_search`, `citadel_ingest`, …) | Only when the client has a live MCP connection + token in **process env** |
 
@@ -379,6 +379,43 @@ before **write tools** run: `citadel_ingest`, `citadel_contribute`, and
 `citadel_record_feedback`. Seat-writer tokens only write to the personal node;
 Central is read-only from MCP.
 
+### Agents guide (verification workflows)
+
+Citadel is a **context router + institutional memory**, not a sole source of
+truth for mutable APIs **or Mainnet payment token units**. For skill/PR accuracy
+work:
+
+1. **Search first** — prefer MCP `citadel_search` when tools are present and
+   working; else CLI (`citadel status --json` → read `readiness`, then
+   `citadel search --json --limit 10`).
+2. Prefer hits with `trust_tier: canonical|verified` (MIP, OpenAPI, seeded
+   skills). Treat `ambient` / digests as pointers only.
+3. Spec-ish queries (`endpoint`, `OpenAPI`, `MIP-`, `schema`, …) auto-boost
+   specs/skills. Token/asset-ID queries (`USDCx`, `USDM`, 56+ hex policy/unit
+   strings) auto-enter **docs mode** (boost canonical/skills; downrank
+   Linear/session/digest). Narrow with `--type spec,skill`, `--repo …`,
+   `--path …`, `--canonical-only`, `--exclude-ambient`, or `--mode docs`.
+   Soft timeouts return `{truncated: true, code: "TIMEOUT"}` instead of failing.
+4. **Never claim “Citadel confirms X”** without a retrieved note title + snippet.
+   **Never use Citadel as sole authority** for Mainnet asset IDs / payment token
+   units (USDCx, USDM, tUSDM, policy+asset hex) — prefer official Masumi docs /
+   `skills/masumi`. If the vault has no durable token note, say
+   **“no authoritative hit”** (do not invent hex IDs).
+5. Optional helpers (JSON):
+   - `citadel verify --file path/to/reference.md`
+   - `citadel prepare-pr-context --repo cardano-dev-skills --topic masumi`
+6. Always confirm mutable API shapes against **live** MIP / OpenAPI / Postman.
+7. If MCP is unusable (`mcp_auth` only, needsAuth, tools/list broken) or search
+   unavailable: say so → CLI → official docs. **Never** invent vault citations
+   or claim vault-backed authority without a successful search hit this session.
+   Host allowlist text lives in `AGENTS.md` (vault search is in-scope when the
+   user asks to use Citadel).
+
+Agent canary (unit mocks): `pytest -q -m canary` or `python scripts/agent_canary.py`.
+
+**Content hygiene:** do not seed vault notes with unverified Mainnet asset hex.
+Point agents at official docs / skill paths, or use clearly placeholder
+“verify against skill/official docs” language.
 ---
 
 ## Pi (Coding Agent Harness)
@@ -509,7 +546,7 @@ Citadel stores only the SHA-256 hash. The raw token is shown once at creation.
 |---|---|---|
 | `citadel_discovery` | Safe agent discovery metadata: MCP endpoint, skill hashes, tool policy | — |
 | `citadel_session` | Show authenticated role, actor, capabilities | — |
-| `citadel_search` | Search the Organization Vault; each hit includes `_citadel` provenance, hash, and retrieval metadata | `query`, `dataset?`, `session_id?`, `top_k?` |
+| `citadel_search` | Search the Organization Vault; each hit includes `_citadel` provenance, hash, and retrieval metadata. Automatically records implicit search telemetry (query, top hit ids/scores/trust, latency) into the feedback mesh — non-blocking. Response may include `search_id` + `feedback` hint. | `query`, `dataset?`, `session_id?`, `top_k?` |
 | `citadel_get_document` | Fetch a full document by a search hit `id` when `_citadel.retrieval.document_drilldown_available` is true. Under ADR-0009 a scoped token may get **404 "Document not found"** for a document it is not allowed to read (another seat's) even though the flag was true — treat that 404 as "not visible to you", not a bug to retry | `document_id` |
 | `citadel_get_mesh` | Runtime-activity projection snapshot. Under ADR-0009 this is **caller-scoped** for non-admin tokens: other seats' document/query activity is stripped; seat presence (roster + counts) stays universal | — |
 | `citadel_list_sources` | Source-learning, GitHub sync, index status | — |
@@ -519,7 +556,7 @@ Citadel stores only the SHA-256 hash. The raw token is shown once at creation.
 | Tool | Description | Parameters |
 |---|---|---|
 | `citadel_ingest` | Add durable context to the vault | `data`, `dataset?`, `tags?`, `session_id?` |
-| `citadel_record_feedback` | Record QA feedback | `qa_id`, `score?`, `text?`, `session_id?`, `dataset?` |
+| `citadel_record_feedback` | Explicit QA / hit rating (writer). Prefer after reading search hits: pass hit `id` or `search_id` as `qa_id`/`result_id`, plus `score` 1\|-1 or `correct` true\|false. Complements automatic search telemetry. | `qa_id?`, `result_id?`, `score?`, `text?`, `session_id?`, `dataset?`, `correct?` |
 
 ### Admin Tools
 

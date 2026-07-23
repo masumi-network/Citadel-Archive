@@ -82,6 +82,10 @@ from kb.promotion_client import (
     run_promotion,
 )
 from kb.status import (
+    MCP_STATE_MISSING,
+    MCP_STATE_NEEDS_AUTH,
+    MCP_STATE_READY_BUT_UNCONFIGURED,
+    assess_mcp_setup,
     fetch_events,
     fetch_mesh,
     fetch_presence,
@@ -231,7 +235,9 @@ def _emit_no_token(command: str, *, as_json: bool) -> int:
     `onboard`) so an agent piping the output never chokes on a plain-text line.
     """
     if as_json:
-        _print_json({"ok": False, "error": _NO_TOKEN_MSG})
+        from kb.status import CODE_AUTH_REQUIRED
+
+        _print_json({"ok": False, "error": _NO_TOKEN_MSG, "code": CODE_AUTH_REQUIRED})
     else:
         print(f"citadel {command}: {_NO_TOKEN_MSG}", file=sys.stderr)
     return 1
@@ -398,6 +404,78 @@ def _render_search(payload: dict[str, Any], query: str) -> None:
         print(f"  {paint(f'{index}.', 'cyan', enable=color)} {meta}{_search_item_text(item)}")
 
 
+def _search_type_filters(args: argparse.Namespace) -> list[str] | None:
+    raw = getattr(args, "type", None)
+    if not raw:
+        return None
+    return [part.strip() for part in str(raw).split(",") if part.strip()]
+
+
+def _search_timeout_seconds(args: argparse.Namespace) -> float:
+    """Resolve ``--budget-ms`` / ``--timeout`` (budget-ms wins when both set)."""
+    from kb.status import _SEARCH_TIMEOUT
+
+    budget_ms = getattr(args, "budget_ms", None)
+    if budget_ms is not None:
+        return max(0.5, float(budget_ms) / 1000.0)
+    timeout = getattr(args, "timeout", None)
+    if timeout is not None:
+        return max(0.5, float(timeout))
+    return float(_SEARCH_TIMEOUT)
+
+
+def _shape_kwargs(args: argparse.Namespace) -> dict[str, Any]:
+    mode = getattr(args, "mode", None)
+    exclude_ambient = bool(getattr(args, "exclude_ambient", False))
+    if isinstance(mode, str) and mode.strip().lower() == "docs":
+        exclude_ambient = True
+    return {
+        "query": args.query,
+        "types": _search_type_filters(args),
+        "repo": getattr(args, "repo", None),
+        "path": getattr(args, "path", None),
+        "canonical_only": bool(getattr(args, "canonical_only", False)),
+        "exclude_ambient": exclude_ambient,
+        "mode": mode.strip().lower() if isinstance(mode, str) and mode.strip() else None,
+    }
+
+
+def _emit_search_timeout(
+    args: argparse.Namespace,
+    *,
+    note: str,
+    partial: dict[str, Any] | None = None,
+) -> int:
+    """Prefer truncated JSON (optionally with partial hits) over a hard agent fail."""
+    from kb.search_format import shape_search_payload
+
+    empty: dict[str, Any] = {
+        "query": args.query,
+        "results": (partial or {}).get("results") or [],
+        "timed_out": True,
+        "truncated": True,
+        "note": note or "search timed out",
+    }
+    if isinstance(partial, dict):
+        for key in ("sections", "dataset", "datasets", "took_ms"):
+            if key in partial:
+                empty[key] = partial[key]
+    shaped = shape_search_payload(empty, **_shape_kwargs(args))
+    if getattr(args, "json", False):
+        _print_json(shaped)
+        return 0
+    print("citadel search: timed out — returning truncated results", file=sys.stderr)
+    if shaped.get("results"):
+        _render_search({**empty, "results": shaped["results"], "sections": None}, args.query)
+    return 0
+
+
+def _is_timeout_exc(exc: BaseException) -> bool:
+    if isinstance(exc, TimeoutError):
+        return True
+    return "timed out" in str(exc).lower()
+
+
 async def _search(args: argparse.Namespace) -> int:
     """Search the Organization Vault over HTTP (the Node), like MCP citadel_search.
 
@@ -411,39 +489,234 @@ async def _search(args: argparse.Namespace) -> int:
     token = capture_token()
     if not token:
         return _emit_no_token("search", as_json=getattr(args, "json", False))
+    from kb.search_format import apply_query_ranking, is_docs_mode_query, is_spec_mode_query, shape_search_payload
     from kb.status import search_node
+
+    top_k = getattr(args, "top_k", None)
+    if top_k is None:
+        top_k = 10
+    timeout = _search_timeout_seconds(args)
+    shape_kw = _shape_kwargs(args)
+    filters_on = bool(
+        shape_kw["types"]
+        or shape_kw["repo"]
+        or shape_kw["path"]
+        or shape_kw["canonical_only"]
+        or shape_kw["exclude_ambient"]
+        or shape_kw.get("mode")
+    )
 
     try:
         with _Spinner("Searching the vault…"):
-            payload = await asyncio.to_thread(search_node, base_url, token, args.query, args.top_k)
+            payload = await asyncio.to_thread(
+                search_node,
+                base_url,
+                token,
+                args.query,
+                top_k,
+                timeout=timeout,
+                types=shape_kw["types"],
+                repo=shape_kw["repo"],
+                path=shape_kw["path"],
+                canonical_only=shape_kw["canonical_only"],
+                exclude_ambient=shape_kw["exclude_ambient"],
+                mode=shape_kw.get("mode"),
+            )
     except urllib.error.HTTPError as exc:
         detail = exc.read().decode(errors="replace")[:200] if exc.fp else exc.reason
         print(f"citadel search: HTTP {exc.code} {detail}", file=sys.stderr)
         _print_auth_hint("search", exc.code)
         return 1
-    except (urllib.error.URLError, OSError, ValueError, http.client.HTTPException) as exc:
+    except (TimeoutError, urllib.error.URLError, OSError, ValueError, http.client.HTTPException) as exc:
+        # TimeoutError and urllib URLError("timed out") share one soft-fail path.
+        if _is_timeout_exc(exc):
+            return _emit_search_timeout(args, note=str(exc) or "search timed out")
         print(f"citadel search: {exc}", file=sys.stderr)
         return 1
+
+    raw = payload if isinstance(payload, dict) else {"results": []}
+    # Server may already mark soft timeout with partial/empty results.
+    if raw.get("timed_out") or raw.get("truncated"):
+        shaped = shape_search_payload(raw, **shape_kw)
+        if getattr(args, "json", False):
+            _print_json(shaped)
+            return 0
+        for warning in shaped.get("warnings") or []:
+            print(paint(f"warning: {warning}", "yellow"), file=sys.stderr)
+        display_results = shaped["results"] if filters_on or shaped.get("spec_mode") else raw.get("results")
+        _render_search({**raw, "results": display_results or [], "sections": None}, args.query)
+        return 0
+
+    shaped = shape_search_payload(raw, **shape_kw)
     if getattr(args, "json", False):
-        _print_json(payload)
-    else:
-        _render_search(payload, args.query)
+        _print_json(shaped)
+        return 0
+
+    # Human view: always apply filters; for API/spec or docs/token queries also
+    # flatten to ranked results so section grouping cannot hide boosts.
+    display = dict(raw)
+    if filters_on:
+        display = {**display, "results": shaped["results"], "sections": None}
+    elif is_docs_mode_query(args.query, mode=shape_kw.get("mode")) or is_spec_mode_query(args.query):
+        ranked = apply_query_ranking(
+            list(raw.get("results") or []), args.query, mode=shape_kw.get("mode")
+        )
+        display = {**display, "results": ranked, "sections": None}
+    _render_search(display, args.query)
+    if shaped.get("warnings"):
+        for warning in shaped["warnings"]:
+            print(paint(f"warning: {warning}", "yellow"), file=sys.stderr)
     return 0
 
 
 @_needs_server
 async def _search_local(args: argparse.Namespace) -> int:
+    from kb.agent_workflows import normalize_local_search_results
+    from kb.search_format import shape_search_payload
     from kb.service import Citadel
 
     kb = Citadel.from_env()
-    results = await kb.search(
-        args.query,
-        dataset=args.dataset,
-        session_id=args.session,
-        top_k=args.top_k,
+    top_k = getattr(args, "top_k", None) or 10
+    try:
+        results = await kb.search(
+            args.query,
+            dataset=args.dataset,
+            session_id=args.session,
+            top_k=top_k,
+        )
+    except TimeoutError as exc:
+        return _emit_search_timeout(args, note=str(exc) or "local search timed out")
+
+    payload = normalize_local_search_results(results)
+    shaped = shape_search_payload(payload, **_shape_kwargs(args))
+    _print_json(shaped)
+    return 0 if shaped.get("ok") else 1
+
+
+async def _verify(args: argparse.Namespace) -> int:
+    """MVP: compare a local skill/reference file against nearest vault canonicals."""
+    from kb.agent_workflows import build_verify_query, shape_verify_report
+    from kb.status import search_node
+
+    path = Path(args.file).expanduser()
+    if not path.is_file():
+        print(f"citadel verify: file not found: {path}", file=sys.stderr)
+        return 1
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except OSError as exc:
+        print(f"citadel verify: {exc}", file=sys.stderr)
+        return 1
+
+    query = getattr(args, "query", None) or build_verify_query(path, text)
+    top_k = getattr(args, "top_k", None) or 12
+    base_url = node_base_url(getattr(args, "node_url", None))
+    token = capture_token()
+    if not token:
+        return _emit_no_token("verify", as_json=True)
+
+    try:
+        with _Spinner("Verifying against the vault…"):
+            payload = await asyncio.to_thread(
+                search_node,
+                base_url,
+                token,
+                query,
+                top_k,
+                timeout=_search_timeout_seconds(args),
+            )
+    except (TimeoutError, urllib.error.URLError, OSError, ValueError, http.client.HTTPException) as exc:
+        if _is_timeout_exc(exc):
+            report = shape_verify_report(
+                path=path,
+                file_text=text,
+                search_payload={
+                    "query": query,
+                    "results": [],
+                    "timed_out": True,
+                    "truncated": True,
+                    "note": str(exc),
+                },
+                query=query,
+            )
+            _print_json(report)
+            return 0
+        if isinstance(exc, urllib.error.HTTPError):
+            detail = exc.read().decode(errors="replace")[:200] if exc.fp else exc.reason
+            print(f"citadel verify: HTTP {exc.code} {detail}", file=sys.stderr)
+            _print_auth_hint("verify", exc.code)
+            return 1
+        print(f"citadel verify: {exc}", file=sys.stderr)
+        return 1
+
+    report = shape_verify_report(
+        path=path,
+        file_text=text,
+        search_payload=payload if isinstance(payload, dict) else {"results": []},
+        query=query,
     )
-    _print_json(results)
-    return _result_exit(results)
+    _print_json(report)
+    return 0
+
+
+async def _prepare_pr_context(args: argparse.Namespace) -> int:
+    """Thin PR brief: ranked vault hits for a repo + topic (JSON for agents)."""
+    from kb.agent_workflows import shape_prepare_pr_context
+    from kb.status import search_node
+
+    repo = str(args.repo).strip()
+    topic = str(args.topic).strip()
+    if not repo or not topic:
+        print("citadel prepare-pr-context: --repo and --topic are required", file=sys.stderr)
+        return 1
+
+    query = f"{topic} {repo} schema endpoint MIP"
+    top_k = getattr(args, "top_k", None) or 12
+    base_url = node_base_url(getattr(args, "node_url", None))
+    token = capture_token()
+    if not token:
+        return _emit_no_token("prepare-pr-context", as_json=True)
+
+    try:
+        with _Spinner("Preparing PR context…"):
+            payload = await asyncio.to_thread(
+                search_node,
+                base_url,
+                token,
+                query,
+                top_k,
+                timeout=_search_timeout_seconds(args),
+            )
+    except (TimeoutError, urllib.error.URLError, OSError, ValueError, http.client.HTTPException) as exc:
+        if _is_timeout_exc(exc):
+            brief = shape_prepare_pr_context(
+                repo=repo,
+                topic=topic,
+                search_payload={
+                    "query": query,
+                    "results": [],
+                    "timed_out": True,
+                    "truncated": True,
+                    "note": str(exc),
+                },
+            )
+            _print_json(brief)
+            return 0
+        if isinstance(exc, urllib.error.HTTPError):
+            detail = exc.read().decode(errors="replace")[:200] if exc.fp else exc.reason
+            print(f"citadel prepare-pr-context: HTTP {exc.code} {detail}", file=sys.stderr)
+            _print_auth_hint("prepare-pr-context", exc.code)
+            return 1
+        print(f"citadel prepare-pr-context: {exc}", file=sys.stderr)
+        return 1
+
+    brief = shape_prepare_pr_context(
+        repo=repo,
+        topic=topic,
+        search_payload=payload if isinstance(payload, dict) else {"results": []},
+    )
+    _print_json(brief)
+    return 0
 
 
 @_needs_server
@@ -1555,7 +1828,25 @@ async def _doctor(args: argparse.Namespace) -> int:
     if checks.get("session_hook") and not checks["session_hook"].ok:
         issues.append({"problem": "Claude SessionEnd/SessionStart hooks missing", "fix": "citadel doctor --fix", "kind": "session"})
     if checks.get("mcp") and not checks["mcp"].ok:
-        issues.append({"problem": ".mcp.json missing the citadel MCP server", "fix": "citadel doctor --fix", "kind": "mcp"})
+        mcp_check = checks["mcp"]
+        state = (mcp_check.data or {}).get("state") or MCP_STATE_MISSING
+        next_step = (mcp_check.data or {}).get("next") or "citadel mcp add cursor"
+        mcp_issue: dict[str, Any] = {
+            "problem": f"MCP not ready ({state}): {mcp_check.detail}",
+            "fix": next_step,
+        }
+        # Only wiring gaps are auto-fixable. needsAuth requires a seat token
+        # doctor cannot mint — do not attach kind=mcp or --fix falsely greens.
+        if state in (MCP_STATE_MISSING, MCP_STATE_READY_BUT_UNCONFIGURED):
+            mcp_issue["kind"] = "mcp"
+            if state == MCP_STATE_MISSING:
+                mcp_issue["fix"] = "citadel doctor --fix"
+        elif state == MCP_STATE_NEEDS_AUTH:
+            mcp_issue["fix"] = (
+                f"set {TOKEN_ENV} in the environment Cursor was launched from, "
+                "then restart Cursor"
+            )
+        issues.append(mcp_issue)
     for mcp_issue in diagnose_mcp_config(repo):
         if not any(i.get("problem") == mcp_issue["problem"] for i in issues):
             issues.append(mcp_issue)
@@ -1576,8 +1867,24 @@ async def _doctor(args: argparse.Namespace) -> int:
                     fixed_kinds.add(kind)
                 elif kind == "mcp":
                     merge_mcp_config(repo / ".mcp.json", node_url)
-                    fixed.append("MCP server")
-                    fixed_kinds.add(kind)
+                    after = assess_mcp_setup(repo)
+                    after_state = (after.data or {}).get("state")
+                    if after.ok:
+                        fixed.append("MCP server")
+                        fixed_kinds.add(kind)
+                    elif after_state == MCP_STATE_NEEDS_AUTH:
+                        # Hosted HTTP is wired; token is still a manual step.
+                        # Demote so --fix does not claim "all clear".
+                        fixed.append("MCP server (hosted HTTP)")
+                        issue.pop("kind", None)
+                        issue["problem"] = (
+                            f"MCP not ready ({after_state}): {after.detail}"
+                        )
+                        issue["fix"] = (
+                            f"set {TOKEN_ENV} in the environment Cursor was "
+                            "launched from, then restart Cursor"
+                        )
+                    # else still missing/unconfigured — leave kind unresolved
             except (ValueError, OSError):
                 pass
 
@@ -2476,7 +2783,9 @@ def build_parser() -> argparse.ArgumentParser:
     mcp_sub = mcp.add_subparsers(dest="mcp_command", required=True)
 
     mcp_add = mcp_sub.add_parser(
-        "add", help="Add Citadel MCP to a tool (or 'all') — writes config or prints a snippet"
+        "add",
+        aliases=["install"],
+        help="Add Citadel MCP to a tool (or 'all') — writes config or prints a snippet",
     )
     mcp_add.add_argument(
         "tool", help="Tool to wire: claude, cursor, codex, gemini, windsurf, cline, zed, pi, or all"
@@ -2510,8 +2819,52 @@ def build_parser() -> argparse.ArgumentParser:
 
     search = subcommands.add_parser("search", help="Search the Organization Vault (via the Node)")
     search.add_argument("query", help="Search query")
-    search.add_argument("--top-k", type=int, default=10, help="Max results (default: 10)")
+    search.add_argument(
+        "--top-k",
+        "--limit",
+        type=int,
+        default=10,
+        dest="top_k",
+        help="Max results (default: 10); --limit is an agent-friendly alias",
+    )
     search.add_argument("--json", action="store_true", help="Machine-readable output")
+    search.add_argument(
+        "--type",
+        help="Comma-separated doc types to keep: spec,skill,canonical-docs,issue,activity,session-trace,other",
+    )
+    search.add_argument("--repo", help="Filter hits whose repo/url/snippet contain this string")
+    search.add_argument(
+        "--path",
+        help="Filter hits whose path/url/snippet contain this string (glob markers stripped)",
+    )
+    search.add_argument(
+        "--canonical-only",
+        action="store_true",
+        help="Keep spec/skill/canonical-docs (and canonical/verified trust tiers) only",
+    )
+    search.add_argument(
+        "--exclude-ambient",
+        action="store_true",
+        help="Drop ambient/digest/Linear/session-trace hits (same as --mode docs filtering)",
+    )
+    search.add_argument(
+        "--mode",
+        choices=["docs"],
+        default=None,
+        help="docs: boost canonical/skills and exclude ambient (auto for USDCx/USDM/asset-ID queries)",
+    )
+    search.add_argument(
+        "--timeout",
+        type=float,
+        default=None,
+        help="Client soft-timeout seconds (default: Node search timeout); returns truncated JSON on expiry",
+    )
+    search.add_argument(
+        "--budget-ms",
+        type=int,
+        default=None,
+        help="Agent-friendly alias for --timeout in milliseconds (wins if both set)",
+    )
     search.add_argument("--node-url", help="Override Node URL")
     search.add_argument(
         "--local",
@@ -2521,6 +2874,49 @@ def build_parser() -> argparse.ArgumentParser:
     search.add_argument("--dataset", help="(--local only) dataset to search")
     search.add_argument("--session", help="(--local only) session id")
     search.set_defaults(handler=_search)
+
+    verify = subcommands.add_parser(
+        "verify",
+        help="Compare a local skill/reference file to nearest vault canonical pointers (JSON)",
+    )
+    verify.add_argument(
+        "--file",
+        "-f",
+        required=True,
+        help="Path to a local markdown/reference file (e.g. skills/.../references/*.md)",
+    )
+    verify.add_argument("--query", help="Override auto-built vault query from file cues")
+    verify.add_argument(
+        "--top-k",
+        "--limit",
+        type=int,
+        default=12,
+        dest="top_k",
+        help="Max vault hits to consider (default: 12)",
+    )
+    verify.add_argument("--timeout", type=float, default=None, help="Client soft-timeout seconds")
+    verify.add_argument("--budget-ms", type=int, default=None, help="Soft-timeout in milliseconds")
+    verify.add_argument("--node-url", help="Override Node URL")
+    verify.set_defaults(handler=_verify)
+
+    prepare_pr = subcommands.add_parser(
+        "prepare-pr-context",
+        help="Brief JSON context for a repo+topic (canonical sources + org hits)",
+    )
+    prepare_pr.add_argument("--repo", required=True, help="Repo name or org/repo substring")
+    prepare_pr.add_argument("--topic", required=True, help="PR/topic focus (e.g. masumi payment)")
+    prepare_pr.add_argument(
+        "--top-k",
+        "--limit",
+        type=int,
+        default=12,
+        dest="top_k",
+        help="Max vault hits (default: 12)",
+    )
+    prepare_pr.add_argument("--timeout", type=float, default=None, help="Client soft-timeout seconds")
+    prepare_pr.add_argument("--budget-ms", type=int, default=None, help="Soft-timeout in milliseconds")
+    prepare_pr.add_argument("--node-url", help="Override Node URL")
+    prepare_pr.set_defaults(handler=_prepare_pr_context)
 
     feedback = subcommands.add_parser("feedback", help="Attach feedback to a Cognee QA entry")
     feedback.add_argument("qa_id")

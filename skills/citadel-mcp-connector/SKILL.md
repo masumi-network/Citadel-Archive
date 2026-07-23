@@ -271,8 +271,12 @@ header. It does not install background hooks by itself. Trust boundary:
 - The token stays in env / client secret store — never in tracked git files.
 - Prefer native HTTP MCP (`type: http`) over `mcp-remote`; when a stdio bridge
   is required, pin `mcp-remote@0.1.38` and pass the token via env expansion.
-- If no `citadel_*` tools register, fall back to the CLI (`citadel search`,
-  `citadel status`, `citadel doctor`) instead of re-authing MCP forever.
+- If no `citadel_*` tools register, fall back to the CLI (`citadel status`, then
+  `citadel search` / `citadel doctor`) instead of re-authing MCP forever. If CLI
+  is unhealthy, use official/canonical docs and do not claim vault-backed authority.
+  Never claim “Citadel confirms X” without a retrieved title + snippet. Never use
+  Citadel as sole authority for Mainnet payment token units (USDCx / USDM / policy
+  hex) — prefer official Masumi docs / `skills/masumi`.
 
 ## Troubleshooting
 
@@ -284,7 +288,7 @@ header. It does not install background hooks by itself. Trust boundary:
 | Tools missing after config | Restart the MCP host |
 | Client can't send headers | Use the `mcp-remote` stdio bridge above |
 | Endpoint unreachable | Check `…/healthz`; confirm the `…/mcp/` URL |
-| No `citadel_*` tools at all | Use CLI fallback: `citadel search`, `citadel status`, `citadel doctor` |
+| No `citadel_*` tools at all | CLI: `citadel status`, then `citadel search` / `citadel doctor`. If CLI unhealthy: official docs (OpenAPI, MIP, DevHub) — never claim vault-backed authority without a search hit |
 
 ## Reference
 
